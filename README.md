@@ -98,7 +98,17 @@ Allow only what the hands need, since an allowed program can do anything it supp
 (e.g. allowing `python` allows any script).
 
 `glob` and `search` skip dependency and build directories (`.git`, `node_modules`,
-`.venv`, `target`, `build`, `dist`, ...) and binary files.
+`.venv`, `target`, `build`, `dist`, ...) and binary files. `search` in rig.yaml changes
+which directories (matched by name at any depth) are skipped:
+
+```yaml
+search:
+  ignore: [vendor, generated]   # skipped as well as the built-in list
+  builtin_ignore: false         # optional: skip only `ignore`, e.g. when sources live in build/
+```
+
+`.git` and `.rig` are always skipped. When the list differs from the default, the `glob`
+and `search` tool descriptions name the skipped directories so the hands know.
 
 ### Analyzing another project
 

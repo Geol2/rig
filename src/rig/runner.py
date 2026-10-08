@@ -74,7 +74,7 @@ async def run_shift(
 
     def tools(names: list[str], label: str, extra: dict | None = None) -> Toolbox:
         on_call = (lambda line: on_event(f"    · {label:<12} {line}")) if verbose else None
-        return Toolbox(workspace, names, extra=extra, run_policy=rig.run, env=env, on_call=on_call)
+        return Toolbox(workspace, names, extra=extra, run_policy=rig.run, env=env, on_call=on_call, search_policy=rig.search)
 
     def record(key: str, res: HandResult) -> None:
         shift.results[key] = res

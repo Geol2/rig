@@ -1,5 +1,7 @@
 import pytest
+from pydantic import ValidationError
 
+from rig.spec import Rig, SearchPolicy
 from rig.tools import READ_LIMIT, Toolbox, ToolError, glob_regex
 
 ALL = ["write_file", "edit_file", "read_file", "list_dir", "glob", "search"]
@@ -137,6 +139,42 @@ def test_glob(repo, pattern, path, expected):
 def test_glob_skips_ignored_dirs(repo):
     assert "node_modules" not in repo.run("glob", {"pattern": "**/*"})
     assert repo.run("glob", {"pattern": "**/*.rs"}) == "(no matches)"
+
+
+def _with_extra_dirs(tmp_path, policy):
+    for rel in ["build/gen/Main.java", "vendor/lib.py", ".rig/shifts/x/a.md", ".git/config"]:
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("hello\n", encoding="utf-8")
+    (tmp_path / "src.py").write_text("hello\n", encoding="utf-8")
+    return Toolbox(tmp_path, ALL, search_policy=policy)
+
+
+def test_search_ignore_adds_to_builtin(tmp_path):
+    tb = _with_extra_dirs(tmp_path, SearchPolicy(ignore=["vendor"]))
+    assert tb.run("search", {"pattern": "hello"}).splitlines() == ["src.py:1: hello"]
+    assert "vendor" in next(d for d in tb.definitions if d["name"] == "glob")["description"]
+
+
+def test_search_ignore_replaces_builtin(tmp_path):
+    # build/ is searched now; .git and .rig stay skipped.
+    tb = _with_extra_dirs(tmp_path, SearchPolicy(ignore=["vendor"], builtin_ignore=False))
+    assert tb.run("glob", {"pattern": "**/*"}).splitlines() == ["src.py", "build/gen/Main.java"]
+    search = next(d for d in tb.definitions if d["name"] == "search")["description"]
+    assert search.endswith("Skipped directories in this workspace: .git, .rig, vendor.")
+
+
+def test_default_definitions_unchanged(tmp_path):
+    from rig.tools import DEFINITIONS
+
+    tb = Toolbox(tmp_path, ["glob", "search"])
+    assert tb.definitions == [DEFINITIONS["glob"], DEFINITIONS["search"]]
+
+
+@pytest.mark.parametrize("bad", ["", "src/build", "a\\b"])
+def test_search_ignore_rejects_paths(bad):
+    with pytest.raises(ValidationError, match="directory names"):
+        Rig.model_validate({"name": "t", "hands": {"a": {"role": "A"}}, "search": {"ignore": [bad]}})
 
 
 def test_search(repo):

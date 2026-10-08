@@ -31,6 +31,26 @@ class RunPolicy(BaseModel):
         return allow
 
 
+class SearchPolicy(BaseModel):
+    """Which directories `glob` and `search` skip, by name at any depth."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Skipped in addition to the built-in list (or instead of it, with builtin_ignore: false).
+    ignore: list[str] = Field(default_factory=list)
+    # false: skip only `ignore`, e.g. for projects that keep sources in build/ or out/.
+    # .git and .rig are always skipped.
+    builtin_ignore: bool = True
+
+    @field_validator("ignore")
+    @classmethod
+    def _dir_names(cls, ignore: list[str]) -> list[str]:
+        bad = [d for d in ignore if not d.strip() or "/" in d or "\\" in d]
+        if bad:
+            raise ValueError(f"search.ignore takes directory names, not paths: {bad}")
+        return ignore
+
+
 class Defaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -97,6 +117,7 @@ class Rig(BaseModel):
     lines: list[str] = Field(default_factory=list)
     foreman: Foreman | None = None
     run: RunPolicy = Field(default_factory=RunPolicy)
+    search: SearchPolicy = Field(default_factory=SearchPolicy)
 
     @property
     def crew(self) -> list[str]:

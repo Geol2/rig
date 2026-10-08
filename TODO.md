@@ -18,6 +18,6 @@ Keep items small enough for one reviewed change. Add context under an item when 
   end of `rig run` and store it in shift.json; show it in `rig logs`.
   Note: turns served by a server-side fallback model are priced at the hand's configured model.
 - [x] **`rig logs` shows the branch** for `--worktree` shifts (from shift.json).
-- [ ] **Configurable ignore list** for `glob`/`search`: `search.ignore` in rig.yaml adds
+- [x] **Configurable ignore list** for `glob`/`search`: `search.ignore` in rig.yaml adds
   to or replaces the built-in IGNORED_DIRS (some projects keep sources in `build/`).
 - [ ] **`.gitattributes`** so text files are committed with LF (silences CRLF warnings).
