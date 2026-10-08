@@ -174,6 +174,13 @@ files in the current folder: pick one, set its `workspace`, type the task, fill 
 inputs, run it (optionally dry or in a worktree), watch progress live, and open the report
 of any past shift. It runs one shift at a time.
 
+Reports opened from this page have a **Fix** button on each finding. It fills the task
+with that finding (location, problem, suggested fix) and picks `fix.rig.yaml`, a rig that
+makes the smallest change and has a checker review it (`rig init --template fix`). If
+there's none yet, the page offers to create it pointed at the same project folders as the
+review. Nothing runs until you press Run; the worktree option is preselected for a single
+project, so the change lands on a branch you review first.
+
 The server listens on 127.0.0.1 only, answers only requests addressed to localhost, and
 requires an `X-Rig` header on every POST, so other websites can't start a run.
 

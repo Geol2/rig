@@ -1,0 +1,40 @@
+# fix.rig.yaml — fix one problem in a project (e.g. a finding from a review), then check the change.
+#
+#   uv run rig -f fix.rig.yaml run --worktree "backend/src/OrderService.java:142 ... 을 고쳐줘"
+#
+# Run with --worktree (or the worktree option in `rig serve`) to keep the change on a branch you review first.
+version: 1
+name: fix
+description: Fix one described problem with a minimal change, then have a checker review it.
+
+# The project to change: the same folder(s) the review looked at.
+workspace: D:/path/to/project
+
+defaults:
+  model: claude-opus-5-5
+  effort: medium
+  max_tokens: 16000
+  max_turns: 40
+  fallbacks: default
+
+hands:
+  fixer:
+    role: |
+      You fix one problem in a codebase. The task describes it, usually with file:line.
+      Read the code around it first and confirm the problem is real. If it isn't, change
+      nothing and say why. Otherwise make the smallest change that fixes it, following the
+      surrounding code's style; don't refactor or fix other things you notice (list them instead).
+      Finish with a short summary in Korean: what was wrong, what you changed (file:line),
+      and anything you noticed but left alone.
+    effort: high
+    tools: [list_dir, glob, search, read_file, edit_file, write_file]
+
+  checker:
+    role: |
+      You check another developer's fix. Read the task, the fixer's summary, and the changed
+      code. Say in Korean whether the change fixes the problem, whether it can break callers
+      or other cases, and what should still be done. Be concrete, citing file:line.
+    tools: [list_dir, glob, search, read_file]
+
+lines:
+  - fixer -> checker
