@@ -320,8 +320,36 @@ merge:   git merge rig/20261008-163910    discard: git branch -D rig/20261008-16
 ```
 
 Uncommitted changes in your working tree are not carried into the worktree (rig warns).
-rig never merges or pushes; that's left to you. `rig logs` lists each shift's branch,
-so you can find it again later.
+Unless `publish` says otherwise (below), rig never merges or pushes; that's left to you.
+`rig logs` lists each shift's branch, so you can find it again later.
+
+### Pull requests and auto-merge
+
+`publish` hands the branch to GitHub when the shift ends, using `git push` and the GitHub
+CLI (`gh`, logged in with `gh auth login`):
+
+```yaml
+publish:
+  pr: true              # push the branch and open a PR (turns on --worktree by itself)
+  approver: reviewer    # this hand's last reply is posted on the PR as a review comment
+  auto_merge: true      # merge when everything below holds
+  # base: main          # PR target; default: the branch checked out when the shift started
+  # merge_method: squash  # squash | merge | rebase
+```
+
+A PR is merged only when **all** of these hold; otherwise it stays open with the reason in
+the output and in `shift.json` (`prs`):
+
+1. the shift finished cleanly (no stop, refusal, or error);
+2. a line of the approver's last reply starts with `LGTM` (`approve_word`); "not LGTM yet"
+   in a sentence doesn't count;
+3. every CI check on the PR passed. rig waits for them (`ci_timeout`, default 30 minutes);
+   if none appear within `ci_grace` (2 minutes) it doesn't merge, unless
+   `require_checks: false`.
+
+The review is posted as a comment because GitHub doesn't let an account approve its own
+PR. With several workspaces, each changed repository gets its own PR. `self.rig.yaml` uses
+this: the reviewer ends with a line that is just `LGTM` only when nothing must change.
 
 ## Developing rig with rig
 

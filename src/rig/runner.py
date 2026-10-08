@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from rig import cost, worktree
+from rig import cost, publish, worktree
 from rig.graph import layers, upstreams
 from rig.hand import HandResult, Worker
 from rig.spec import Rig
@@ -34,6 +34,8 @@ class Shift:
     inputs: dict[str, str] = field(default_factory=dict)
     # Running cost and stop state shared with the worker.
     meter: cost.Meter = field(default_factory=cost.Meter)
+    # Pull requests opened for the branch (publish.pr), one per changed repo.
+    prs: list[publish.PullRequest] = field(default_factory=list)
 
     @property
     def worktree(self) -> worktree.Worktree | None:
@@ -86,6 +88,7 @@ async def run_shift(
     inputs: dict[str, str] | None = None,
     meter: cost.Meter | None = None,
 ) -> Shift:
+    use_worktree = use_worktree or rig.publish.pr  # a PR needs the branch a worktree shift makes
     dirs = rig.workspace_dirs(root)
     # One folder, or {name: folder} for several projects.
     workspace: Path | dict[str, Path] = dirs if rig.workspaces else dirs["."]
@@ -134,6 +137,9 @@ async def run_shift(
                 shift.outcomes.append(out)
                 _report_worktree(wt, out, on_event, label=f" {wt.repo.name}" if several else "")
 
+    if rig.publish.pr and shift.committed():
+        await _publish(rig, task, shift, on_event)
+
     summary = {
         "rig": rig.name,
         "mode": mode,
@@ -153,6 +159,7 @@ async def run_shift(
             for k, r in shift.results.items()
         },
         "totals": _totals(list(shift.results.values())),
+        "prs": [pr.as_dict() for pr in shift.prs],
         "max_cost_usd": meter.limit,
         "stopped": meter.stop_reason,
     }
@@ -173,6 +180,41 @@ def _totals(results: list[HandResult]) -> dict[str, Any]:
     costs = [r.cost_usd for r in results if r.tokens]
     totals["cost_usd"] = None if None in costs else sum(costs, 0.0)
     return totals
+
+
+def _latest(results: dict[str, HandResult], hand: str | None) -> HandResult | None:
+    """The hand's last result: key `hand` in lines mode, the last `hand#n` in foreman mode."""
+    found = [r for k, r in results.items() if hand and k.split("#")[0] == hand]
+    return found[-1] if found else None
+
+
+async def _publish(rig: Rig, task: str, shift: Shift, on_event: Event) -> None:
+    policy = rig.publish
+    review = _latest(shift.results, policy.approver)
+    if not shift.ok:
+        why_not = "the shift didn't finish cleanly"
+    elif policy.approver and not (review and review.ok and publish.approved(review.output, policy.approve_word)):
+        why_not = f"{policy.approver} didn't approve (no {policy.approve_word!r} in its last reply)"
+    else:
+        why_not = ""
+    first = task.strip().splitlines()[0][:70] if task.strip() else f"shift {shift.id}"
+    body = "\n\n".join(filter(None, [
+        shift.final.output.strip() if shift.final else "",
+        f"---\nShift `{shift.id}` of rig `{rig.name}` · est. cost {cost.usd(shift.meter.spent)}",
+    ]))
+    for wt, _ in shift.committed():
+        base = policy.base or wt.base_branch
+        if base in ("", "HEAD"):
+            note = f"{wt.repo.name} was on a detached HEAD; set publish.base to the branch PRs should target"
+            on_event(f"  ✗ no PR: {note}")
+            shift.prs.append(publish.PullRequest(repo=wt.repo, branch=wt.branch, note=note))
+            continue
+        on_event(f"  publishing {wt.branch} → {base}" + (f" in {wt.repo.name}" if len(shift.worktrees) > 1 else ""))
+        shift.prs.append(await asyncio.to_thread(
+            publish.publish, wt.repo, wt.branch, base, f"rig: {first}", body,
+            review.output if review else None, not why_not, why_not, policy, on_event,
+            cancelled=lambda: shift.meter.stop_reason is not None,
+        ))
 
 
 def _make_worktrees(

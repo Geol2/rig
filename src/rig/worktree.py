@@ -61,6 +61,7 @@ class Worktree:
     branch: str
     base: str        # commit the branch started from
     dirty: bool      # main working tree had uncommitted changes (not carried over)
+    base_branch: str = ""  # branch checked out in the main working tree ("HEAD" if detached)
 
     def map(self, workspace: Path) -> Path:
         """The same location as `workspace`, inside the worktree."""
@@ -88,8 +89,9 @@ def create(workspace: Path, dest: Path, branch: str) -> Worktree:
     base = git("rev-parse", "HEAD", cwd=repo).strip()
     dirty = bool(git("status", "--porcelain", cwd=repo).strip())
     dest.parent.mkdir(parents=True, exist_ok=True)
+    base_branch = git("rev-parse", "--abbrev-ref", "HEAD", cwd=repo).strip()
     git("worktree", "add", "-b", branch, str(dest), base, cwd=repo)
-    return Worktree(repo=repo, path=dest.resolve(), branch=branch, base=base, dirty=dirty)
+    return Worktree(repo=repo, path=dest.resolve(), branch=branch, base=base, dirty=dirty, base_branch=base_branch)
 
 
 def discard(wt: Worktree) -> None:

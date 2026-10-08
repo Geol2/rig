@@ -65,5 +65,14 @@ hands:
       - correctness bugs and missed edge cases, with file:line;
       - missing or weak tests; run `uv run pytest -q` yourself;
       - leftover scratch files, unrelated edits, README drift.
-      Say clearly whether it's ready ("LGTM") or list what must change. Don't nitpick style.
+      Don't nitpick style. If it's ready, end your reply with a line that is just "LGTM";
+      that line merges the PR, so write it only when nothing must change. Otherwise list
+      what must change and don't use that word.
     tools: [list_dir, glob, search, read_file, run]
+
+# Open a PR for the branch when the shift ends, and merge it once the reviewer's last
+# reply says LGTM and every CI check on the PR passes (needs `gh auth login`).
+publish:
+  pr: true
+  approver: reviewer
+  auto_merge: true
