@@ -30,17 +30,24 @@ def _load_or_exit(path: Path) -> Rig:
         sys.exit(f"rig: {path} is invalid\n{e}")
 
 
+def _check_workspace(rig: Rig, path: Path) -> None:
+    workspace = path.resolve().parent / rig.workspace
+    if not workspace.is_dir():
+        sys.exit(f"rig: workspace {rig.workspace} not found (set `workspace` in {path} to the project folder)")
+
+
 def cmd_init(args: argparse.Namespace) -> None:
     path = Path(args.file)
     if path.exists() and not args.force:
         sys.exit(f"rig: {path} already exists (use --force to overwrite)")
-    template = {"lines": "template.yaml", "foreman": "template-foreman.yaml"}[args.template]
+    template = {"lines": "template.yaml", "foreman": "template-foreman.yaml", "review": "template-review.yaml"}[args.template]
     path.write_text(resources.files("rig").joinpath(template).read_text(encoding="utf-8"), encoding="utf-8")
     print(f"created {path} ({args.template})")
 
 
 def cmd_check(args: argparse.Namespace) -> None:
     rig = _load_or_exit(Path(args.file))
+    _check_workspace(rig, Path(args.file))
     if rig.foreman:
         print(f"✓ {rig.name}: foreman + {len(rig.crew)} hands")
         print(f"  foreman → {' | '.join(rig.crew)}  (up to {rig.foreman.max_delegations} delegations)")
@@ -73,6 +80,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     path = Path(args.file)
     rig = _load_or_exit(path)
+    _check_workspace(rig, path)
     inputs = _parse_inputs(args.input)
     try:
         rig.resolve_inputs(inputs)  # fail before reading stdin or starting the shift
@@ -130,6 +138,30 @@ def cmd_logs(args: argparse.Namespace) -> None:
         print(f"── {f.stem} ──\n{f.read_text(encoding='utf-8')}\n")
 
 
+def cmd_report(args: argparse.Namespace) -> None:
+    from rig import report
+
+    shifts_dir = Path(args.file).resolve().parent / ".rig" / "shifts"
+    shifts = sorted(shifts_dir.iterdir()) if shifts_dir.is_dir() else []
+    if not shifts:
+        sys.exit("rig: no shifts yet")
+    shift = shifts[-1] if args.shift == "last" else shifts_dir / args.shift
+    if not shift.is_dir():
+        sys.exit(f"rig: no shift {args.shift}")
+    path = report.write(shift)
+    print(f"report → {path}")
+    if not args.no_open:
+        import webbrowser
+
+        webbrowser.open(path.as_uri())
+
+
+def cmd_serve(args: argparse.Namespace) -> None:
+    from rig.serve import serve
+
+    serve(Path(args.file).resolve().parent, port=args.port, open_browser=not args.no_open)
+
+
 def main(argv: list[str] | None = None) -> None:
     if hasattr(sys.stdout, "reconfigure"):
         # Line-buffered so progress shows up live even when piped (e.g. through grep or tee).
@@ -141,8 +173,8 @@ def main(argv: list[str] | None = None) -> None:
 
     s = sub.add_parser("init", help="write a starter rig.yaml")
     s.add_argument("--force", action="store_true")
-    s.add_argument("--template", choices=["lines", "foreman"], default="lines",
-                   help="fixed handoff lines, or a foreman that delegates at run time")
+    s.add_argument("--template", choices=["lines", "foreman", "review"], default="lines",
+                   help="fixed handoff lines, a foreman that delegates at run time, or a read-only code review")
     s.set_defaults(func=cmd_init)
 
     s = sub.add_parser("check", help="validate rig.yaml and show the stages")
@@ -161,6 +193,16 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("logs", help="list shifts, or show one (`last` or a shift id)")
     s.add_argument("shift", nargs="?")
     s.set_defaults(func=cmd_logs)
+
+    s = sub.add_parser("report", help="write a shift's results as an HTML page and open it")
+    s.add_argument("shift", nargs="?", default="last", help="`last` (default) or a shift id")
+    s.add_argument("--no-open", action="store_true", help="only write the file")
+    s.set_defaults(func=cmd_report)
+
+    s = sub.add_parser("serve", help="open a local web page to run rigs and browse reports")
+    s.add_argument("--port", type=int, default=8000)
+    s.add_argument("--no-open", action="store_true", help="don't open the browser")
+    s.set_defaults(func=cmd_serve)
 
     args = p.parse_args(argv)
     args.func(args)
