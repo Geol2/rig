@@ -110,3 +110,22 @@ def test_check_malformed_yaml_exits_with_error(tmp_path, monkeypatch):
     msg = _exit_message(excinfo)
     assert msg.startswith("rig: rig.yaml is invalid")
     assert "unclosed" in msg or "line 2" in msg
+
+
+def test_logs_shows_worktree_branch(tmp_path, monkeypatch, capsys):
+    _shift(tmp_path, "20261008-100000", {"mode": "lines", "ok": True, "task": "plain run", "branch": None})
+    _shift(tmp_path, "20261008-110000", {"mode": "lines", "ok": True, "task": "worktree run", "branch": "rig/20261008-110000"})
+    monkeypatch.chdir(tmp_path)
+    main(["logs"])
+    plain, worktree = capsys.readouterr().out.splitlines()
+    assert "rig/20261008-110000  worktree run" in worktree
+    assert "rig/" not in plain
+    # Tasks line up whether or not a shift has a branch.
+    assert plain.index("plain run") == worktree.index("worktree run")
+
+
+def test_logs_without_branches_has_no_branch_column(tmp_path, monkeypatch, capsys):
+    _shift(tmp_path, "20261008-100000", {"mode": "lines", "ok": True, "task": "plain run", "branch": None})
+    monkeypatch.chdir(tmp_path)
+    main(["logs"])
+    assert capsys.readouterr().out.rstrip("\n") == f"20261008-100000  {'lines':<8}  {'ok':<10}  {'':>9}  plain run"
