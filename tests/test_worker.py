@@ -3,6 +3,8 @@
 import asyncio
 from types import SimpleNamespace as NS
 
+import pytest
+
 from rig.hand import FALLBACK_BETA, ClaudeWorker
 from rig.spec import Rig
 from rig.tools import Toolbox
@@ -71,7 +73,8 @@ def test_refusal_stops(tmp_path):
     r.stop_details = NS(category="cyber")
     h = hand()
     res = asyncio.run(ClaudeWorker(FakeClient([r])).run(h, "go", Toolbox(tmp_path, h.tools)))
-    assert not res.ok and res.output == "[refused: cyber]"
+    assert not res.ok and res.output.startswith("[거절됨: cyber] ")
+    assert "취약점을 찾는 리뷰는 허용" in res.output
 
 
 def test_api_error_ends_hand_cleanly(tmp_path):
@@ -105,3 +108,13 @@ def test_max_turns(tmp_path):
     loop = lambda i: response("tool_use", block("tool_use", id=f"t{i}", name="read_file", input={"path": "x"}))
     res = asyncio.run(ClaudeWorker(FakeClient([loop(1), loop(2)])).run(h, "go", Toolbox(tmp_path, h.tools)))
     assert res.stop_reason == "max_turns" and not res.ok
+
+
+@pytest.mark.parametrize("category", ["reasoning_extraction", "bio", "frontier_llm", "general_harms", "new_category", None])
+def test_refusal_messages(category):
+    from rig.hand import refusal_message
+
+    msg = refusal_message(category)
+    assert msg.startswith(f"[거절됨: {category or '분류 없음'}] ")
+    if category == "reasoning_extraction":
+        assert "생각 과정을 보여줘" in msg and "자동 재시도되지 않습니다" in msg

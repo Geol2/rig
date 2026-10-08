@@ -114,6 +114,9 @@ async def run_shift(
     def record(key: str, res: HandResult) -> None:
         shift.results[key] = res
         (shift.dir / f"{key.replace('#', '-')}.md").write_text(res.output, encoding="utf-8")
+        if res.stop_reason == "refusal":
+            # Say which hand was declined and why, right in the progress output.
+            on_event(f"  ✗ {key}: {res.output}")
 
     try:
         if rig.foreman:
