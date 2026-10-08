@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    # Windows too: rig is used there, and path handling differs (drives, backslashes, CRLF).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # rig is imported from the source tree instead of being built and installed,
+      # so nothing in the job runs a package's build scripts (--no-build below).
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
+        with:
+          python-version: "3.13"
+      # Exactly the versions in uv.lock, wheels only.
+      - run: uv sync --locked --no-build --no-install-project
+      - run: uv run --locked --no-build --no-sync pytest -q
