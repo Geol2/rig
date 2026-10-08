@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from rig import worktree
 from rig.graph import layers, upstreams
 from rig.hand import HandResult, Worker
 from rig.spec import Rig
@@ -25,6 +26,8 @@ class Shift:
     results: dict[str, HandResult] = field(default_factory=dict)
     final: HandResult | None = None
     ok: bool = False
+    worktree: worktree.Worktree | None = None
+    outcome: worktree.Outcome | None = None
 
 
 def build_prompt(task: str, inputs: dict[str, str], instructions: str | None = None) -> str:
@@ -49,26 +52,47 @@ async def run_shift(
     worker: Worker,
     root: Path,
     on_event: Event = print,
+    use_worktree: bool = False,
 ) -> Shift:
     workspace = (root / rig.workspace).resolve()
     shift = new_shift(root)
     mode = "foreman" if rig.foreman else "lines"
     on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")
 
+    env = None
+    if use_worktree:
+        # Raises GitError before any hand runs if the workspace isn't in a git repo.
+        wt = worktree.create(workspace, root / ".rig" / "worktrees" / shift.id, f"rig/{shift.id}")
+        shift.worktree = wt
+        workspace = wt.map(workspace)
+        env = wt.env  # so hands' `run git ...` works in the worktree too
+        on_event(f"  worktree {wt.path} · branch {wt.branch} from {wt.base[:7]}")
+        if wt.dirty:
+            on_event("  ! the repo has uncommitted changes; they are not in the worktree")
+
     def record(key: str, res: HandResult) -> None:
         shift.results[key] = res
         (shift.dir / f"{key.replace('#', '-')}.md").write_text(res.output, encoding="utf-8")
 
-    if rig.foreman:
-        await _run_foreman(rig, task, worker, workspace, shift, record, on_event)
-    else:
-        await _run_lines(rig, task, worker, workspace, shift, record, on_event)
+    try:
+        if rig.foreman:
+            await _run_foreman(rig, task, worker, workspace, shift, record, on_event, env)
+        else:
+            await _run_lines(rig, task, worker, workspace, shift, record, on_event, env)
+    finally:
+        if shift.worktree:
+            # Even if the shift crashed, keep whatever the hands wrote on the branch.
+            first = task.strip().splitlines()[0][:60] if task.strip() else "shift"
+            message = f"rig: {first}\n\nShift {shift.id} of rig '{rig.name}' ({'ok' if shift.ok else 'incomplete'})."
+            shift.outcome = worktree.finish(shift.worktree, message)
+            _report_worktree(shift, on_event)
 
     summary = {
         "rig": rig.name,
         "mode": mode,
         "task": task,
         "ok": shift.ok,
+        "branch": shift.worktree.branch if shift.outcome and shift.outcome.changed else None,
         "hands": {
             k: {"stop_reason": r.stop_reason, "turns": r.turns, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens}
             for k, r in shift.results.items()
@@ -79,18 +103,34 @@ async def run_shift(
     return shift
 
 
+def _report_worktree(shift: Shift, on_event: Event) -> None:
+    wt, out = shift.worktree, shift.outcome
+    if not out.changed:
+        on_event("  worktree: no changes; branch removed")
+        return
+    if out.kept_at:
+        on_event(f"  ✗ couldn't commit on {wt.branch}; worktree kept at {out.kept_at}")
+        on_event(f"    {out.error}")
+        return
+    on_event(f"  worktree: committed {out.commit} on {wt.branch}")
+    for line in out.stat.rstrip().splitlines():
+        on_event(f"    {line}")
+    on_event(f"  review:  git diff {wt.base[:7]}..{wt.branch}")
+    on_event(f"  merge:   git merge {wt.branch}    discard: git branch -D {wt.branch}")
+
+
 def _done(res: HandResult) -> str:
     return f"[{res.stop_reason}, {res.turns} turns, {res.input_tokens}/{res.output_tokens} tok]"
 
 
-async def _run_lines(rig, task, worker, workspace, shift, record, on_event) -> None:
+async def _run_lines(rig, task, worker, workspace, shift, record, on_event, env=None) -> None:
     edges = rig.edges
 
     async def run_hand(name: str) -> HandResult:
         hand = rig.resolve(name)
         inputs = {u: shift.results[u].output for u in upstreams(name, edges)}
         on_event(f"  ▶ {name}" + (f"  ← {', '.join(inputs)}" if inputs else ""))
-        res = await worker.run(hand, build_prompt(task, inputs), Toolbox(workspace, hand.tools, run_policy=rig.run))
+        res = await worker.run(hand, build_prompt(task, inputs), Toolbox(workspace, hand.tools, run_policy=rig.run, env=env))
         on_event(f"  ■ {name}  {_done(res)}")
         return res
 
@@ -106,7 +146,7 @@ async def _run_lines(rig, task, worker, workspace, shift, record, on_event) -> N
     shift.ok = all(r.ok for r in shift.results.values())
 
 
-async def _run_foreman(rig, task, worker, workspace, shift, record, on_event) -> None:
+async def _run_foreman(rig, task, worker, workspace, shift, record, on_event, env=None) -> None:
     foreman = rig.foreman
     crew = rig.crew
     counts: dict[str, int] = {}
@@ -147,7 +187,7 @@ async def _run_foreman(rig, task, worker, workspace, shift, record, on_event) ->
 
         hand = rig.resolve(name)
         on_event(f"  ↳ {key}  {instructions.strip().splitlines()[0][:70] if instructions.strip() else ''}")
-        res = await worker.run(hand, build_prompt(task, {}, instructions), Toolbox(workspace, hand.tools, run_policy=rig.run))
+        res = await worker.run(hand, build_prompt(task, {}, instructions), Toolbox(workspace, hand.tools, run_policy=rig.run, env=env))
         on_event(f"  ■ {key}  {_done(res)}")
         record(key, res)
         if not res.ok:
@@ -186,7 +226,7 @@ async def _run_foreman(rig, task, worker, workspace, shift, record, on_event) ->
         },
         "strict": True,
     }
-    toolbox = Toolbox(workspace, hand.tools, extra={"delegate": (delegate_def, delegate)}, run_policy=rig.run)
+    toolbox = Toolbox(workspace, hand.tools, extra={"delegate": (delegate_def, delegate)}, run_policy=rig.run, env=env)
 
     on_event(f"  ▶ foreman  crew: {', '.join(crew)}")
     res = await worker.run(hand, build_prompt(task, {}), toolbox, check=check if foreman.require else None)

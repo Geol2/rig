@@ -9,6 +9,7 @@ import sys
 from importlib import resources
 from pathlib import Path
 
+import yaml
 from pydantic import ValidationError
 
 from rig import __version__
@@ -23,7 +24,7 @@ def _load_or_exit(path: Path) -> Rig:
         sys.exit(f"rig: {path} not found (run `rig init` to create one)")
     try:
         return load(path)
-    except ValidationError as e:
+    except (ValidationError, yaml.YAMLError) as e:
         sys.exit(f"rig: {path} is invalid\n{e}")
 
 
@@ -56,10 +57,18 @@ def cmd_run(args: argparse.Namespace) -> None:
     task = args.task if args.task is not None else sys.stdin.read()
     if not task.strip():
         sys.exit("rig: empty task (pass it as an argument or on stdin)")
+    from rig.worktree import GitError
+
     worker = EchoWorker() if args.dry else ClaudeWorker()
-    shift = asyncio.run(run_shift(rig, task, worker, root=path.resolve().parent))
+    try:
+        shift = asyncio.run(run_shift(rig, task, worker, root=path.resolve().parent, use_worktree=args.worktree))
+    except GitError as e:
+        sys.exit(f"rig: {e}")
     if shift.final:
         print(f"\n── {shift.final.name} ──\n{shift.final.output}")
+    out = shift.outcome
+    if out and out.changed and not out.kept_at:
+        print(f"\nchanges are on branch {shift.worktree.branch} (review: git diff {shift.worktree.base[:7]}..{shift.worktree.branch})")
     if not shift.ok:
         sys.exit(1)
 
@@ -103,6 +112,8 @@ def main(argv: list[str] | None = None) -> None:
     s = sub.add_parser("run", help="run a shift")
     s.add_argument("task", nargs="?", help="task text (default: read from stdin)")
     s.add_argument("--dry", action="store_true", help="no API calls; show what each hand would receive")
+    s.add_argument("--worktree", action="store_true",
+                   help="work in a new git worktree; changes are committed to branch rig/<shift-id> for review")
     s.set_defaults(func=cmd_run)
 
     s = sub.add_parser("logs", help="list shifts, or show one (`last` or a shift id)")

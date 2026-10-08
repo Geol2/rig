@@ -180,12 +180,15 @@ class Toolbox:
         names: list[str],
         extra: dict[str, tuple[dict[str, Any], Handler]] | None = None,
         run_policy: RunPolicy | None = None,
+        env: dict[str, str] | None = None,
     ):
         self.workspace = workspace.resolve()
         self.names = names
         # Run-time tools such as the foreman's `delegate`: name -> (definition, async handler).
         self.extra = extra or {}
         self.run_policy = run_policy or RunPolicy()
+        # Environment for `run` subprocesses; None inherits rig's own.
+        self.env = env
 
     @property
     def definitions(self) -> list[dict[str, Any]]:
@@ -268,6 +271,7 @@ class Toolbox:
             proc = subprocess.run(
                 [exe, *argv[1:]],
                 cwd=self.workspace,
+                env=self.env,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,

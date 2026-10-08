@@ -148,6 +148,25 @@ uv run rig --version
 Credentials come from `ANTHROPIC_API_KEY` or an `ant auth login` profile.
 `rig run --dry` runs the whole shift without API calls.
 
+## Worktree mode
+
+`rig run --worktree "task"` keeps the hands' changes off your working tree:
+
+1. Creates branch `rig/<shift-id>` from `HEAD` and a git worktree for it under `.rig/worktrees/`.
+2. Runs the shift there (`workspace` is mapped to the same path inside the worktree).
+3. Commits whatever the hands changed to that branch and removes the worktree.
+   No changes → the branch is deleted. If the commit fails, the worktree is kept.
+
+```
+worktree: committed 4184be9 on rig/20261008-163910
+   CHANGELOG.md | 3 +++
+review:  git diff ecf0f25..rig/20261008-163910
+merge:   git merge rig/20261008-163910    discard: git branch -D rig/20261008-163910
+```
+
+Uncommitted changes in your working tree are not carried into the worktree (rig warns).
+rig never merges or pushes; that's left to you.
+
 ## Roadmap
 
 - **crews**: reusable groups of hands
