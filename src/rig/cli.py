@@ -156,6 +156,12 @@ def cmd_report(args: argparse.Namespace) -> None:
         webbrowser.open(path.as_uri())
 
 
+def cmd_serve(args: argparse.Namespace) -> None:
+    from rig.serve import serve
+
+    serve(Path(args.file).resolve().parent, port=args.port, open_browser=not args.no_open)
+
+
 def main(argv: list[str] | None = None) -> None:
     if hasattr(sys.stdout, "reconfigure"):
         # Line-buffered so progress shows up live even when piped (e.g. through grep or tee).
@@ -192,6 +198,11 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("shift", nargs="?", default="last", help="`last` (default) or a shift id")
     s.add_argument("--no-open", action="store_true", help="only write the file")
     s.set_defaults(func=cmd_report)
+
+    s = sub.add_parser("serve", help="open a local web page to run rigs and browse reports")
+    s.add_argument("--port", type=int, default=8000)
+    s.add_argument("--no-open", action="store_true", help="don't open the browser")
+    s.set_defaults(func=cmd_serve)
 
     args = p.parse_args(argv)
     args.func(args)

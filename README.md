@@ -8,6 +8,7 @@ rig check       # validate and show the stages
 rig run "task"  # run a shift
 rig logs        # list shifts; `rig logs last` shows the latest outputs
 rig report      # open the latest shift as a web page
+rig serve       # do all of the above from a local web page
 ```
 
 ## Concepts
@@ -145,6 +146,16 @@ opens it in the browser (`--no-open` to only write it). It's one self-contained 
   first, filterable by severity, hand and text; each row shows `file:line`, the problem
   and the suggested fix (fields `severity`, `file`, `line`, `title`, `detail`, `suggestion`)
 - each hand's full output
+
+### Web page
+
+`rig serve` starts a local web page (http://localhost:8000, `--port` to change) for the rig
+files in the current folder: pick one, set its `workspace`, type the task, fill in its
+inputs, run it (optionally dry or in a worktree), watch progress live, and open the report
+of any past shift. It runs one shift at a time.
+
+The server listens on 127.0.0.1 only, answers only requests addressed to localhost, and
+requires an `X-Rig` header on every POST, so other websites can't start a run.
 
 ### inputs
 
