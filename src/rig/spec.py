@@ -199,6 +199,8 @@ class Rig(BaseModel):
     foreman: Foreman | None = None
     run: RunPolicy = Field(default_factory=RunPolicy)
     search: SearchPolicy = Field(default_factory=SearchPolicy)
+    # Stop the shift once its estimated cost reaches this many USD (see cost.Meter).
+    max_cost_usd: float | None = Field(default=None, gt=0)
 
     def workspace_dirs(self, base: Path) -> dict[str, Path]:
         """Project folders by name, resolved against `base` (the rig file's folder); "." for a single workspace."""

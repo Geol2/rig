@@ -10,6 +10,9 @@ description: Fix one described problem with a minimal change, then have a checke
 # The project to change: the same folder(s) the review looked at.
 workspace: D:/path/to/project
 
+# Stop once the estimated cost reaches this many USD.
+max_cost_usd: 3
+
 defaults:
   model: claude-opus-5-5
   effort: medium

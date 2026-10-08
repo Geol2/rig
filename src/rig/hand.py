@@ -55,8 +55,10 @@ class Worker(Protocol):
 
 
 class ClaudeWorker:
-    def __init__(self, client: anthropic.AsyncAnthropic | None = None):
+    def __init__(self, client: anthropic.AsyncAnthropic | None = None, meter: cost.Meter | None = None):
         self.client = client or anthropic.AsyncAnthropic()
+        # Shared by every hand of a shift: running cost, limit, stop request. run_shift sets it.
+        self.meter = meter
 
     async def run(
         self, hand: ResolvedHand, prompt: str, toolbox: Toolbox, check: FinishCheck | None = None
@@ -83,6 +85,10 @@ class ClaudeWorker:
             params["fallbacks"] = hand.fallbacks
 
         while result.turns < hand.max_turns:
+            if self.meter and self.meter.stop_reason:
+                result.stop_reason = self.meter.stop_reason
+                result.output = f"[{self.meter.message()}]"
+                return result
             result.turns += 1
             try:
                 response = await self.client.beta.messages.create(messages=messages, **params)
@@ -99,6 +105,11 @@ class ClaudeWorker:
             result.output_tokens += response.usage.output_tokens
             result.cache_read_tokens += response.usage.cache_read_input_tokens or 0
             result.cache_write_tokens += response.usage.cache_creation_input_tokens or 0
+            if self.meter:
+                self.meter.add(cost.cost(
+                    hand.model, response.usage.input_tokens, response.usage.output_tokens,
+                    response.usage.cache_read_input_tokens or 0, response.usage.cache_creation_input_tokens or 0,
+                ))
             messages.append({"role": "assistant", "content": response.content})
             result.stop_reason = response.stop_reason or ""
 
@@ -137,9 +148,14 @@ async def _call(toolbox: Toolbox, block: Any) -> dict[str, Any]:
 class EchoWorker:
     """Offline worker for `rig run --dry`: no API calls, just shows what each hand would receive."""
 
+    meter: cost.Meter | None = None
+
     async def run(
         self, hand: ResolvedHand, prompt: str, toolbox: Toolbox, check: FinishCheck | None = None
     ) -> HandResult:
+        if self.meter and self.meter.stop_reason:
+            return HandResult(name=hand.name, output=f"[{self.meter.message()}]", stop_reason=self.meter.stop_reason,
+                              turns=0, model=hand.model)
         tools = [d["name"] for d in toolbox.definitions] or "-"
         output = f"({hand.name} on {hand.model}, effort={hand.effort}, tools={tools}{', output=json' if hand.output_schema else ''})\n{prompt}"
         return HandResult(name=hand.name, output=output, stop_reason="end_turn", turns=0, model=hand.model)
