@@ -106,9 +106,10 @@ def cmd_run(args: argparse.Namespace) -> None:
         sys.exit(f"rig: {e}")
     if shift.final:
         print(f"\n── {shift.final.name} ──\n{shift.final.output}")
-    out = shift.outcome
-    if out and out.changed and not out.kept_at:
-        print(f"\nchanges are on branch {shift.worktree.branch} (review: git diff {shift.worktree.base[:7]}..{shift.worktree.branch})")
+    committed = shift.committed()
+    for wt, _ in committed:
+        where = f" in {wt.repo}" if len(shift.worktrees) > 1 else ""
+        print(f"\nchanges are on branch {wt.branch}{where} (review: git diff {wt.base[:7]}..{wt.branch})")
     if not shift.ok:
         sys.exit(1)
 

@@ -160,8 +160,6 @@ class App:
         missing = [n for n, d in rig.workspace_dirs(path.parent).items() if not d.is_dir()]
         if missing:
             raise ValueError("project folder not found; fix it first" + ("" if missing == ["."] else f": {', '.join(missing)}"))
-        if use_worktree and rig.workspaces:
-            raise ValueError("worktree doesn't support several projects yet; uncheck it")
         rig.resolve_inputs({k: v for k, v in inputs.items() if v != ""})  # raises InputError
         if max_cost is not None and max_cost <= 0:
             raise ValueError("the cost limit must be more than 0")
@@ -182,8 +180,9 @@ class App:
                 inputs={k: v for k, v in inputs.items() if v != ""}, meter=run.meter,
             ))
             run.shift_id = shift.id
-            if shift.outcome and shift.outcome.changed and not shift.outcome.kept_at:
-                run.log(f"changes are on branch {shift.worktree.branch}")
+            for wt, _ in shift.committed():
+                where = f" in {wt.repo}" if len(shift.worktrees) > 1 else ""
+                run.log(f"changes are on branch {wt.branch}{where}")
             run.status = "done" if shift.ok else "stopped" if run.meter.stop_reason else "incomplete"
         except Exception as e:  # shown in the page; the server keeps running
             run.log(f"✗ {type(e).__name__}: {e}")
@@ -643,7 +642,7 @@ async function start() {
       const f = await api('/api/finding?shift=' + encodeURIComponent(params.get('fix')) + '&n=' + encodeURIComponent(params.get('n')));
       fix = {workspaces: f.workspaces, pick: true};
       $('task').value = f.task;
-      $('worktree').checked = !f.workspaces || f.workspaces.length === 1;
+      $('worktree').checked = true;
     } catch (e) { $('run-error').textContent = e.message; }
     history.replaceState(null, '', '/');  // a reload shouldn't overwrite edits to the task
   }
