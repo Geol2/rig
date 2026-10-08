@@ -9,7 +9,7 @@ import shlex
 import shutil
 import subprocess
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Awaitable, Callable, Iterator
 
 from rig.spec import RunPolicy
@@ -311,6 +311,20 @@ class Toolbox:
             return self._run(args["command"])
         raise ToolError(f"unknown tool: {name}")
 
+    def _outside(self, value: str) -> bool:
+        """Whether a `run` argument, read as a path, leads out of the workspace.
+
+        Parsed with Windows rules, which accept both separators, so the same arguments
+        are caught on every OS: '/etc' on Windows, 'C:/...' and '..\\x' on Linux.
+        """
+        win = PureWindowsPath(value)
+        if not (".." in win.parts or win.anchor or value.startswith("/")):
+            return False
+        if win.drive and not Path(value).is_absolute():
+            # A drive or UNC path ('C:/...', '\\\\server\\share') on a host that doesn't have drives.
+            return True
+        return not (self.workspace / value).resolve().is_relative_to(self.workspace)
+
     def _run(self, command: str) -> str:
         policy = self.run_policy
         try:
@@ -329,9 +343,8 @@ class Toolbox:
         for arg in argv[1:]:
             # Reject path-like arguments that reach outside the workspace.
             value = arg.split("=", 1)[-1] if arg.startswith("-") else arg
-            if ".." in Path(value).parts or Path(value).is_absolute():
-                if not (self.workspace / value).resolve().is_relative_to(self.workspace):
-                    raise ToolError(f"argument points outside the workspace: {arg}")
+            if self._outside(value):
+                raise ToolError(f"argument points outside the workspace: {arg}")
         exe = shutil.which(argv[0])
         if exe is None:
             raise ToolError(f"executable not found: {argv[0]}")
