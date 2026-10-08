@@ -1,4 +1,6 @@
 import asyncio
+import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -6,7 +8,7 @@ from pydantic import ValidationError
 
 from rig.graph import CycleError, layers
 from rig.hand import EchoWorker
-from rig.runner import run_shift
+from rig.runner import new_shift, run_shift
 from rig.spec import Rig, load
 
 
@@ -82,3 +84,72 @@ def test_refusal_is_reported_in_progress(tmp_path):
     shift = asyncio.run(run_shift(make(), "x", Refusing(), root=tmp_path, on_event=events.append))
     assert not shift.ok
     assert any(e.startswith("  ✗ a: [거절됨: reasoning_extraction]") for e in events)
+
+
+class CrashingWorker(EchoWorker):
+    """Echoes, except that the hands in `crash` raise `exc`."""
+
+    def __init__(self, exc, *crash):
+        self.exc, self.crash = exc, crash
+
+    async def run(self, hand, prompt, toolbox, check=None):
+        if hand.name in self.crash:
+            raise self.exc
+        return await super().run(hand, prompt, toolbox, check)
+
+
+def summary(shift):
+    return json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))
+
+
+def test_crashing_hand_does_not_take_down_its_siblings(tmp_path):
+    events = []
+    shift = asyncio.run(run_shift(make(lines=["a -> c", "b -> c"]), "do it", CrashingWorker(RuntimeError("boom"), "a"),
+                                  root=tmp_path, on_event=events.append))
+    assert not shift.ok and shift.error is None
+    assert shift.results["a"].stop_reason == "error" and shift.results["a"].output == "[error: RuntimeError: boom]"
+    assert shift.results["b"].ok and (shift.dir / "b.md").exists() and "c" not in shift.results
+    assert "  ✗ a crashed: RuntimeError: boom" in events
+    assert any("upstream hands did not finish cleanly: ['a']" in e for e in events)
+    hands = summary(shift)["hands"]
+    assert hands["a"]["stop_reason"] == "error" and hands["b"]["stop_reason"] == "end_turn"
+
+
+def test_crashed_shift_still_writes_shift_json(tmp_path, monkeypatch):
+    # A crash outside any hand (here: building the second stage's prompt) ends the shift, not the program.
+    def broken(task, handoffs, *args, **kwargs):
+        if handoffs:
+            raise RuntimeError("bad prompt")
+        return f"<task>\n{task}\n</task>"
+
+    monkeypatch.setattr("rig.runner.build_prompt", broken)
+    events = []
+    shift = asyncio.run(run_shift(make(), "do it", EchoWorker(), root=tmp_path, on_event=events.append))
+    assert not shift.ok and shift.error == "RuntimeError: bad prompt"
+    assert "✗ shift failed: RuntimeError: bad prompt" in events and events[-1] == f"logs → {shift.dir}"
+    s = summary(shift)
+    assert s["ok"] is False and s["error"] == "RuntimeError: bad prompt" and list(s["hands"]) == ["a"]
+
+
+def test_interrupted_shift_writes_shift_json_and_propagates(tmp_path):
+    rig = make(hands={"a": {"role": "A"}}, lines=[])
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(run_shift(rig, "do it", CrashingWorker(KeyboardInterrupt(), "a"), root=tmp_path, on_event=lambda _: None))
+    shift_dir = next((tmp_path / ".rig" / "shifts").iterdir())
+    s = json.loads((shift_dir / "shift.json").read_text(encoding="utf-8"))
+    assert s["error"] == "interrupted" and s["ok"] is False
+
+
+def test_same_second_shifts_get_distinct_ids(tmp_path, monkeypatch):
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 1, 2, 3, 4, 5)
+
+    monkeypatch.setattr("rig.runner.datetime", Frozen)
+    ids = [new_shift(tmp_path).id for _ in range(3)]
+    assert ids == ["20260102-030405", "20260102-030405-2", "20260102-030405-3"]
+    # Still ordered by time for `rig logs` / `rig logs last`.
+    (tmp_path / ".rig" / "shifts" / "20260102-030406").mkdir()
+    names = [p.name for p in sorted((tmp_path / ".rig" / "shifts").iterdir())]
+    assert names == [*ids, "20260102-030406"]

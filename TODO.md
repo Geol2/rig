@@ -21,3 +21,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
 - [x] **Configurable ignore list** for `glob`/`search`: `search.ignore` in rig.yaml adds
   to or replaces the built-in IGNORED_DIRS (some projects keep sources in `build/`).
 - [x] **`.gitattributes`** so text files are committed with LF (silences CRLF warnings).
+- [x] **Stability fixes**: shift.json is written even when a shift crashes (with `error`); any tool
+  exception becomes a tool error and a crashing hand no longer takes down its parallel siblings;
+  shift IDs get a `-2`, `-3` suffix on same-second collisions; `rig serve` starts runs under a lock.
+  Not done: branch `rig/<id>` can still collide across two rig roots that share one git repo.

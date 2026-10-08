@@ -36,6 +36,8 @@ class Shift:
     meter: cost.Meter = field(default_factory=cost.Meter)
     # Pull requests opened for the branch (publish.pr), one per changed repo.
     prs: list[publish.PullRequest] = field(default_factory=list)
+    # "<Type>: <message>" if the shift crashed, "interrupted" on Ctrl-C/cancel; None otherwise.
+    error: str | None = None
 
     @property
     def worktree(self) -> worktree.Worktree | None:
@@ -71,10 +73,21 @@ def build_prompt(
 
 
 def new_shift(root: Path) -> Shift:
-    shift_id = datetime.now().strftime("%Y%m%d-%H%M%S")
-    d = root / ".rig" / "shifts" / shift_id
-    d.mkdir(parents=True, exist_ok=False)
-    return Shift(id=shift_id, dir=d)
+    base = datetime.now().strftime("%Y%m%d-%H%M%S")
+    shifts = root / ".rig" / "shifts"
+    shifts.mkdir(parents=True, exist_ok=True)
+    # Two shifts in the same second get base, base-2, base-3, ...; mkdir claims each one atomically.
+    # "-" sorts before digits, so these still sort after base and before the next second.
+    n = 1
+    while True:
+        shift_id = base if n == 1 else f"{base}-{n}"
+        d = shifts / shift_id
+        try:
+            d.mkdir(exist_ok=False)
+        except FileExistsError:
+            n += 1
+            continue
+        return Shift(id=shift_id, dir=d)
 
 
 async def run_shift(
@@ -126,6 +139,15 @@ async def run_shift(
             await _run_foreman(rig, task, worker, shift, record, on_event, tools)
         else:
             await _run_lines(rig, task, worker, shift, record, on_event, tools)
+    except Exception as e:
+        # Keep what the shift got done; shift.json records the crash instead of a traceback.
+        shift.ok = False
+        shift.error = f"{type(e).__name__}: {e}"
+        on_event(f"✗ shift failed: {shift.error}")
+    except BaseException:
+        shift.ok = False
+        shift.error = "interrupted"
+        raise
     finally:
         if shift.worktrees:
             # Even if the shift crashed, keep whatever the hands wrote on the branch.
@@ -133,19 +155,37 @@ async def run_shift(
             message = f"rig: {first}\n\nShift {shift.id} of rig '{rig.name}' ({'ok' if shift.ok else 'incomplete'})."
             several = len(shift.worktrees) > 1
             for wt in shift.worktrees:
-                out = worktree.finish(wt, message)
+                try:
+                    out = worktree.finish(wt, message)
+                except Exception as e:
+                    # finish can still fail outside its git guard (diff/remove, missing dir);
+                    # report the worktree as kept so the other worktrees and shift.json still happen.
+                    out = worktree.Outcome(changed=True, commit=None, stat="", kept_at=wt.path,
+                                           error=f"{type(e).__name__}: {e}")
                 shift.outcomes.append(out)
                 _report_worktree(wt, out, on_event, label=f" {wt.repo.name}" if several else "")
+        summary = _write_summary(shift, rig, mode, task, meter)
 
-    if rig.publish.pr and shift.committed():
+    # A crashed shift keeps its branch for a look, but doesn't go to GitHub.
+    if rig.publish.pr and shift.committed() and not shift.error:
         await _publish(rig, task, shift, on_event)
+        summary = _write_summary(shift, rig, mode, task, meter)  # again, now with the PRs
 
+    on_event(cost.summary(summary["totals"]))
+    if meter.stop_reason:
+        on_event(f"✗ stopped: {meter.message()}")
+    on_event(f"logs → {shift.dir}")
+    return shift
+
+
+def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Meter) -> dict[str, Any]:
     summary = {
         "rig": rig.name,
         "mode": mode,
         "task": task,
         "inputs": shift.inputs,
         "ok": shift.ok,
+        "error": shift.error,
         "branch": shift.branch,
         "worktrees": [
             {"repo": str(wt.repo), "branch": wt.branch, "base": wt.base, "commit": out.commit, "changed": out.changed,
@@ -164,11 +204,7 @@ async def run_shift(
         "stopped": meter.stop_reason,
     }
     (shift.dir / "shift.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    on_event(cost.summary(summary["totals"]))
-    if meter.stop_reason:
-        on_event(f"✗ stopped: {meter.message()}")
-    on_event(f"logs → {shift.dir}")
-    return shift
+    return summary
 
 
 def _totals(results: list[HandResult]) -> dict[str, Any]:
@@ -281,6 +317,16 @@ def _done(res: HandResult, meter: cost.Meter | None = None) -> str:
     return f"[{res.stop_reason}, {res.turns} turns, {res.input_tokens}/{res.output_tokens} tok{cached}]{total}"
 
 
+async def _guarded_run(worker: Worker, hand, label: str, prompt: str, toolbox: Toolbox, on_event: Event) -> HandResult:
+    """worker.run, with a crash turned into an error result so parallel hands still finish and get recorded."""
+    try:
+        return await worker.run(hand, prompt, toolbox)
+    except Exception as e:
+        on_event(f"  ✗ {label} crashed: {type(e).__name__}: {e}")
+        return HandResult(name=hand.name, output=f"[error: {type(e).__name__}: {e}]", stop_reason="error",
+                          turns=0, model=hand.model)
+
+
 async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFactory) -> None:
     edges = rig.edges
 
@@ -288,7 +334,8 @@ async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFact
         hand = rig.resolve(name, shift.inputs)
         handoffs = {u: shift.results[u].output for u in upstreams(name, edges)}
         on_event(f"  ▶ {name}" + (f"  ← {', '.join(handoffs)}" if handoffs else ""))
-        res = await worker.run(hand, build_prompt(task, handoffs, inputs=shift.inputs), tools(hand.tools, name))
+        res = await _guarded_run(worker, hand, name, build_prompt(task, handoffs, inputs=shift.inputs),
+                                 tools(hand.tools, name), on_event)
         on_event(f"  ■ {name}  {_done(res, shift.meter)}")
         return res
 
@@ -348,7 +395,8 @@ async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFa
 
         hand = rig.resolve(name, shift.inputs)
         on_event(f"  ↳ {key}  {instructions.strip().splitlines()[0][:70] if instructions.strip() else ''}")
-        res = await worker.run(hand, build_prompt(task, {}, instructions, inputs=shift.inputs), tools(hand.tools, key))
+        res = await _guarded_run(worker, hand, key, build_prompt(task, {}, instructions, inputs=shift.inputs),
+                                 tools(hand.tools, key), on_event)
         on_event(f"  ■ {key}  {_done(res, shift.meter)}")
         record(key, res)
         if not res.ok:

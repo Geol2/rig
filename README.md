@@ -26,7 +26,8 @@ and hands with no path between them run in parallel.
 
 At the end of `rig run`, each shift prints its total tokens and an estimated USD cost.
 Both are stored in `.rig/shifts/<id>/shift.json` and shown by `rig logs`. Prices live in
-`src/rig/cost.py`; models not listed there show "n/a".
+`src/rig/cost.py`; models not listed there show "n/a". A shift that crashes still writes
+`shift.json`, with the exception in an `error` field.
 
 To cap a shift, set `max_cost_usd: 5` in rig.yaml or pass `rig run --max-cost 5`. Each
 hand's done line shows the shift's running total (`· shift $1.20 of $5.00`); once the total
