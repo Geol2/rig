@@ -10,7 +10,7 @@ import html
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from rig.cost import usd
 
@@ -135,7 +135,19 @@ def _inline(text: str) -> str:
 
 # --- Page ----------------------------------------------------------------------------------------
 
-def render(data: dict[str, Any]) -> str:
+def fix_task(f: dict[str, Any]) -> str:
+    """A task asking a fix rig to fix one finding."""
+    loc = f"{f.get('file', '')}:{f['line']}" if f.get("line") else str(f.get("file", ""))
+    lines = ["리뷰에서 발견된 문제를 고쳐줘.", "", f"위치: {loc}", f"심각도: {f.get('severity', '?')} ({f.get('area', '')})"]
+    for label, key in (("문제", "title"), ("설명", "detail"), ("제안", "suggestion")):
+        if f.get(key):
+            lines.append(f"{label}: {f[key]}")
+    lines += ["", "이 문제만 최소한으로 고치고, 무엇을 바꿨는지 요약해줘."]
+    return "\n".join(lines)
+
+
+def render(data: dict[str, Any], fix_link: Callable[[int], str] | None = None) -> str:
+    """The page; `fix_link(i)` (from `rig serve`) adds a fix button to finding i."""
     s = data["summary"]
     totals = s.get("totals", {})
     rows = data["findings"]
@@ -167,7 +179,7 @@ def render(data: dict[str, Any]) -> str:
         area_chips = "".join(
             f'<label class="chip"><input type="checkbox" data-area="{html.escape(a)}" checked> {html.escape(a)}</label>' for a in areas
         )
-        body = "".join(_row(r) for r in rows)
+        body = "".join(_row(r, fix_link(i) if fix_link else None) for i, r in enumerate(rows))
         table = f"""
 <section>
   <h2>Findings <small id="shown">{len(rows)} of {len(rows)}</small></h2>
@@ -177,7 +189,7 @@ def render(data: dict[str, Any]) -> str:
     <input id="q" type="search" placeholder="Filter by file or text" aria-label="Filter findings">
   </div>
   <div class="table-wrap"><table>
-    <thead><tr><th>Severity</th><th>Area</th><th>Location</th><th>Finding</th></tr></thead>
+    <thead><tr><th>Severity</th><th>Area</th><th>Location</th><th>Finding</th>{'<th></th>' if fix_link else ''}</tr></thead>
     <tbody>{body}</tbody>
   </table></div>
 </section>"""
@@ -215,7 +227,7 @@ def render(data: dict[str, Any]) -> str:
 """
 
 
-def _row(r: dict[str, Any]) -> str:
+def _row(r: dict[str, Any], fix_href: str | None = None) -> str:
     sev = str(r.get("severity", "")).lower() or "?"
     loc = html.escape(str(r.get("file", "")))
     if r.get("line"):
@@ -230,7 +242,9 @@ def _row(r: dict[str, Any]) -> str:
         f'<td><span class="sev sev-{html.escape(sev)}">{html.escape(sev)}</span></td>'
         f'<td>{html.escape(r["area"])}</td>'
         f'<td class="loc"><code>{loc}</code></td>'
-        f'<td>{f"<b>{title}</b>" if title else ""}<p>{detail}</p>{fix_html}</td></tr>'
+        f'<td>{f"<b>{title}</b>" if title else ""}<p>{detail}</p>{fix_html}</td>'
+        + (f'<td><a class="fix-btn" href="{html.escape(fix_href)}">수정 요청</a></td>' if fix_href else "")
+        + "</tr>"
     )
 
 
@@ -289,6 +303,8 @@ table{border-collapse:collapse;width:100%;min-width:640px;font-size:14px}
 th{text-align:left;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:10px 12px;border-bottom:1px solid var(--line)}
 td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}tr:last-child td{border-bottom:0}
 td p{margin:4px 0 0}.fix{color:var(--muted)}.loc code{white-space:nowrap}
+.fix-btn{white-space:nowrap;font-size:13px;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:2px 10px;text-decoration:none}
+.fix-btn:hover{background:var(--code)}
 .sev{display:inline-block;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;padding:1px 8px;border-radius:999px;border:1px solid currentColor}
 .sev-critical{color:var(--critical)}.sev-high{color:var(--high)}.sev-medium{color:var(--medium)}.sev-low{color:var(--low)}.sev-info{color:var(--info)}
 .hand{background:var(--surface);border:1px solid var(--line);border-radius:8px;margin-bottom:10px}

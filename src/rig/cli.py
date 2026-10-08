@@ -42,7 +42,8 @@ def cmd_init(args: argparse.Namespace) -> None:
     path = Path(args.file)
     if path.exists() and not args.force:
         sys.exit(f"rig: {path} already exists (use --force to overwrite)")
-    template = {"lines": "template.yaml", "foreman": "template-foreman.yaml", "review": "template-review.yaml"}[args.template]
+    template = {"lines": "template.yaml", "foreman": "template-foreman.yaml", "review": "template-review.yaml",
+                "fix": "template-fix.yaml"}[args.template]
     path.write_text(resources.files("rig").joinpath(template).read_text(encoding="utf-8"), encoding="utf-8")
     print(f"created {path} ({args.template})")
 
@@ -177,8 +178,9 @@ def main(argv: list[str] | None = None) -> None:
 
     s = sub.add_parser("init", help="write a starter rig.yaml")
     s.add_argument("--force", action="store_true")
-    s.add_argument("--template", choices=["lines", "foreman", "review"], default="lines",
-                   help="fixed handoff lines, a foreman that delegates at run time, or a read-only code review")
+    s.add_argument("--template", choices=["lines", "foreman", "review", "fix"], default="lines",
+                   help="fixed handoff lines, a foreman that delegates at run time, a read-only code review, "
+                        "or a fix-and-check rig for one problem")
     s.set_defaults(func=cmd_init)
 
     s = sub.add_parser("check", help="validate rig.yaml and show the stages")

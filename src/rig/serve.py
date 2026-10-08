@@ -15,7 +15,8 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from importlib import resources
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import yaml
 from pydantic import ValidationError
@@ -210,11 +211,41 @@ class App:
             })
         return out
 
-    def report_html(self, shift_id: str) -> str:
+    def _shift_dir(self, shift_id: str) -> Path:
         d = (self.shifts_dir / shift_id).resolve()
         if d.parent != self.shifts_dir.resolve() or not d.is_dir():
             raise ValueError(f"no shift {shift_id}")
-        return report.render(report.collect(d))
+        return d
+
+    def report_html(self, shift_id: str) -> str:
+        return report.render(report.collect(self._shift_dir(shift_id)),
+                             fix_link=lambda i: f"/?fix={quote(shift_id)}&n={i}")
+
+    # --- fixing a finding ------------------------------------------------------------------------
+
+    def finding(self, shift_id: str, n: int) -> dict[str, Any]:
+        """A fix task for finding n of a shift, plus the project folders that review looked at."""
+        data = report.collect(self._shift_dir(shift_id))
+        if not 0 <= n < len(data["findings"]):
+            raise ValueError(f"no finding {n} in shift {shift_id}")
+        review = next((r for r in self.rigs() if r.get("name") == data["summary"].get("rig")), None)
+        return {
+            "task": report.fix_task(data["findings"][n]),
+            "workspaces": [{"name": w["name"], "path": w["path"]} for w in review["workspaces"]] if review else None,
+        }
+
+    def init_fix(self, workspaces: list[dict[str, str]]) -> str:
+        """Write fix.rig.yaml from the fix template, pointed at `workspaces`."""
+        path = self.root / "fix.rig.yaml"
+        if path.exists():
+            raise ValueError("fix.rig.yaml already exists")
+        path.write_text(resources.files("rig").joinpath("template-fix.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+        try:
+            self.set_workspaces(path.name, workspaces)
+        except (ValueError, ValidationError):
+            path.unlink()
+            raise
+        return path.name
 
 
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
@@ -255,6 +286,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     return self._json(200, app.run_state(since))
                 if url.path == "/api/shifts":
                     return self._json(200, app.shifts())
+                if url.path == "/api/finding":
+                    q = parse_qs(url.query)
+                    return self._json(200, app.finding(q.get("shift", [""])[0], int(q.get("n", ["-1"])[0])))
                 m = re.fullmatch(r"/shifts/([^/]+)/report", url.path)
                 if m:
                     return self._send(200, app.report_html(unquote(m.group(1))), "text/html; charset=utf-8")
@@ -271,6 +305,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 if self.path == "/api/workspaces":
                     app.set_workspaces(body["file"], body["workspaces"])
                     return self._json(200, {"ok": True})
+                if self.path == "/api/init-fix":
+                    return self._json(200, {"file": app.init_fix(body["workspaces"])})
                 if self.path == "/api/run":
                     run = app.start(body["file"], body.get("task", ""), body.get("inputs") or {},
                                     bool(body.get("dry")), bool(body.get("worktree")))
@@ -344,6 +380,8 @@ button.primary,button.secondary{font:inherit;font-size:14px;border-radius:6px;pa
 button.primary{background:var(--accent);color:var(--accent-fg);font-weight:600}
 button.secondary{background:transparent;color:var(--accent)}
 button:disabled{opacity:.5;cursor:not-allowed}
+.notice{border:1px solid var(--accent);background:var(--soft);border-radius:8px;padding:12px 14px;display:grid;gap:8px;font-size:14px}
+.notice[hidden]{display:none}.notice p{margin:0}
 .error{color:var(--bad);font-size:14px;white-space:pre-wrap}
 .log{font:12.5px/1.55 var(--mono);background:var(--code);border-radius:6px;padding:12px;max-height:340px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}
 .pill{font-size:12px;font-weight:600;padding:1px 9px;border-radius:999px;border:1px solid currentColor}
@@ -377,6 +415,10 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
     </section>
     <section class="panel" aria-labelledby="run-h">
       <h2 id="run-h">2. 요구사항 입력 후 실행</h2>
+      <div class="notice" id="fix-box" hidden>
+        <p id="fix-msg"></p>
+        <div class="row" id="fix-actions"></div>
+      </div>
       <label class="field" for="task">요구사항
         <textarea id="task" placeholder="예: 이 프로젝트를 리뷰해줘 / 주문 목록에 기간 검색 조건을 추가해줘"></textarea>
       </label>
@@ -423,6 +465,12 @@ async function loadRigs() {
   rigs = await api('/api/rigs');
   const box = $('rigs'); box.textContent = '';
   if (!rigs.length) { box.append(el('p', {class: 'muted small'}, '이 폴더에 rig 설정 파일(*.yaml)이 없습니다. 터미널에서 rig init --template review 로 만들 수 있습니다.')); return; }
+  if (fix && fix.pick) {
+    // Coming from a report's fix button: prefer fix.rig.yaml, else any rig that can edit code.
+    const writer = rigs.find(r => r.file === 'fix.rig.yaml' && !r.error) || rigs.find(r => r.writes && !r.error);
+    if (writer) selected = writer.file;
+    fix.pick = false;
+  }
   if (!rigs.some(r => r.file === selected)) selected = (rigs.find(r => !r.error) || rigs[0]).file;
   for (const r of rigs) {
     const b = el('button', {class: 'rig', type: 'button', 'aria-pressed': String(r.file === selected), onclick: () => select(r.file)});
@@ -440,8 +488,42 @@ async function loadRigs() {
   renderSelected();
 }
 function select(file) { selected = file; try { localStorage.setItem('rig.selected', file); } catch (e) {} loadRigs(); }
+function sameFolders(a, b) {
+  const key = ws => JSON.stringify(ws.map(w => [w.name || '', w.path]).sort());
+  return key(a) === key(b);
+}
+function renderFix(r) {
+  const box = $('fix-box'), actions = $('fix-actions');
+  if (!fix) { box.hidden = true; return; }
+  box.hidden = false; actions.textContent = '';
+  const writer = r && !r.error && r.writes;
+  const button = (label, onclick) => actions.append(el('button', {type: 'button', class: 'secondary', onclick}, label));
+  if (!rigs.some(x => x.writes && !x.error)) {
+    $('fix-msg').textContent = '리뷰에서 수정 요청을 가져왔습니다. 코드를 고칠 수 있는 설정이 아직 없어서 먼저 만들어야 합니다.';
+    if (fix.workspaces) button('수정용 설정 만들기 (리뷰와 같은 폴더)', async () => {
+      try { await api('/api/init-fix', {workspaces: fix.workspaces}); fix.pick = true; await loadRigs(); }
+      catch (e) { $('fix-msg').textContent = e.message; }
+    });
+    return;
+  }
+  if (!writer) {
+    $('fix-msg').textContent = '선택한 설정은 읽기 전용이라 코드를 고칠 수 없습니다. 왼쪽에서 "코드 수정" 설정을 고르세요.';
+    return;
+  }
+  if (fix.workspaces && !sameFolders(fix.workspaces, r.workspaces)) {
+    $('fix-msg').textContent = '선택한 설정의 프로젝트 폴더가 리뷰한 폴더와 다릅니다.';
+    button('리뷰와 같은 폴더로 맞추기', async () => {
+      try { await api('/api/workspaces', {file: r.file, workspaces: fix.workspaces}); await loadRigs(); }
+      catch (e) { $('fix-msg').textContent = e.message; }
+    });
+    return;
+  }
+  $('fix-msg').textContent = '리뷰에서 수정 요청을 가져왔습니다. 아래 내용을 확인하고 실행을 누르세요. 수정은 별도 브랜치(worktree)에 하는 것을 권합니다.';
+  button('닫기', () => { fix = null; renderFix(r); });
+}
 function renderSelected() {
   const r = rigs.find(x => x.file === selected);
+  renderFix(r);
   $('ws-box').hidden = !r || !!r.error;
   const box = $('inputs'); box.textContent = '';
   if (!r || r.error) return;
@@ -513,7 +595,21 @@ async function loadShifts() {
   }
 }
 
-loadRigs().catch(e => { $('rigs').textContent = e.message; });
+let fix = null;
+async function start() {
+  const params = new URLSearchParams(location.search);
+  if (params.has('fix')) {
+    try {
+      const f = await api('/api/finding?shift=' + encodeURIComponent(params.get('fix')) + '&n=' + encodeURIComponent(params.get('n')));
+      fix = {workspaces: f.workspaces, pick: true};
+      $('task').value = f.task;
+      $('worktree').checked = !f.workspaces || f.workspaces.length === 1;
+    } catch (e) { $('run-error').textContent = e.message; }
+    history.replaceState(null, '', '/');  // a reload shouldn't overwrite edits to the task
+  }
+  await loadRigs().catch(e => { $('rigs').textContent = e.message; });
+}
+start();
 loadShifts();
 poll();
 </script>
