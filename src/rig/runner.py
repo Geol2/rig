@@ -100,7 +100,8 @@ async def run_shift(
         "ok": shift.ok,
         "branch": shift.worktree.branch if shift.outcome and shift.outcome.changed else None,
         "hands": {
-            k: {"stop_reason": r.stop_reason, "turns": r.turns, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens}
+            k: {"stop_reason": r.stop_reason, "turns": r.turns, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
+                "cache_read_tokens": r.cache_read_tokens, "cache_write_tokens": r.cache_write_tokens}
             for k, r in shift.results.items()
         },
     }
@@ -126,7 +127,8 @@ def _report_worktree(shift: Shift, on_event: Event) -> None:
 
 
 def _done(res: HandResult) -> str:
-    return f"[{res.stop_reason}, {res.turns} turns, {res.input_tokens}/{res.output_tokens} tok]"
+    cached = f", {res.cache_read_tokens} cached" if res.cache_read_tokens else ""
+    return f"[{res.stop_reason}, {res.turns} turns, {res.input_tokens}/{res.output_tokens} tok{cached}]"
 
 
 async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFactory) -> None:

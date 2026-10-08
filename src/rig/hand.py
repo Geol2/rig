@@ -22,6 +22,9 @@ class HandResult:
     turns: int
     input_tokens: int = 0
     output_tokens: int = 0
+    # Prompt cache usage; input_tokens above counts only the uncached part.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     transcript: list[dict[str, Any]] = field(default_factory=list)
 
     @property
@@ -56,6 +59,8 @@ class ClaudeWorker:
             "max_tokens": hand.max_tokens,
             "system": hand.role,
             "output_config": {"effort": hand.effort},
+            # Each turn resends the whole history; caching the prefix makes repeat reads ~10x cheaper.
+            "cache_control": {"type": "ephemeral"},
         }
         if toolbox.definitions:
             params["tools"] = toolbox.definitions
@@ -78,6 +83,8 @@ class ClaudeWorker:
                 return result
             result.input_tokens += response.usage.input_tokens
             result.output_tokens += response.usage.output_tokens
+            result.cache_read_tokens += response.usage.cache_read_input_tokens or 0
+            result.cache_write_tokens += response.usage.cache_creation_input_tokens or 0
             messages.append({"role": "assistant", "content": response.content})
             result.stop_reason = response.stop_reason or ""
 

@@ -13,7 +13,7 @@ def block(type, **kw):
 
 
 def response(stop_reason, *content):
-    return NS(stop_reason=stop_reason, content=list(content), usage=NS(input_tokens=10, output_tokens=5), stop_details=None)
+    return NS(stop_reason=stop_reason, content=list(content), usage=NS(input_tokens=10, output_tokens=5, cache_read_input_tokens=100, cache_creation_input_tokens=None), stop_details=None)
 
 
 class FakeClient:
@@ -48,12 +48,14 @@ def test_tool_loop(tmp_path):
 
     assert res.ok and res.output == "done" and res.turns == 2
     assert res.input_tokens == 20
+    assert res.cache_read_tokens == 200 and res.cache_write_tokens == 0
     assert (tmp_path / "a.txt").read_text() == "A"
 
     first = client.calls[0]
     assert first["model"] == "claude-opus-5-5"
     assert first["system"] == "Code."
     assert first["output_config"] == {"effort": "medium"}
+    assert first["cache_control"] == {"type": "ephemeral"}
     assert first["betas"] == [FALLBACK_BETA] and first["fallbacks"] == "default"
     assert [t["name"] for t in first["tools"]] == ["write_file", "read_file"]
 
