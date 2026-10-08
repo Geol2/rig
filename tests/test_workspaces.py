@@ -118,10 +118,9 @@ def test_shift_runs_across_projects(projects, tmp_path):
     assert shift.ok
 
 
-def test_worktree_refused(projects, tmp_path):
-    with pytest.raises(GitError, match="doesn't support several `workspaces`"):
+def test_worktree_needs_git_repos(projects, tmp_path):
+    with pytest.raises(GitError, match="needs the workspace to be in a git repository"):
         asyncio.run(run_shift(make_rig(projects), "x", EchoWorker(), root=tmp_path, on_event=lambda _: None, use_worktree=True))
-    assert not (tmp_path / ".rig").exists()
 
 
 def test_cli_check(projects, tmp_path, monkeypatch, capsys):

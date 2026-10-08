@@ -75,16 +75,27 @@ class Worktree:
         return env
 
 
-def create(workspace: Path, dest: Path, branch: str) -> Worktree:
+def repo_of(workspace: Path) -> Path:
+    """The git repository (main working tree) that holds `workspace`."""
     try:
-        repo = Path(git("rev-parse", "--show-toplevel", cwd=workspace).strip()).resolve()
+        return Path(git("rev-parse", "--show-toplevel", cwd=workspace).strip()).resolve()
     except (GitError, FileNotFoundError, NotADirectoryError) as e:
         raise GitError(f"--worktree needs the workspace to be in a git repository: {workspace}") from e
+
+
+def create(workspace: Path, dest: Path, branch: str) -> Worktree:
+    repo = repo_of(workspace)
     base = git("rev-parse", "HEAD", cwd=repo).strip()
     dirty = bool(git("status", "--porcelain", cwd=repo).strip())
     dest.parent.mkdir(parents=True, exist_ok=True)
     git("worktree", "add", "-b", branch, str(dest), base, cwd=repo)
     return Worktree(repo=repo, path=dest.resolve(), branch=branch, base=base, dirty=dirty)
+
+
+def discard(wt: Worktree) -> None:
+    """Undo `create`: remove the worktree and its branch (nothing was done in it yet)."""
+    _remove(wt)
+    git("branch", "-D", wt.branch, cwd=wt.repo)
 
 
 @dataclass

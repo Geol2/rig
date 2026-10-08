@@ -134,7 +134,10 @@ and `search` from `.` cover both projects. The tool descriptions tell the hands 
 
 - A hand with `run` needs `run.workspace` (one of the names) when there's more than one
   project; commands run there and their path arguments must stay inside it.
-- `--worktree` isn't supported with `workspaces` yet.
+- `--worktree` makes a worktree in each git repository the projects live in (projects in
+  the same repository share one) and commits each repository's changes to a branch of the
+  same name, `rig/<shift-id>`. Every project must be in a git repository; rig checks that
+  before creating anything.
 - `rig serve` edits the list: add a row per project, name each one, and save.
 
 ### Analyzing another project
@@ -185,8 +188,7 @@ Reports opened from this page have a **Fix** button on each finding. It fills th
 with that finding (location, problem, suggested fix) and picks `fix.rig.yaml`, a rig that
 makes the smallest change and has a checker review it (`rig init --template fix`). If
 there's none yet, the page offers to create it pointed at the same project folders as the
-review. Nothing runs until you press Run; the worktree option is preselected for a single
-project, so the change lands on a branch you review first.
+review. Nothing runs until you press Run; the worktree option is preselected, so the change lands on a branch you review first.
 
 The server listens on 127.0.0.1 only, answers only requests addressed to localhost, and
 requires an `X-Rig` header on every POST, so other websites can't start a run.

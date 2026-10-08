@@ -27,12 +27,31 @@ class Shift:
     results: dict[str, HandResult] = field(default_factory=dict)
     final: HandResult | None = None
     ok: bool = False
-    worktree: worktree.Worktree | None = None
-    outcome: worktree.Outcome | None = None
+    # One per git repository the shift works in (several with `workspaces`), same branch name in each.
+    worktrees: list[worktree.Worktree] = field(default_factory=list)
+    outcomes: list[worktree.Outcome] = field(default_factory=list)
     # Checked `rig run -i` values with defaults filled in.
     inputs: dict[str, str] = field(default_factory=dict)
     # Running cost and stop state shared with the worker.
     meter: cost.Meter = field(default_factory=cost.Meter)
+
+    @property
+    def worktree(self) -> worktree.Worktree | None:
+        """The (first) worktree; the only one with a single workspace."""
+        return self.worktrees[0] if self.worktrees else None
+
+    @property
+    def outcome(self) -> worktree.Outcome | None:
+        return self.outcomes[0] if self.outcomes else None
+
+    @property
+    def branch(self) -> str | None:
+        """The branch holding the shift's changes (same name in every repo), if any repo changed."""
+        return self.worktrees[0].branch if any(o.changed for o in self.outcomes) else None
+
+    def committed(self) -> list[tuple[worktree.Worktree, worktree.Outcome]]:
+        """Worktrees whose changes were committed to the branch."""
+        return [(wt, o) for wt, o in zip(self.worktrees, self.outcomes) if o.changed and not o.kept_at]
 
 
 def build_prompt(
@@ -67,8 +86,6 @@ async def run_shift(
     inputs: dict[str, str] | None = None,
     meter: cost.Meter | None = None,
 ) -> Shift:
-    if use_worktree and rig.workspaces:
-        raise worktree.GitError("--worktree doesn't support several `workspaces` yet; run without it, or use one workspace")
     dirs = rig.workspace_dirs(root)
     # One folder, or {name: folder} for several projects.
     workspace: Path | dict[str, Path] = dirs if rig.workspaces else dirs["."]
@@ -86,14 +103,9 @@ async def run_shift(
 
     env = None
     if use_worktree:
-        # Raises GitError before any hand runs if the workspace isn't in a git repo.
-        wt = worktree.create(workspace, root / ".rig" / "worktrees" / shift.id, f"rig/{shift.id}")
-        shift.worktree = wt
-        workspace = wt.map(workspace)
-        env = wt.env  # so hands' `run git ...` works in the worktree too
-        on_event(f"  worktree {wt.path} · branch {wt.branch} from {wt.base[:7]}")
-        if wt.dirty:
-            on_event("  ! the repo has uncommitted changes; they are not in the worktree")
+        # Raises GitError before any hand runs if a workspace isn't in a git repo.
+        workspace, run_wt = _make_worktrees(shift, workspace, root, rig.run.workspace, on_event)
+        env = run_wt.env  # so hands' `run git ...` works in the worktree too
 
     def tools(names: list[str], label: str, extra: dict | None = None) -> Toolbox:
         on_call = (lambda line: on_event(f"    · {label:<12} {line}")) if verbose else None
@@ -109,12 +121,15 @@ async def run_shift(
         else:
             await _run_lines(rig, task, worker, shift, record, on_event, tools)
     finally:
-        if shift.worktree:
+        if shift.worktrees:
             # Even if the shift crashed, keep whatever the hands wrote on the branch.
             first = task.strip().splitlines()[0][:60] if task.strip() else "shift"
             message = f"rig: {first}\n\nShift {shift.id} of rig '{rig.name}' ({'ok' if shift.ok else 'incomplete'})."
-            shift.outcome = worktree.finish(shift.worktree, message)
-            _report_worktree(shift, on_event)
+            several = len(shift.worktrees) > 1
+            for wt in shift.worktrees:
+                out = worktree.finish(wt, message)
+                shift.outcomes.append(out)
+                _report_worktree(wt, out, on_event, label=f" {wt.repo.name}" if several else "")
 
     summary = {
         "rig": rig.name,
@@ -122,7 +137,12 @@ async def run_shift(
         "task": task,
         "inputs": shift.inputs,
         "ok": shift.ok,
-        "branch": shift.worktree.branch if shift.outcome and shift.outcome.changed else None,
+        "branch": shift.branch,
+        "worktrees": [
+            {"repo": str(wt.repo), "branch": wt.branch, "base": wt.base, "commit": out.commit, "changed": out.changed,
+             "kept_at": str(out.kept_at) if out.kept_at else None}
+            for wt, out in zip(shift.worktrees, shift.outcomes)
+        ],
         "hands": {
             k: {"stop_reason": r.stop_reason, "turns": r.turns, "model": r.model, "input_tokens": r.input_tokens,
                 "output_tokens": r.output_tokens, "cache_read_tokens": r.cache_read_tokens,
@@ -152,19 +172,56 @@ def _totals(results: list[HandResult]) -> dict[str, Any]:
     return totals
 
 
-def _report_worktree(shift: Shift, on_event: Event) -> None:
-    wt, out = shift.worktree, shift.outcome
+def _make_worktrees(
+    shift: Shift, workspace: Path | dict[str, Path], root: Path, run_in: str | None, on_event: Event
+) -> tuple[Path | dict[str, Path], worktree.Worktree]:
+    """A worktree per git repo the workspace(s) live in; returns the mapped workspace and `run`'s worktree."""
+    branch = f"rig/{shift.id}"
+    dest = root / ".rig" / "worktrees" / shift.id
+    if isinstance(workspace, Path):
+        wt = worktree.create(workspace, dest, branch)
+        shift.worktrees.append(wt)
+        _announce(wt, on_event)
+        return wt.map(workspace), wt
+
+    # Check every project before creating anything, so a bad one leaves nothing behind.
+    repos = {name: worktree.repo_of(folder) for name, folder in workspace.items()}
+    by_repo: dict[Path, worktree.Worktree] = {}
+    try:
+        for name, folder in workspace.items():
+            repo = repos[name]
+            if repo not in by_repo:  # projects in the same repo share its worktree
+                by_repo[repo] = worktree.create(folder, dest / name, branch)
+                shift.worktrees.append(by_repo[repo])
+                _announce(by_repo[repo], on_event, label=f" {repo.name}")
+    except worktree.GitError:
+        for wt in shift.worktrees:
+            worktree.discard(wt)
+        shift.worktrees.clear()
+        raise
+    mapped = {name: by_repo[repos[name]].map(folder) for name, folder in workspace.items()}
+    return mapped, by_repo[repos[run_in or next(iter(workspace))]]
+
+
+def _announce(wt: worktree.Worktree, on_event: Event, label: str = "") -> None:
+    on_event(f"  worktree{label} {wt.path} · branch {wt.branch} from {wt.base[:7]}")
+    if wt.dirty:
+        on_event(f"  ! {wt.repo.name} has uncommitted changes; they are not in the worktree")
+
+
+def _report_worktree(wt: worktree.Worktree, out: worktree.Outcome, on_event: Event, label: str = "") -> None:
     if not out.changed:
-        on_event("  worktree: no changes; branch removed")
+        on_event(f"  worktree{label}: no changes; branch removed")
         return
     if out.kept_at:
-        on_event(f"  ✗ couldn't commit on {wt.branch}; worktree kept at {out.kept_at}")
+        on_event(f"  ✗ couldn't commit on {wt.branch}{label and ' in' + label}; worktree kept at {out.kept_at}")
         on_event(f"    {out.error}")
         return
-    on_event(f"  worktree: committed {out.commit} on {wt.branch}")
+    on_event(f"  worktree{label}: committed {out.commit} on {wt.branch}")
     for line in out.stat.rstrip().splitlines():
         on_event(f"    {line}")
-    on_event(f"  review:  git diff {wt.base[:7]}..{wt.branch}")
+    where = f"  (in {wt.repo})" if label else ""
+    on_event(f"  review:  git diff {wt.base[:7]}..{wt.branch}{where}")
     on_event(f"  merge:   git merge {wt.branch}    discard: git branch -D {wt.branch}")
 
 
