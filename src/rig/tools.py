@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterator
 
-from rig.spec import RunPolicy
+from rig.spec import RunPolicy, SearchPolicy
 
 # Directories skipped by `glob` and `search`: VCS data, dependencies, build output.
 IGNORED_DIRS = {
@@ -20,6 +20,8 @@ IGNORED_DIRS = {
     "node_modules", ".venv", "venv", "__pycache__", ".pytest_cache", ".mypy_cache",
     "target", "build", "dist", "out", ".gradle", ".next", ".nuxt",
 }
+# Skipped even with `search.builtin_ignore: false`: repo internals and rig's own shifts and worktrees.
+ALWAYS_IGNORED = {".git", ".rig"}
 READ_LIMIT = 2000        # lines per read_file call
 GLOB_LIMIT = 500         # paths per glob call
 SEARCH_LIMIT = 200       # matching lines per search call
@@ -162,6 +164,18 @@ def run_definition(policy: RunPolicy) -> dict[str, Any]:
     }
 
 
+def ignored_dirs(policy: SearchPolicy) -> set[str]:
+    return (IGNORED_DIRS if policy.builtin_ignore else set()) | ALWAYS_IGNORED | set(policy.ignore)
+
+
+def search_definition(name: str, ignored: set[str]) -> dict[str, Any]:
+    """`glob` or `search` with the directories it actually skips spelled out."""
+    d = DEFINITIONS[name]
+    if ignored == IGNORED_DIRS:
+        return d
+    return {**d, "description": f"{d['description']} Skipped directories in this workspace: {', '.join(sorted(ignored))}."}
+
+
 # Unquoted shell operators `run` refuses: commands execute without a shell, so these
 # would silently become literal arguments instead of doing what the model intended.
 SHELL_CHARS = "();<>|&"
@@ -234,12 +248,15 @@ class Toolbox:
         run_policy: RunPolicy | None = None,
         env: dict[str, str] | None = None,
         on_call: Callable[[str], None] | None = None,
+        search_policy: SearchPolicy | None = None,
     ):
         self.workspace = workspace.resolve()
         self.names = names
         # Run-time tools such as the foreman's `delegate`: name -> (definition, async handler).
         self.extra = extra or {}
         self.run_policy = run_policy or RunPolicy()
+        # Directory names `glob` and `search` skip.
+        self.ignored = ignored_dirs(search_policy or SearchPolicy())
         # Environment for `run` subprocesses; None inherits rig's own.
         self.env = env
         # Progress callback: one line per built-in tool call (run-time tools log themselves).
@@ -247,7 +264,12 @@ class Toolbox:
 
     @property
     def definitions(self) -> list[dict[str, Any]]:
-        builtins = [run_definition(self.run_policy) if n == "run" else DEFINITIONS[n] for n in self.names]
+        builtins = [
+            run_definition(self.run_policy) if n == "run"
+            else search_definition(n, self.ignored) if n in ("glob", "search")
+            else DEFINITIONS[n]
+            for n in self.names
+        ]
         return builtins + [d for d, _ in self.extra.values()]
 
     async def call(self, name: str, args: dict[str, Any]) -> str:
@@ -282,7 +304,7 @@ class Toolbox:
             yield root
             return
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = sorted(d for d in dirnames if d not in IGNORED_DIRS)
+            dirnames[:] = sorted(d for d in dirnames if d not in self.ignored)
             for f in sorted(filenames):
                 yield Path(dirpath) / f
 
