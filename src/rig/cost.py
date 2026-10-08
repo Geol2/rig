@@ -63,6 +63,36 @@ def cost(model: str, input_tokens: int, output_tokens: int, cache_read_tokens: i
     ) / 1_000_000
 
 
+class Meter:
+    """A shift's running cost, with an optional limit and a stop request (the Stop button in `rig serve`).
+
+    Hands check it before every API call, so a shift can end a little over its limit:
+    requests already in flight (one per running hand) still complete and are counted.
+    """
+
+    def __init__(self, limit: float | None = None):
+        self.limit = limit
+        self.spent = 0.0
+        self.unpriced = False  # some request ran on a model with no known price
+        self.stop_reason: str | None = None  # "budget" | "stopped"
+
+    def add(self, amount: float | None) -> None:
+        if amount is None:
+            self.unpriced = True
+            return
+        self.spent += amount
+        if self.limit is not None and self.spent >= self.limit and not self.stop_reason:
+            self.stop_reason = "budget"
+
+    def stop(self) -> None:
+        self.stop_reason = self.stop_reason or "stopped"
+
+    def message(self) -> str:
+        if self.stop_reason == "budget":
+            return f"cost limit {usd(self.limit)} reached ({usd(self.spent)} spent)"
+        return "stopped by user"
+
+
 def usd(x: float | None) -> str:
     if x is None:
         return "n/a"

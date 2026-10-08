@@ -19,6 +19,9 @@ defaults:
   max_turns: 40          # reviewers read many files
   fallbacks: default
 
+# Stop once the estimated cost reaches this many USD. Raise it if reviews of a big project stop early.
+max_cost_usd: 5
+
 # Folders to skip besides the built-in list (node_modules, build, target, .git, ...).
 search:
   ignore: [logs, upload, uploads]

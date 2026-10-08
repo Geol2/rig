@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from rig import __version__
 from rig.cost import summary as cost_summary
-from rig.cost import usd
+from rig.cost import Meter, usd
 from rig.graph import layers
 from rig.spec import InputError, Rig, load
 
@@ -86,6 +86,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     path = Path(args.file)
     rig = _load_or_exit(path)
     _check_workspace(rig, path)
+    if args.max_cost is not None and args.max_cost <= 0:
+        sys.exit("rig: --max-cost must be more than 0")
     inputs = _parse_inputs(args.input)
     try:
         rig.resolve_inputs(inputs)  # fail before reading stdin or starting the shift
@@ -99,7 +101,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     worker = EchoWorker() if args.dry else ClaudeWorker()
     try:
         shift = asyncio.run(run_shift(rig, task, worker, root=path.resolve().parent, use_worktree=args.worktree,
-                                      verbose=not args.quiet, inputs=inputs))
+                                      verbose=not args.quiet, inputs=inputs, meter=Meter(args.max_cost)))
     except GitError as e:
         sys.exit(f"rig: {e}")
     if shift.final:
@@ -192,6 +194,8 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--worktree", action="store_true",
                    help="work in a new git worktree; changes are committed to branch rig/<shift-id> for review")
     s.add_argument("-q", "--quiet", action="store_true", help="don't show individual tool calls")
+    s.add_argument("--max-cost", type=float, metavar="USD",
+                   help="stop once the shift's estimated cost reaches this (overrides max_cost_usd)")
     s.add_argument("-i", "--input", action="append", default=[], metavar="NAME=VALUE",
                    help="value for an input declared under `inputs` (repeatable)")
     s.set_defaults(func=cmd_run)

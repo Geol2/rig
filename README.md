@@ -28,6 +28,11 @@ At the end of `rig run`, each shift prints its total tokens and an estimated USD
 Both are stored in `.rig/shifts/<id>/shift.json` and shown by `rig logs`. Prices live in
 `src/rig/cost.py`; models not listed there show "n/a".
 
+To cap a shift, set `max_cost_usd: 5` in rig.yaml or pass `rig run --max-cost 5`. Each
+hand's done line shows the shift's running total (`· shift $1.20 of $5.00`); once the total
+reaches the limit, hands stop before their next request and later stages don't start.
+Requests already in flight still finish, so a shift can end slightly over the limit.
+
 ## rig.yaml
 
 ```yaml
@@ -172,7 +177,9 @@ opens it in the browser (`--no-open` to only write it). It's one self-contained 
 `rig serve` starts a local web page (http://localhost:8000, `--port` to change) for the rig
 files in the current folder: pick one, set its `workspace`, type the task, fill in its
 inputs, run it (optionally dry or in a worktree), watch progress live, and open the report
-of any past shift. It runs one shift at a time.
+of any past shift. It runs one shift at a time. While a shift runs, the page shows its cost
+so far against the limit (taken from `max_cost_usd`, editable before each run) and a
+**Stop** button that ends it the same way the limit does.
 
 Reports opened from this page have a **Fix** button on each finding. It fills the task
 with that finding (location, problem, suggested fix) and picks `fix.rig.yaml`, a rig that

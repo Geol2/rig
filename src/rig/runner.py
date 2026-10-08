@@ -31,6 +31,8 @@ class Shift:
     outcome: worktree.Outcome | None = None
     # Checked `rig run -i` values with defaults filled in.
     inputs: dict[str, str] = field(default_factory=dict)
+    # Running cost and stop state shared with the worker.
+    meter: cost.Meter = field(default_factory=cost.Meter)
 
 
 def build_prompt(
@@ -63,6 +65,7 @@ async def run_shift(
     use_worktree: bool = False,
     verbose: bool = True,
     inputs: dict[str, str] | None = None,
+    meter: cost.Meter | None = None,
 ) -> Shift:
     if use_worktree and rig.workspaces:
         raise worktree.GitError("--worktree doesn't support several `workspaces` yet; run without it, or use one workspace")
@@ -72,6 +75,12 @@ async def run_shift(
     values = rig.resolve_inputs(inputs or {})  # raises InputError before anything is created
     shift = new_shift(root)
     shift.inputs = values
+    meter = meter or cost.Meter()
+    if meter.limit is None:
+        meter.limit = rig.max_cost_usd
+    shift.meter = meter
+    if hasattr(worker, "meter"):
+        worker.meter = meter
     mode = "foreman" if rig.foreman else "lines"
     on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")
 
@@ -121,9 +130,13 @@ async def run_shift(
             for k, r in shift.results.items()
         },
         "totals": _totals(list(shift.results.values())),
+        "max_cost_usd": meter.limit,
+        "stopped": meter.stop_reason,
     }
     (shift.dir / "shift.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     on_event(cost.summary(summary["totals"]))
+    if meter.stop_reason:
+        on_event(f"✗ stopped: {meter.message()}")
     on_event(f"logs → {shift.dir}")
     return shift
 
@@ -155,9 +168,15 @@ def _report_worktree(shift: Shift, on_event: Event) -> None:
     on_event(f"  merge:   git merge {wt.branch}    discard: git branch -D {wt.branch}")
 
 
-def _done(res: HandResult) -> str:
+def _done(res: HandResult, meter: cost.Meter | None = None) -> str:
     cached = f", {res.cache_read_tokens} cached" if res.cache_read_tokens else ""
-    return f"[{res.stop_reason}, {res.turns} turns, {res.input_tokens}/{res.output_tokens} tok{cached}]"
+    # The shift's running total, so a long run shows what it has cost so far.
+    total = ""
+    if meter and res.tokens:
+        total = f" · shift {'≥' if meter.unpriced else ''}{cost.usd(meter.spent)}"
+        if meter.limit is not None:
+            total += f" of {cost.usd(meter.limit)}"
+    return f"[{res.stop_reason}, {res.turns} turns, {res.input_tokens}/{res.output_tokens} tok{cached}]{total}"
 
 
 async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFactory) -> None:
@@ -168,10 +187,13 @@ async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFact
         handoffs = {u: shift.results[u].output for u in upstreams(name, edges)}
         on_event(f"  ▶ {name}" + (f"  ← {', '.join(handoffs)}" if handoffs else ""))
         res = await worker.run(hand, build_prompt(task, handoffs, inputs=shift.inputs), tools(hand.tools, name))
-        on_event(f"  ■ {name}  {_done(res)}")
+        on_event(f"  ■ {name}  {_done(res, shift.meter)}")
         return res
 
     for layer in layers(list(rig.hands), edges):
+        if shift.meter.stop_reason:
+            on_event(f"  ✗ not starting {', '.join(layer)}: {shift.meter.message()}")
+            return
         failed = [u for n in layer for u in upstreams(n, edges) if not shift.results[u].ok]
         if failed:
             on_event(f"  ✗ stopping: upstream hands did not finish cleanly: {sorted(set(failed))}")
@@ -225,7 +247,7 @@ async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFa
         hand = rig.resolve(name, shift.inputs)
         on_event(f"  ↳ {key}  {instructions.strip().splitlines()[0][:70] if instructions.strip() else ''}")
         res = await worker.run(hand, build_prompt(task, {}, instructions, inputs=shift.inputs), tools(hand.tools, key))
-        on_event(f"  ■ {key}  {_done(res)}")
+        on_event(f"  ■ {key}  {_done(res, shift.meter)}")
         record(key, res)
         if not res.ok:
             raise ToolError(f"{name} did not finish cleanly ({res.stop_reason}): {res.output}")
@@ -267,7 +289,7 @@ async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFa
 
     on_event(f"  ▶ foreman  crew: {', '.join(crew)}")
     res = await worker.run(hand, build_prompt(task, {}, inputs=shift.inputs), toolbox, check=check if foreman.require else None)
-    on_event(f"  ■ foreman  {_done(res)} · {total} delegations")
+    on_event(f"  ■ foreman  {_done(res, shift.meter)} · {total} delegations")
     record("foreman", res)
     shift.final = res
     shift.ok = res.ok and not unmet_at_finish

@@ -22,7 +22,7 @@ import yaml
 from pydantic import ValidationError
 
 from rig import report
-from rig.cost import usd
+from rig.cost import Meter, usd
 from rig.graph import layers
 from rig.spec import InputError, load
 
@@ -34,10 +34,11 @@ class Run:
     file: str
     task: str
     dry: bool
-    status: str = "running"  # running | done | incomplete | failed
+    status: str = "running"  # running | done | stopped | incomplete | failed
     shift_id: str | None = None
     lines: list[str] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    meter: Meter = field(default_factory=Meter)
 
     def log(self, line: str) -> None:
         with self.lock:
@@ -92,6 +93,7 @@ class App:
                 "mode": "foreman" if rig.foreman else "lines",
                 "stages": stages,
                 "workspaces": folders,
+                "max_cost_usd": rig.max_cost_usd,
                 "workspace_ok": all(f["ok"] for f in folders),
                 "writes": writes,
                 "inputs": [
@@ -147,7 +149,8 @@ class App:
 
     # --- runs ------------------------------------------------------------------------------------
 
-    def start(self, name: str, task: str, inputs: dict[str, str], dry: bool, use_worktree: bool) -> Run:
+    def start(self, name: str, task: str, inputs: dict[str, str], dry: bool, use_worktree: bool,
+              max_cost: float | None = None) -> Run:
         if self.run and self.run.status == "running":
             raise ValueError("a run is already in progress")
         if not task.strip():
@@ -160,7 +163,9 @@ class App:
         if use_worktree and rig.workspaces:
             raise ValueError("worktree doesn't support several projects yet; uncheck it")
         rig.resolve_inputs({k: v for k, v in inputs.items() if v != ""})  # raises InputError
-        run = Run(file=name, task=task, dry=dry)
+        if max_cost is not None and max_cost <= 0:
+            raise ValueError("the cost limit must be more than 0")
+        run = Run(file=name, task=task, dry=dry, meter=Meter(max_cost))
         self.run = run
         threading.Thread(target=self._work, args=(run, path, inputs, use_worktree), daemon=True).start()
         return run
@@ -174,23 +179,34 @@ class App:
             worker = EchoWorker() if run.dry else ClaudeWorker()
             shift = asyncio.run(run_shift(
                 rig, run.task, worker, root=path.parent, on_event=run.log, use_worktree=use_worktree,
-                inputs={k: v for k, v in inputs.items() if v != ""},
+                inputs={k: v for k, v in inputs.items() if v != ""}, meter=run.meter,
             ))
             run.shift_id = shift.id
             if shift.outcome and shift.outcome.changed and not shift.outcome.kept_at:
                 run.log(f"changes are on branch {shift.worktree.branch}")
-            run.status = "done" if shift.ok else "incomplete"
+            run.status = "done" if shift.ok else "stopped" if run.meter.stop_reason else "incomplete"
         except Exception as e:  # shown in the page; the server keeps running
             run.log(f"✗ {type(e).__name__}: {e}")
             run.status = "failed"
+
+    def stop(self) -> None:
+        run = self.run
+        if not run or run.status != "running":
+            raise ValueError("nothing is running")
+        if not run.meter.stop_reason:
+            run.meter.stop()
+            run.log("■ stop requested; hands finish the request they're on, then stop")
 
     def run_state(self, since: int) -> dict[str, Any]:
         run = self.run
         if not run:
             return {"status": "idle"}
+        m = run.meter
         with run.lock:
             return {"status": run.status, "file": run.file, "task": run.task, "dry": run.dry,
-                    "shift_id": run.shift_id, "lines": run.lines[since:], "total": len(run.lines)}
+                    "shift_id": run.shift_id, "lines": run.lines[since:], "total": len(run.lines),
+                    "cost": {"spent": usd(m.spent), "limit": usd(m.limit) if m.limit is not None else None,
+                             "unpriced": m.unpriced, "stopping": m.stop_reason}}
 
     # --- history ---------------------------------------------------------------------------------
 
@@ -305,11 +321,16 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 if self.path == "/api/workspaces":
                     app.set_workspaces(body["file"], body["workspaces"])
                     return self._json(200, {"ok": True})
+                if self.path == "/api/stop":
+                    app.stop()
+                    return self._json(200, {"ok": True})
                 if self.path == "/api/init-fix":
                     return self._json(200, {"file": app.init_fix(body["workspaces"])})
                 if self.path == "/api/run":
+                    limit = body.get("max_cost")
                     run = app.start(body["file"], body.get("task", ""), body.get("inputs") or {},
-                                    bool(body.get("dry")), bool(body.get("worktree")))
+                                    bool(body.get("dry")), bool(body.get("worktree")),
+                                    float(limit) if limit not in (None, "") else None)
                     return self._json(200, {"ok": True, "file": run.file})
             except (ValueError, KeyError, InputError, ValidationError, yaml.YAMLError) as e:
                 return self._json(400, {"error": str(e)})
@@ -373,7 +394,7 @@ code{font-family:var(--mono);font-size:.9em;background:var(--code);padding:1px 4
 p.field{margin:0}
 .status-ok{color:var(--ok)}.status-bad{color:var(--bad)}
 label.field{display:grid;gap:4px;font-size:13px;color:var(--muted)}
-input[type=text],textarea{font:inherit;font-size:14px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 10px;width:100%}
+input[type=text],input[type=number],textarea{font:inherit;font-size:14px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 10px;width:100%}
 textarea{min-height:96px;resize:vertical}
 .opts{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:14px}
 button.primary,button.secondary{font:inherit;font-size:14px;border-radius:6px;padding:7px 16px;cursor:pointer;border:1px solid var(--accent)}
@@ -382,10 +403,13 @@ button.secondary{background:transparent;color:var(--accent)}
 button:disabled{opacity:.5;cursor:not-allowed}
 .notice{border:1px solid var(--accent);background:var(--soft);border-radius:8px;padding:12px 14px;display:grid;gap:8px;font-size:14px}
 .notice[hidden]{display:none}.notice p{margin:0}
+.cost-field input{max-width:160px}
+.cost{font-variant-numeric:tabular-nums;font-size:13px;font-weight:600}
+button.danger{font:inherit;font-size:14px;border-radius:6px;padding:7px 16px;cursor:pointer;border:1px solid var(--bad);background:transparent;color:var(--bad)}
 .error{color:var(--bad);font-size:14px;white-space:pre-wrap}
 .log{font:12.5px/1.55 var(--mono);background:var(--code);border-radius:6px;padding:12px;max-height:340px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}
 .pill{font-size:12px;font-weight:600;padding:1px 9px;border-radius:999px;border:1px solid currentColor}
-.pill.running{color:var(--warn)}.pill.done{color:var(--ok)}.pill.incomplete,.pill.failed{color:var(--bad)}
+.pill.running{color:var(--warn)}.pill.done{color:var(--ok)}.pill.incomplete,.pill.failed,.pill.stopped{color:var(--bad)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 table{border-collapse:collapse;width:100%;font-size:14px}
 th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
@@ -423,13 +447,16 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
         <textarea id="task" placeholder="예: 이 프로젝트를 리뷰해줘 / 주문 목록에 기간 검색 조건을 추가해줘"></textarea>
       </label>
       <div id="inputs"></div>
+      <label class="field cost-field" for="max-cost">비용 상한 (USD, 넘으면 자동으로 멈춤)
+        <input type="number" id="max-cost" min="0.01" step="0.5" placeholder="없음">
+      </label>
       <div class="opts">
         <label><input type="checkbox" id="dry"> API 호출 없이 테스트 (dry)</label>
         <label><input type="checkbox" id="worktree"> 수정 결과를 별도 브랜치에 (worktree)</label>
       </div>
-      <div class="row"><button class="primary" id="go">실행</button><span class="error" id="run-error"></span></div>
+      <div class="row"><button class="primary" id="go">실행</button><button class="danger" id="stop" type="button" hidden>중지</button><span class="error" id="run-error"></span></div>
       <div id="progress" hidden>
-        <div class="row"><span class="pill" id="pill"></span><span class="small muted" id="run-title"></span><a id="report-link" target="_blank" hidden>결과 리포트 열기 →</a></div>
+        <div class="row"><span class="pill" id="pill"></span><span class="small muted" id="run-title"></span><span class="cost" id="run-cost"></span><a id="report-link" target="_blank" hidden>결과 리포트 열기 →</a></div>
         <pre class="log" id="log" aria-live="polite"></pre>
       </div>
     </section>
@@ -527,6 +554,7 @@ function renderSelected() {
   $('ws-box').hidden = !r || !!r.error;
   const box = $('inputs'); box.textContent = '';
   if (!r || r.error) return;
+  $('max-cost').value = r.max_cost_usd ?? '';
   const rows = $('ws-rows'); rows.textContent = '';
   for (const w of r.workspaces) addRow(w);
   $('ws-status').textContent = r.workspace_ok ? '✓ 폴더를 모두 찾았습니다.' : '✗ 찾을 수 없는 폴더가 있습니다. 경로를 확인하고 저장하세요.';
@@ -561,12 +589,17 @@ $('go').addEventListener('click', async () => {
   const inputs = {};
   for (const i of document.querySelectorAll('#inputs input')) inputs[i.dataset.name] = i.value;
   try {
-    await api('/api/run', {file: selected, task: $('task').value, inputs, dry: $('dry').checked, worktree: $('worktree').checked});
+    await api('/api/run', {file: selected, task: $('task').value, inputs, dry: $('dry').checked, worktree: $('worktree').checked,
+                           max_cost: $('max-cost').value});
     since = 0; $('log').textContent = ''; poll();
   } catch (e) { $('run-error').textContent = e.message; }
 });
 
-const LABEL = {running: '실행 중', done: '완료', incomplete: '미완료', failed: '실패'};
+$('stop').addEventListener('click', async () => {
+  try { await api('/api/stop', {}); poll(); } catch (e) { $('run-error').textContent = e.message; }
+});
+
+const LABEL = {running: '실행 중', done: '완료', stopped: '중지됨', incomplete: '미완료', failed: '실패'};
 async function poll() {
   clearTimeout(polling);
   const s = await api('/api/run?since=' + since).catch(() => null);
@@ -579,6 +612,13 @@ async function poll() {
   link.hidden = !(s.shift_id && s.status !== 'running');
   if (s.shift_id) link.href = '/shifts/' + encodeURIComponent(s.shift_id) + '/report';
   $('go').disabled = s.status === 'running';
+  $('stop').hidden = s.status !== 'running';
+  $('stop').disabled = !!(s.cost && s.cost.stopping);
+  if (s.cost) {
+    const c = s.cost;
+    $('run-cost').textContent = '비용 ' + (c.unpriced ? '≥' : '') + c.spent + (c.limit ? ' / 상한 ' + c.limit : '')
+      + (c.stopping === 'budget' ? ' · 상한 도달' : c.stopping ? (s.status === 'running' ? ' · 중지 중' : ' · 중지됨') : '');
+  }
   if (s.status === 'running') polling = setTimeout(poll, 1000); else loadShifts();
 }
 
