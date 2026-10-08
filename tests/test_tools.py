@@ -2,7 +2,7 @@ import pytest
 
 from rig.tools import READ_LIMIT, Toolbox, ToolError, glob_regex
 
-ALL = ["write_file", "read_file", "list_dir", "glob", "search"]
+ALL = ["write_file", "edit_file", "read_file", "list_dir", "glob", "search"]
 
 
 @pytest.fixture
@@ -49,6 +49,75 @@ def test_read_caps_at_limit(tmp_path):
 def test_read_non_utf8(tmp_path):
     (tmp_path / "kr.txt").write_bytes("안녕".encode("cp949"))
     assert Toolbox(tmp_path, ["read_file"]).run("read_file", {"path": "kr.txt"}).startswith("1\t")
+
+
+def test_edit_single_replacement(repo):
+    out = repo.run("edit_file", {"path": "src/app.py", "old": "    print('hello')", "new": "    print('bye')"})
+    assert out == "replaced 1 occurrence(s) in src/app.py"
+    assert (repo.workspace / "src/app.py").read_text(encoding="utf-8") == "import os\n\ndef main():\n    print('bye')\n"
+
+
+def test_edit_missing_old(repo):
+    with pytest.raises(ToolError, match="not found"):
+        repo.run("edit_file", {"path": "src/app.py", "old": "print('nope')", "new": "x"})
+
+
+def test_edit_ambiguous_old_leaves_file(tmp_path):
+    (tmp_path / "a.txt").write_text("x = 1\nx = 1\n", encoding="utf-8")
+    tb = Toolbox(tmp_path, ["edit_file"])
+    with pytest.raises(ToolError, match="occurs 2 times"):
+        tb.run("edit_file", {"path": "a.txt", "old": "x = 1", "new": "x = 2"})
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "x = 1\nx = 1\n"
+
+
+def test_edit_replace_all(tmp_path):
+    (tmp_path / "a.txt").write_text("x = 1\ny = 0\nx = 1\n", encoding="utf-8")
+    out = Toolbox(tmp_path, ["edit_file"]).run("edit_file", {"path": "a.txt", "old": "x = 1", "new": "x = 2", "replace_all": True})
+    assert out == "replaced 2 occurrence(s) in a.txt"
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "x = 2\ny = 0\nx = 2\n"
+
+
+def test_edit_replace_all_missing_old(tmp_path):
+    (tmp_path / "a.txt").write_text("x = 1\n", encoding="utf-8")
+    with pytest.raises(ToolError, match="not found"):
+        Toolbox(tmp_path, ["edit_file"]).run("edit_file", {"path": "a.txt", "old": "y = 1", "new": "y = 2", "replace_all": True})
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "x = 1\n"
+
+
+def test_edit_keeps_crlf(tmp_path):
+    (tmp_path / "w.txt").write_bytes(b"one\r\ntwo\r\nthree\r\n")
+    Toolbox(tmp_path, ["edit_file"]).run("edit_file", {"path": "w.txt", "old": "one\ntwo\n", "new": "one\n2a\n2b\n"})
+    assert (tmp_path / "w.txt").read_bytes() == b"one\r\n2a\r\n2b\r\nthree\r\n"
+
+
+def test_edit_crlf_old_not_translated_twice(tmp_path):
+    (tmp_path / "w.txt").write_bytes(b"one\r\ntwo\r\nthree\r\n")
+    Toolbox(tmp_path, ["edit_file"]).run("edit_file", {"path": "w.txt", "old": "one\r\ntwo\r\n", "new": "one\r\n2\r\n"})
+    assert (tmp_path / "w.txt").read_bytes() == b"one\r\n2\r\nthree\r\n"
+
+
+def test_edit_mixed_line_endings(tmp_path):
+    (tmp_path / "m.txt").write_bytes(b"a\r\nb\nc\r\n")
+    Toolbox(tmp_path, ["edit_file"]).run("edit_file", {"path": "m.txt", "old": "b\nc", "new": "B\nC"})
+    assert (tmp_path / "m.txt").read_bytes() == b"a\r\nB\nC\r\n"
+
+
+def test_edit_non_utf8_refused(tmp_path):
+    data = "안녕\n".encode("cp949")
+    (tmp_path / "kr.txt").write_bytes(data)
+    with pytest.raises(ToolError, match="UTF-8"):
+        Toolbox(tmp_path, ["edit_file"]).run("edit_file", {"path": "kr.txt", "old": "\n", "new": "\r\n"})
+    assert (tmp_path / "kr.txt").read_bytes() == data
+
+
+def test_edit_empty_old(repo):
+    with pytest.raises(ToolError, match="must not be empty"):
+        repo.run("edit_file", {"path": "src/app.py", "old": "", "new": "x"})
+
+
+def test_edit_missing_file(repo):
+    with pytest.raises(ToolError, match="no such file"):
+        repo.run("edit_file", {"path": "nope.py", "old": "a", "new": "b"})
 
 
 @pytest.mark.parametrize(
@@ -100,7 +169,12 @@ def test_glob_regex():
 
 def test_path_escape_blocked(tmp_path):
     tb = Toolbox(tmp_path, ALL)
-    for name, args in [("read_file", {"path": "../secret"}), ("glob", {"pattern": "*", "path": ".."}), ("search", {"pattern": "x", "path": "../"})]:
+    for name, args in [
+        ("read_file", {"path": "../secret"}),
+        ("edit_file", {"path": "../secret", "old": "a", "new": "b"}),
+        ("glob", {"pattern": "*", "path": ".."}),
+        ("search", {"pattern": "x", "path": "../"}),
+    ]:
         with pytest.raises(ToolError):
             tb.run(name, args)
 
@@ -109,3 +183,7 @@ def test_tool_not_granted(tmp_path):
     tb = Toolbox(tmp_path, ["read_file"])
     with pytest.raises(ToolError):
         tb.run("write_file", {"path": "x", "content": ""})
+    (tmp_path / "x").write_text("a", encoding="utf-8")
+    with pytest.raises(ToolError, match="not available"):
+        tb.run("edit_file", {"path": "x", "old": "a", "new": "b"})
+    assert (tmp_path / "x").read_text(encoding="utf-8") == "a"

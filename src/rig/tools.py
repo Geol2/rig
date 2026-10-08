@@ -60,6 +60,35 @@ DEFINITIONS: dict[str, dict[str, Any]] = {
         },
         "strict": True,
     },
+    "edit_file": {
+        "name": "edit_file",
+        "description": (
+            "Replace an exact string in a UTF-8 text file in the workspace. `old` must occur exactly once "
+            "unless replace_all is true; include enough surrounding lines to make it unique. "
+            "Prefer this over write_file for changing existing files."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Path relative to the workspace."},
+                "old": {
+                    "type": "string",
+                    "description": (
+                        "Exact text to replace. Must match the file exactly, including whitespace and "
+                        "indentation, without the line numbers read_file adds."
+                    ),
+                },
+                "new": {"type": "string", "description": "Replacement text."},
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace every occurrence instead of requiring exactly one. Default false.",
+                },
+            },
+            "required": ["path", "old", "new"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    },
     "list_dir": {
         "name": "list_dir",
         "description": "List entries of a directory in the workspace.",
@@ -267,6 +296,8 @@ class Toolbox:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(args["content"], encoding="utf-8")
             return f"wrote {len(args['content'])} chars to {args['path']}"
+        if name == "edit_file":
+            return self._edit(args["path"], args["old"], args["new"], bool(args.get("replace_all")))
         if name == "list_dir":
             p = self._path(args["path"])
             if not p.is_dir():
@@ -340,6 +371,31 @@ class Toolbox:
         if offset > 1 or end < len(lines):
             body += f"\n[lines {offset}-{end} of {len(lines)}" + (f"; continue with offset={end + 1}]" if end < len(lines) else "]")
         return body
+
+    def _edit(self, rel: str, old: str, new: str, replace_all: bool) -> str:
+        p = self._path(rel)
+        if not p.is_file():
+            raise ToolError(f"no such file: {rel}")
+        if not old:
+            raise ToolError("old must not be empty")
+        try:
+            # Strict decoding: read_file replaces bad bytes, so writing that text back would corrupt the file.
+            text = p.read_bytes().decode("utf-8")
+        except UnicodeDecodeError as e:
+            raise ToolError(f"{rel} isn't valid UTF-8; edit_file can't edit it safely") from e
+        count = text.count(old)
+        # read_file shows lines without \r, so if the literal text misses in a CRLF file, retry with CRLF line ends.
+        # Literal first, so files with mixed line endings stay editable.
+        if count == 0 and "\r\n" in text and "\n" in old and "\r" not in old:
+            old, new = old.replace("\n", "\r\n"), new.replace("\n", "\r\n")
+            count = text.count(old)
+        if count == 0:
+            raise ToolError(f"old string not found in {rel}; re-read the file and match whitespace exactly")
+        if count > 1 and not replace_all:
+            raise ToolError(f"old string occurs {count} times in {rel}; add surrounding context to make it unique or set replace_all")
+        n = count if replace_all else 1
+        p.write_bytes(text.replace(old, new, n).encode("utf-8"))
+        return f"replaced {n} occurrence(s) in {rel}"
 
     def _glob(self, pattern: str, rel: str) -> str:
         root = self._path(rel)

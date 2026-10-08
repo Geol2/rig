@@ -43,7 +43,7 @@ hands:
   coder:
     role: Implement the plan.
     effort: high        # per-hand override
-    tools: [list_dir, read_file, write_file]
+    tools: [list_dir, read_file, write_file, edit_file]
   reviewer:
     role: Review the change.
     tools: [read_file]
@@ -68,7 +68,7 @@ Built-in tools (all confined to `workspace`):
 | `search` | Regex search over file contents, like grep; optional `glob` filter and `ignore_case` |
 | `read_file` | Read a file with line numbers; `offset`/`limit` for large files (max 2000 lines per call) |
 | `write_file` | Create or overwrite a file |
-
+| `edit_file` | Replace an exact string in a file (`old` → `new`); fails if `old` is missing or appears more than once, unless `replace_all` |
 | `run` | Run an allowed command (tests, linters, `git diff`) and get exit code + output |
 
 ### run
@@ -98,7 +98,7 @@ Allow only what the hands need, since an allowed program can do anything it supp
 
 ### Analyzing another project
 
-Point `workspace` at it (absolute paths work) and leave out `write_file` to keep it read-only:
+Point `workspace` at it (absolute paths work) and leave out `write_file` and `edit_file` to keep it read-only:
 
 ```yaml
 workspace: D:/05_project/some-service
@@ -124,7 +124,7 @@ foreman:
   # role: ...                    # optional: overrides the built-in foreman prompt
 
 hands:
-  coder:    { role: Implement what the instructions ask., tools: [read_file, write_file] }
+  coder:    { role: Implement what the instructions ask., tools: [read_file, write_file, edit_file] }
   reviewer: { role: Review the changed files., tools: [read_file] }
 ```
 
