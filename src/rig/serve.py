@@ -254,16 +254,16 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
 def serve(root: Path, port: int = 8000, open_browser: bool = True) -> None:
     app = App(root)
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
-    # Plain HTTP on purpose: the server only listens on loopback, where there's no network to protect
-    # and no certificate to serve HTTPS with.
-    url = f"http://localhost:{server.server_address[1]}/"  # NOSONAR
+    url = f"http://localhost:{server.server_address[1]}/"
     print(f"rig serve → {url}  (folder {app.root}; Ctrl+C to stop)")
     if open_browser:
         import webbrowser
 
         webbrowser.open(url)
     try:
-        server.serve_forever()
+        # Plain HTTP on purpose: the server only listens on loopback, where there's no network to
+        # protect and no certificate to serve HTTPS with.
+        server.serve_forever()  # NOSONAR
     except KeyboardInterrupt:
         pass
     finally:
