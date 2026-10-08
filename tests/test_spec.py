@@ -69,3 +69,16 @@ def test_dry_shift_hands_off(tmp_path):
     assert '<handoff from="a">' in shift.results["b"].output
     shift = next((tmp_path / ".rig" / "shifts").iterdir())
     assert {p.name for p in shift.iterdir()} == {"a.md", "b.md", "c.md", "shift.json"}
+
+
+def test_refusal_is_reported_in_progress(tmp_path):
+    from rig.hand import HandResult, refusal_message
+
+    class Refusing:
+        async def run(self, hand, prompt, toolbox, check=None):
+            return HandResult(hand.name, refusal_message("reasoning_extraction"), "refusal", 1)
+
+    events = []
+    shift = asyncio.run(run_shift(make(), "x", Refusing(), root=tmp_path, on_event=events.append))
+    assert not shift.ok
+    assert any(e.startswith("  ✗ a: [거절됨: reasoning_extraction]") for e in events)

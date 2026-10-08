@@ -70,6 +70,13 @@ Each hand receives the task plus its upstream hands' outputs:
 <handoff from="planner">…</handoff>
 ```
 
+If the model declines a request (a safety classifier refusal), the hand stops and its output
+says, in Korean, which category declined it, why, and what to change; the progress output
+names the hand (`✗ coder: [거절됨: reasoning_extraction] …`). The most common case,
+`reasoning_extraction`, means a prompt asked the model to write out its internal reasoning
+("show your thought process step by step"); drop that wording. Asking for a summary of
+the result is fine. `fallbacks: default` doesn't retry that category on another model.
+
 Built-in tools (all confined to `workspace`):
 
 | Tool | What it does |

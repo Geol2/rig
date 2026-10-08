@@ -43,6 +43,29 @@ class HandResult:
         return cost.cost(self.model, self.input_tokens, self.output_tokens, self.cache_read_tokens, self.cache_write_tokens)
 
 
+# What each refusal category (response.stop_details.category) means, and what to do about it.
+REFUSAL_HELP = {
+    "reasoning_extraction": (
+        "모델의 안전 필터가 이 요청을 '내부 추론 과정을 답변에 써 달라는 요청'으로 판단했습니다. "
+        "요구사항이나 role에서 '생각 과정을 보여줘', '단계별로 추론을 적어줘' 같은 표현을 빼고 다시 실행하세요. "
+        "결과나 바꾼 점을 요약해 달라는 요청은 괜찮습니다. 이 거절은 다른 모델로 자동 재시도되지 않습니다."
+    ),
+    "cyber": (
+        "사이버 보안상 위험할 수 있는 요청(악성코드, 공격 코드 작성 등)으로 판단했습니다. "
+        "소스 코드에서 취약점을 찾는 리뷰는 허용됩니다. 요구사항 표현을 확인하고 다시 실행하세요."
+    ),
+    "bio": "생물학적 위험이 있을 수 있는 요청으로 판단했습니다. 관련 없는 작업이라면 표현을 바꿔 다시 실행하세요.",
+    "frontier_llm": "AI 모델 개발을 돕는 요청으로 판단했습니다. 관련 없는 작업이라면 표현을 바꿔 다시 실행하세요.",
+    "general_harms": "이용 정책에 어긋날 수 있는 요청으로 판단했습니다. 정상적인 작업이 잘못 걸렸을 수 있으니 표현을 바꿔 다시 실행하세요.",
+}
+
+
+def refusal_message(category: str | None) -> str:
+    """The hand's output when the model declines: the category, why, and what to try."""
+    help = REFUSAL_HELP.get(category or "", "모델이 요청을 거절했습니다. 요구사항 표현을 바꿔 다시 실행해 보세요.")
+    return f"[거절됨: {category or '분류 없음'}] {help}"
+
+
 # Called when a hand tries to finish. Returns None to allow it, or a message
 # telling the hand what is still missing (the loop then continues).
 FinishCheck = Callable[[], str | None]
@@ -115,7 +138,7 @@ class ClaudeWorker:
 
             if response.stop_reason == "refusal":
                 category = response.stop_details.category if response.stop_details else None
-                result.output = f"[refused: {category}]"
+                result.output = refusal_message(category)
                 return result
             if response.stop_reason == "pause_turn":
                 continue
