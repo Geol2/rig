@@ -8,6 +8,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterator
 
@@ -144,6 +145,28 @@ class ToolError(Exception):
 Handler = Callable[[dict[str, Any]], Awaitable[str]]
 
 
+def describe(name: str, args: dict[str, Any]) -> str:
+    """A short one-line summary of a tool call for progress output."""
+    path = args.get("path", "")
+    if name == "read_file":
+        offset, limit = args.get("offset"), args.get("limit")
+        span = f" :{offset or 1}+{limit}" if limit else (f" :{offset}" if offset else "")
+        detail = f"{path}{span}"
+    elif name == "write_file":
+        detail = f"{path} ({len(args.get('content', ''))} chars)"
+    elif name == "glob":
+        detail = args.get("pattern", "") + (f" in {path}" if path not in ("", ".") else "")
+    elif name == "search":
+        detail = repr(args.get("pattern", "")) + (f" in {path}" if path not in ("", ".") else "")
+        if args.get("glob"):
+            detail += f" ({args['glob']})"
+    elif name == "run":
+        detail = args.get("command", "")
+    else:
+        detail = path or ", ".join(f"{k}={v!r}" for k, v in args.items())
+    return f"{name:<10} {detail}"[:120]
+
+
 def _tail(text: str, limit: int) -> str:
     # Keep the end: test summaries and errors usually come last.
     if len(text) <= limit:
@@ -181,6 +204,7 @@ class Toolbox:
         extra: dict[str, tuple[dict[str, Any], Handler]] | None = None,
         run_policy: RunPolicy | None = None,
         env: dict[str, str] | None = None,
+        on_call: Callable[[str], None] | None = None,
     ):
         self.workspace = workspace.resolve()
         self.names = names
@@ -189,6 +213,8 @@ class Toolbox:
         self.run_policy = run_policy or RunPolicy()
         # Environment for `run` subprocesses; None inherits rig's own.
         self.env = env
+        # Progress callback: one line per built-in tool call (run-time tools log themselves).
+        self.on_call = on_call
 
     @property
     def definitions(self) -> list[dict[str, Any]]:
@@ -198,7 +224,19 @@ class Toolbox:
     async def call(self, name: str, args: dict[str, Any]) -> str:
         if name in self.extra:
             return await self.extra[name][1](args)
-        return await asyncio.to_thread(self.run, name, args)
+        if self.on_call:
+            self.on_call(describe(name, args))
+        start = time.monotonic()
+        try:
+            result = await asyncio.to_thread(self.run, name, args)
+        except ToolError as e:
+            if self.on_call:
+                self.on_call(f"  ✗ {str(e).splitlines()[0][:100]}")
+            raise
+        if self.on_call and name == "run":
+            # Commands can take a while; report how it ended, e.g. "[exit code 1]".
+            self.on_call(f"  → {result.split(chr(10), 1)[0].strip('[]')} ({time.monotonic() - start:.0f}s)")
+        return result
 
     def _path(self, rel: str) -> Path:
         p = (self.workspace / rel).resolve()

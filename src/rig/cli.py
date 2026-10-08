@@ -61,7 +61,7 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     worker = EchoWorker() if args.dry else ClaudeWorker()
     try:
-        shift = asyncio.run(run_shift(rig, task, worker, root=path.resolve().parent, use_worktree=args.worktree))
+        shift = asyncio.run(run_shift(rig, task, worker, root=path.resolve().parent, use_worktree=args.worktree, verbose=not args.quiet))
     except GitError as e:
         sys.exit(f"rig: {e}")
     if shift.final:
@@ -94,7 +94,8 @@ def cmd_logs(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+        # Line-buffered so progress shows up live even when piped (e.g. through grep or tee).
+        sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
     p = argparse.ArgumentParser(prog="rig", description="Define a multi-agent harness, then run it.")
     p.add_argument("--version", action="version", version=f"rig {__version__}")
     p.add_argument("-f", "--file", default=DEFAULT_FILE, help="rig definition (default: rig.yaml)")
@@ -114,6 +115,7 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--dry", action="store_true", help="no API calls; show what each hand would receive")
     s.add_argument("--worktree", action="store_true",
                    help="work in a new git worktree; changes are committed to branch rig/<shift-id> for review")
+    s.add_argument("-q", "--quiet", action="store_true", help="don't show individual tool calls")
     s.set_defaults(func=cmd_run)
 
     s = sub.add_parser("logs", help="list shifts, or show one (`last` or a shift id)")

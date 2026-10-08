@@ -16,6 +16,7 @@ from rig.spec import Rig
 from rig.tools import Toolbox, ToolError
 
 Event = Callable[[str], None]
+ToolFactory = Callable[..., Toolbox]
 
 
 @dataclass
@@ -53,6 +54,7 @@ async def run_shift(
     root: Path,
     on_event: Event = print,
     use_worktree: bool = False,
+    verbose: bool = True,
 ) -> Shift:
     workspace = (root / rig.workspace).resolve()
     shift = new_shift(root)
@@ -70,15 +72,19 @@ async def run_shift(
         if wt.dirty:
             on_event("  ! the repo has uncommitted changes; they are not in the worktree")
 
+    def tools(names: list[str], label: str, extra: dict | None = None) -> Toolbox:
+        on_call = (lambda line: on_event(f"    · {label:<12} {line}")) if verbose else None
+        return Toolbox(workspace, names, extra=extra, run_policy=rig.run, env=env, on_call=on_call)
+
     def record(key: str, res: HandResult) -> None:
         shift.results[key] = res
         (shift.dir / f"{key.replace('#', '-')}.md").write_text(res.output, encoding="utf-8")
 
     try:
         if rig.foreman:
-            await _run_foreman(rig, task, worker, workspace, shift, record, on_event, env)
+            await _run_foreman(rig, task, worker, shift, record, on_event, tools)
         else:
-            await _run_lines(rig, task, worker, workspace, shift, record, on_event, env)
+            await _run_lines(rig, task, worker, shift, record, on_event, tools)
     finally:
         if shift.worktree:
             # Even if the shift crashed, keep whatever the hands wrote on the branch.
@@ -123,14 +129,14 @@ def _done(res: HandResult) -> str:
     return f"[{res.stop_reason}, {res.turns} turns, {res.input_tokens}/{res.output_tokens} tok]"
 
 
-async def _run_lines(rig, task, worker, workspace, shift, record, on_event, env=None) -> None:
+async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFactory) -> None:
     edges = rig.edges
 
     async def run_hand(name: str) -> HandResult:
         hand = rig.resolve(name)
         inputs = {u: shift.results[u].output for u in upstreams(name, edges)}
         on_event(f"  ▶ {name}" + (f"  ← {', '.join(inputs)}" if inputs else ""))
-        res = await worker.run(hand, build_prompt(task, inputs), Toolbox(workspace, hand.tools, run_policy=rig.run, env=env))
+        res = await worker.run(hand, build_prompt(task, inputs), tools(hand.tools, name))
         on_event(f"  ■ {name}  {_done(res)}")
         return res
 
@@ -146,7 +152,7 @@ async def _run_lines(rig, task, worker, workspace, shift, record, on_event, env=
     shift.ok = all(r.ok for r in shift.results.values())
 
 
-async def _run_foreman(rig, task, worker, workspace, shift, record, on_event, env=None) -> None:
+async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFactory) -> None:
     foreman = rig.foreman
     crew = rig.crew
     counts: dict[str, int] = {}
@@ -187,7 +193,7 @@ async def _run_foreman(rig, task, worker, workspace, shift, record, on_event, en
 
         hand = rig.resolve(name)
         on_event(f"  ↳ {key}  {instructions.strip().splitlines()[0][:70] if instructions.strip() else ''}")
-        res = await worker.run(hand, build_prompt(task, {}, instructions), Toolbox(workspace, hand.tools, run_policy=rig.run, env=env))
+        res = await worker.run(hand, build_prompt(task, {}, instructions), tools(hand.tools, key))
         on_event(f"  ■ {key}  {_done(res)}")
         record(key, res)
         if not res.ok:
@@ -226,7 +232,7 @@ async def _run_foreman(rig, task, worker, workspace, shift, record, on_event, en
         },
         "strict": True,
     }
-    toolbox = Toolbox(workspace, hand.tools, extra={"delegate": (delegate_def, delegate)}, run_policy=rig.run, env=env)
+    toolbox = tools(hand.tools, "foreman", extra={"delegate": (delegate_def, delegate)})
 
     on_event(f"  ▶ foreman  crew: {', '.join(crew)}")
     res = await worker.run(hand, build_prompt(task, {}), toolbox, check=check if foreman.require else None)
