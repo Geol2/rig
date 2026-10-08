@@ -44,7 +44,17 @@ def test_shell_syntax_rejected(tmp_path, command):
         box(tmp_path, "python -c").run("run", {"command": command})
 
 
-@pytest.mark.parametrize("arg", ["../outside.py", "--rootdir=../..", "C:/Windows/System32"])
+@pytest.mark.parametrize(
+    "arg",
+    [
+        "../outside.py",
+        "--rootdir=../..",
+        "/etc/passwd",                 # was missed on Windows, where it isn't is_absolute()
+        "--config=/etc/x",
+        "C:/Windows/System32",         # was missed on Linux, where it's a relative path
+        r"'\\server\share\x'",         # UNC path (quoted so shlex keeps the backslashes)
+    ],
+)
 def test_paths_outside_workspace_rejected(tmp_path, arg):
     with pytest.raises(ToolError, match="outside the workspace"):
         box(tmp_path, "python").run("run", {"command": f"python {arg}"})
@@ -54,6 +64,12 @@ def test_paths_inside_workspace_allowed(tmp_path):
     (tmp_path / "sub").mkdir()
     (tmp_path / "ok.py").write_text("print('ok')", encoding="utf-8")
     assert "ok" in box(tmp_path, "python").run("run", {"command": "python sub/../ok.py"})
+    assert "ok" in box(tmp_path, "python").run("run", {"command": f"python {(tmp_path / 'ok.py').as_posix()}"})
+
+
+@pytest.mark.parametrize("arg", ["origin/main", "HEAD~1:src/a.py", "tests::test_x", "-k", "http://example.com/a"])
+def test_non_path_arguments_pass(tmp_path, arg):
+    assert not box(tmp_path, "python")._outside(arg)
 
 
 def test_timeout(tmp_path):
