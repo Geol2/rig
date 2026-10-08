@@ -79,13 +79,19 @@ def cmd_logs(args: argparse.Namespace) -> None:
     if not shifts:
         sys.exit("rig: no shifts yet")
     if args.shift is None:
-        for s in shifts:
-            summary = json.loads((s / "shift.json").read_text(encoding="utf-8")) if (s / "shift.json").exists() else {}
+        summaries = [
+            json.loads((s / "shift.json").read_text(encoding="utf-8")) if (s / "shift.json").exists() else {}
+            for s in shifts
+        ]
+        # The branch column only appears when some shift ran with --worktree and left changes.
+        branch_width = max((len(m.get("branch") or "") for m in summaries), default=0)
+        for s, summary in zip(shifts, summaries):
             status = "ok" if summary.get("ok") else "incomplete"
             task = (summary.get("task") or "").strip().splitlines()
             # Shifts logged before cost tracking have no "usage"; show those blank rather than n/a.
             cost = pricing.usd(summary["usage"]["cost_usd"]) if "usage" in summary else ""
-            print(f"{s.name}  {summary.get('mode', ''):<8}  {status:<10}  {cost:>9}  {task[0][:60] if task else ''}")
+            branch = f"{summary.get('branch') or '':<{branch_width}}  " if branch_width else ""
+            print(f"{s.name}  {summary.get('mode', ''):<8}  {status:<10}  {cost:>9}  {branch}{task[0][:60] if task else ''}")
         return
     shift = shifts[-1] if args.shift == "last" else shifts_dir / args.shift
     if not shift.is_dir():

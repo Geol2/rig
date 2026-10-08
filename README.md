@@ -176,7 +176,8 @@ merge:   git merge rig/20261008-163910    discard: git branch -D rig/20261008-16
 ```
 
 Uncommitted changes in your working tree are not carried into the worktree (rig warns).
-rig never merges or pushes; that's left to you.
+rig never merges or pushes; that's left to you. `rig logs` lists each shift's branch,
+so you can find it again later.
 
 ## Developing rig with rig
 

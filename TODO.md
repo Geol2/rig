@@ -16,7 +16,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
 - [x] **Shift cost summary**: total input/output tokens per shift and an estimated USD
   cost (per-model prices in one table, unknown models shown as "n/a"). Print it at the
   end of `rig run` and store it in shift.json; show it in `rig logs`.
-- [ ] **`rig logs` shows the branch** for `--worktree` shifts (from shift.json).
+- [x] **`rig logs` shows the branch** for `--worktree` shifts (from shift.json).
 - [ ] **Configurable ignore list** for `glob`/`search`: `search.ignore` in rig.yaml adds
   to or replaces the built-in IGNORED_DIRS (some projects keep sources in `build/`).
 - [ ] **`.gitattributes`** so text files are committed with LF (silences CRLF warnings).
