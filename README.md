@@ -167,6 +167,19 @@ merge:   git merge rig/20261008-163910    discard: git branch -D rig/20261008-16
 Uncommitted changes in your working tree are not carried into the worktree (rig warns).
 rig never merges or pushes; that's left to you.
 
+## Developing rig with rig
+
+[`self.rig.yaml`](self.rig.yaml) is a foreman rig that works on rig itself: it takes an
+item from [`TODO.md`](TODO.md), has the coder implement it with tests, requires the
+reviewer to sign off, and ticks the item. Run it in worktree mode so the result is a
+branch you review and merge:
+
+```bash
+uv run rig -f self.rig.yaml run --worktree "Do the next item in TODO.md"
+```
+
+The worktree starts from `HEAD`, so commit TODO.md changes before running.
+
 ## Roadmap
 
 - **crews**: reusable groups of hands
