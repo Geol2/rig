@@ -13,9 +13,10 @@ Keep items small enough for one reviewed change. Add context under an item when 
   rewrite whole files with `write_file`, which costs tokens and risks clobbering
   unrelated lines. Add it to BUILTIN_TOOLS, document it, and give it to coder hands in
   the templates and `self.rig.yaml`.
-- [ ] **Shift cost summary**: total input/output tokens per shift and an estimated USD
+- [x] **Shift cost summary**: total input/output tokens per shift and an estimated USD
   cost (per-model prices in one table, unknown models shown as "n/a"). Print it at the
   end of `rig run` and store it in shift.json; show it in `rig logs`.
+  Note: the default model claude-opus-5-5 has no price in src/rig/cost.py PRICES yet, so it shows "n/a" until its price is added; turns served by a server-side fallback model are priced at the hand's configured model.
 - [ ] **`rig logs` shows the branch** for `--worktree` shifts (from shift.json).
 - [ ] **Configurable ignore list** for `glob`/`search`: `search.ignore` in rig.yaml adds
   to or replaces the built-in IGNORED_DIRS (some projects keep sources in `build/`).

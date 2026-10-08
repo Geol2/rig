@@ -47,6 +47,7 @@ def test_tool_loop(tmp_path):
     res = asyncio.run(ClaudeWorker(client).run(h, "go", Toolbox(tmp_path, h.tools)))
 
     assert res.ok and res.output == "done" and res.turns == 2
+    assert res.model == "claude-opus-5-5"
     assert res.input_tokens == 20
     assert res.cache_read_tokens == 200 and res.cache_write_tokens == 0
     assert (tmp_path / "a.txt").read_text() == "A"

@@ -13,6 +13,8 @@ import yaml
 from pydantic import ValidationError
 
 from rig import __version__
+from rig.cost import summary as cost_summary
+from rig.cost import usd
 from rig.graph import layers
 from rig.spec import Rig, load
 
@@ -73,6 +75,11 @@ def cmd_run(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _read_summary(shift_dir: Path) -> dict:
+    path = shift_dir / "shift.json"
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+
 def cmd_logs(args: argparse.Namespace) -> None:
     shifts_dir = Path(args.file).resolve().parent / ".rig" / "shifts"
     shifts = sorted(shifts_dir.iterdir()) if shifts_dir.is_dir() else []
@@ -80,14 +87,19 @@ def cmd_logs(args: argparse.Namespace) -> None:
         sys.exit("rig: no shifts yet")
     if args.shift is None:
         for s in shifts:
-            summary = json.loads((s / "shift.json").read_text(encoding="utf-8")) if (s / "shift.json").exists() else {}
+            summary = _read_summary(s)
             status = "ok" if summary.get("ok") else "incomplete"
+            # Shifts from before cost tracking have no totals.
+            price = usd(summary["totals"].get("cost_usd")) if "totals" in summary else ""
             task = (summary.get("task") or "").strip().splitlines()
-            print(f"{s.name}  {summary.get('mode', ''):<8}  {status:<10}  {task[0][:60] if task else ''}")
+            print(f"{s.name}  {summary.get('mode', ''):<8}  {status:<10}  {price:>9}  {task[0][:60] if task else ''}")
         return
     shift = shifts[-1] if args.shift == "last" else shifts_dir / args.shift
     if not shift.is_dir():
         sys.exit(f"rig: no shift {args.shift}")
+    summary = _read_summary(shift)
+    if "totals" in summary:
+        print(f"{cost_summary(summary['totals'])}\n")
     for f in sorted(shift.glob("*.md")):
         print(f"── {f.stem} ──\n{f.read_text(encoding='utf-8')}\n")
 

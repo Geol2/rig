@@ -8,6 +8,7 @@ from typing import Any, Callable, Protocol
 
 import anthropic
 
+from rig import cost
 from rig.spec import ResolvedHand
 from rig.tools import Toolbox, ToolError
 
@@ -25,11 +26,21 @@ class HandResult:
     # Prompt cache usage; input_tokens above counts only the uncached part.
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    model: str = ""
     transcript: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return self.stop_reason == "end_turn"
+
+    @property
+    def tokens(self) -> int:
+        return self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+
+    @property
+    def cost_usd(self) -> float | None:
+        # Turns served by a server-side fallback model are still priced at `model`.
+        return cost.cost(self.model, self.input_tokens, self.output_tokens, self.cache_read_tokens, self.cache_write_tokens)
 
 
 # Called when a hand tries to finish. Returns None to allow it, or a message
@@ -52,7 +63,7 @@ class ClaudeWorker:
     ) -> HandResult:
         # Append-only history: response content (including thinking blocks) goes back unchanged.
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
-        result = HandResult(name=hand.name, output="", stop_reason="", turns=0, transcript=messages)
+        result = HandResult(name=hand.name, output="", stop_reason="", turns=0, model=hand.model, transcript=messages)
 
         params: dict[str, Any] = {
             "model": hand.model,
@@ -128,4 +139,4 @@ class EchoWorker:
     ) -> HandResult:
         tools = [d["name"] for d in toolbox.definitions] or "-"
         output = f"({hand.name} on {hand.model}, effort={hand.effort}, tools={tools})\n{prompt}"
-        return HandResult(name=hand.name, output=output, stop_reason="end_turn", turns=0)
+        return HandResult(name=hand.name, output=output, stop_reason="end_turn", turns=0, model=hand.model)

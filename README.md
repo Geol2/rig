@@ -22,6 +22,10 @@ rig logs        # list shifts; `rig logs last` shows the latest outputs
 Hands run in stages. A hand starts once every hand with a line into it has finished,
 and hands with no path between them run in parallel.
 
+At the end of `rig run`, each shift prints its total tokens and an estimated USD cost.
+Both are stored in `.rig/shifts/<id>/shift.json` and shown by `rig logs`. Prices live in
+`src/rig/cost.py`; models not listed there show "n/a".
+
 ## rig.yaml
 
 ```yaml

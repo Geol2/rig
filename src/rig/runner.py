@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from rig import worktree
+from rig import cost, worktree
 from rig.graph import layers, upstreams
 from rig.hand import HandResult, Worker
 from rig.spec import Rig
@@ -100,14 +100,28 @@ async def run_shift(
         "ok": shift.ok,
         "branch": shift.worktree.branch if shift.outcome and shift.outcome.changed else None,
         "hands": {
-            k: {"stop_reason": r.stop_reason, "turns": r.turns, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
-                "cache_read_tokens": r.cache_read_tokens, "cache_write_tokens": r.cache_write_tokens}
+            k: {"stop_reason": r.stop_reason, "turns": r.turns, "model": r.model, "input_tokens": r.input_tokens,
+                "output_tokens": r.output_tokens, "cache_read_tokens": r.cache_read_tokens,
+                "cache_write_tokens": r.cache_write_tokens, "cost_usd": r.cost_usd}
             for k, r in shift.results.items()
         },
+        "totals": _totals(list(shift.results.values())),
     }
     (shift.dir / "shift.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    on_event(cost.summary(summary["totals"]))
     on_event(f"logs → {shift.dir}")
     return shift
+
+
+def _totals(results: list[HandResult]) -> dict[str, Any]:
+    """Token sums over all hands; cost_usd is None if any hand that used tokens has no known price."""
+    totals: dict[str, Any] = {
+        key: sum(getattr(r, key) for r in results)
+        for key in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+    }
+    costs = [r.cost_usd for r in results if r.tokens]
+    totals["cost_usd"] = None if None in costs else sum(costs, 0.0)
+    return totals
 
 
 def _report_worktree(shift: Shift, on_event: Event) -> None:
