@@ -84,6 +84,18 @@ class ClaudeWorker:
             params["betas"] = [FALLBACK_BETA]
             params["fallbacks"] = hand.fallbacks
 
+        try:
+            return await self._loop(hand, params, messages, result, toolbox, check)
+        except Exception as e:
+            # An SDK bug, a check() that raises, ...: keep the partial result and the tokens already counted.
+            result.stop_reason = "error"
+            result.output = f"[error: {type(e).__name__}: {e}]"
+            return result
+
+    async def _loop(
+        self, hand: ResolvedHand, params: dict[str, Any], messages: list[dict[str, Any]], result: HandResult,
+        toolbox: Toolbox, check: FinishCheck | None,
+    ) -> HandResult:
         while result.turns < hand.max_turns:
             if self.meter and self.meter.stop_reason:
                 result.stop_reason = self.meter.stop_reason
@@ -142,6 +154,8 @@ async def _call(toolbox: Toolbox, block: Any) -> dict[str, Any]:
         content, is_error = await toolbox.call(block.name, dict(block.input)), False
     except (ToolError, KeyError, OSError) as e:
         content, is_error = f"Error: {e}", True
+    except Exception as e:  # e.g. ValueError for a NUL byte in a path; the model can still recover
+        content, is_error = f"Error: {type(e).__name__}: {e}", True
     return {"type": "tool_result", "tool_use_id": block.id, "content": content, "is_error": is_error}
 
 

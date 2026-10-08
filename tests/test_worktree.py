@@ -88,10 +88,11 @@ def test_no_changes_removes_branch(repo, tmp_path):
 
 def test_crash_still_commits_what_was_written(repo, tmp_path):
     worker = WritingWorker({"app/partial.py": "y = 2\n"}, fail=True)
-    with pytest.raises(RuntimeError):
-        shift_in(repo, worker, tmp_path / "rigroot")
+    shift = shift_in(repo, worker, tmp_path / "rigroot")
+    assert not shift.ok and shift.results["coder"].stop_reason == "error"
     (branch,) = [b for b in branches(repo) if b.startswith("rig/")]
     assert git("show", f"{branch}:app/partial.py", cwd=repo) == "y = 2\n"
+    assert git("log", "-1", "--format=%b", branch, cwd=repo).strip().endswith("(incomplete).")
 
 
 def test_dirty_repo_is_flagged(repo, tmp_path):
@@ -137,3 +138,26 @@ def test_commit_failure_keeps_worktree(repo, tmp_path, monkeypatch):
     assert "boom" in shift.outcome.error
     # shift.json is still written.
     assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["branch"] == f"rig/{shift.id}"
+
+
+def test_finish_crash_keeps_worktree_and_writes_summary(repo, tmp_path, monkeypatch):
+    import rig.worktree as wtmod
+
+    real_finish = wtmod.finish
+
+    def crashing_finish(wt, message):
+        raise RuntimeError("diff exploded")
+
+    monkeypatch.setattr(wtmod, "finish", crashing_finish)
+    events = []
+    rig = rig_for(repo)
+    shift = asyncio.run(run_shift(rig, "t", WritingWorker({"app/x.py": "1\n"}), root=tmp_path / "rigroot",
+                                  on_event=events.append, use_worktree=True))
+    try:
+        assert shift.outcome.kept_at == shift.worktree.path and shift.worktree.path.exists()
+        assert shift.outcome.error == "RuntimeError: diff exploded"
+        assert any("worktree kept at" in e for e in events)
+        summary = json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))
+        assert summary["worktrees"][0]["kept_at"] == str(shift.worktree.path)
+    finally:
+        real_finish(shift.worktree, "cleanup")

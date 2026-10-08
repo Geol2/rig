@@ -52,6 +52,8 @@ class App:
     def __init__(self, root: Path):
         self.root = root.resolve()
         self.run: Run | None = None
+        # Held from the "already running" check until the new run is started, so two POSTs can't both start one.
+        self._lock = threading.Lock()
 
     @property
     def shifts_dir(self) -> Path:
@@ -151,22 +153,23 @@ class App:
 
     def start(self, name: str, task: str, inputs: dict[str, str], dry: bool, use_worktree: bool,
               max_cost: float | None = None) -> Run:
-        if self.run and self.run.status == "running":
-            raise ValueError("a run is already in progress")
-        if not task.strip():
-            raise ValueError("enter a task")
-        path = self._rig_path(name)
-        rig = load(path)
-        missing = [n for n, d in rig.workspace_dirs(path.parent).items() if not d.is_dir()]
-        if missing:
-            raise ValueError("project folder not found; fix it first" + ("" if missing == ["."] else f": {', '.join(missing)}"))
-        rig.resolve_inputs({k: v for k, v in inputs.items() if v != ""})  # raises InputError
-        if max_cost is not None and max_cost <= 0:
-            raise ValueError("the cost limit must be more than 0")
-        run = Run(file=name, task=task, dry=dry, meter=Meter(max_cost))
-        self.run = run
-        threading.Thread(target=self._work, args=(run, path, inputs, use_worktree), daemon=True).start()
-        return run
+        with self._lock:
+            if self.run and self.run.status == "running":
+                raise ValueError("a run is already in progress")
+            if not task.strip():
+                raise ValueError("enter a task")
+            path = self._rig_path(name)
+            rig = load(path)
+            missing = [n for n, d in rig.workspace_dirs(path.parent).items() if not d.is_dir()]
+            if missing:
+                raise ValueError("project folder not found; fix it first" + ("" if missing == ["."] else f": {', '.join(missing)}"))
+            rig.resolve_inputs({k: v for k, v in inputs.items() if v != ""})  # raises InputError
+            if max_cost is not None and max_cost <= 0:
+                raise ValueError("the cost limit must be more than 0")
+            run = Run(file=name, task=task, dry=dry, meter=Meter(max_cost))
+            self.run = run
+            threading.Thread(target=self._work, args=(run, path, inputs, use_worktree), daemon=True).start()
+            return run
 
     def _work(self, run: Run, path: Path, inputs: dict[str, str], use_worktree: bool) -> None:
         from rig.hand import ClaudeWorker, EchoWorker
@@ -183,7 +186,10 @@ class App:
             for wt, _ in shift.committed():
                 where = f" in {wt.repo}" if len(shift.worktrees) > 1 else ""
                 run.log(f"changes are on branch {wt.branch}{where}")
-            run.status = "done" if shift.ok else "stopped" if run.meter.stop_reason else "incomplete"
+            if shift.error:
+                run.status = "failed"  # the "✗ shift failed" line is already in the log
+            else:
+                run.status = "done" if shift.ok else "stopped" if run.meter.stop_reason else "incomplete"
         except Exception as e:  # shown in the page; the server keeps running
             run.log(f"✗ {type(e).__name__}: {e}")
             run.status = "failed"
