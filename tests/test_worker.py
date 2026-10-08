@@ -103,11 +103,17 @@ def test_finish_check_continues_the_loop(tmp_path):
     assert client.calls[1]["messages"][-1] == {"role": "user", "content": "review first"}
 
 
-def test_unexpected_tool_exception_is_a_tool_error(tmp_path):
+def test_unexpected_tool_exception_is_a_tool_error(tmp_path, monkeypatch):
+    # Raised directly: what a bad path raises differs by OS (Linux: ValueError for a NUL byte;
+    # Windows: no error, just "no such file").
+    def broken(self, name, args):
+        raise ValueError("embedded null byte")
+
+    monkeypatch.setattr(Toolbox, "run", broken)
     h = hand()
-    call = block("tool_use", id="t1", name="read_file", input={"path": "a\x00b"})
+    call = block("tool_use", id="t1", name="read_file", input={"path": "a"})
     result = asyncio.run(_call(Toolbox(tmp_path, h.tools), call))
-    assert result["is_error"] and result["content"].startswith("Error: ValueError:")
+    assert result["is_error"] and result["content"] == "Error: ValueError: embedded null byte"
 
 
 def test_unexpected_client_exception_keeps_partial_result(tmp_path):
