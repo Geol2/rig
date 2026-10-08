@@ -73,6 +73,9 @@ class ClaudeWorker:
             # Each turn resends the whole history; caching the prefix makes repeat reads ~10x cheaper.
             "cache_control": {"type": "ephemeral"},
         }
+        if hand.output_schema:
+            # Structured outputs: the final reply is JSON matching the schema; tool calls still work as usual.
+            params["output_config"]["format"] = {"type": "json_schema", "schema": hand.output_schema}
         if toolbox.definitions:
             params["tools"] = toolbox.definitions
         if hand.fallbacks:
@@ -138,5 +141,5 @@ class EchoWorker:
         self, hand: ResolvedHand, prompt: str, toolbox: Toolbox, check: FinishCheck | None = None
     ) -> HandResult:
         tools = [d["name"] for d in toolbox.definitions] or "-"
-        output = f"({hand.name} on {hand.model}, effort={hand.effort}, tools={tools})\n{prompt}"
+        output = f"({hand.name} on {hand.model}, effort={hand.effort}, tools={tools}{', output=json' if hand.output_schema else ''})\n{prompt}"
         return HandResult(name=hand.name, output=output, stop_reason="end_turn", turns=0, model=hand.model)

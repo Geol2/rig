@@ -122,6 +122,69 @@ hands:
     tools: [list_dir, glob, search, read_file]
 ```
 
+### inputs
+
+Values that change from run to run go under `inputs` and are passed with `-i`:
+
+```yaml
+inputs:
+  dataset:  { description: CSV to analyze, required: true }
+  audience: { default: executives }
+  weeks:    { type: integer, default: 4 }   # string (default) | integer | number | boolean
+
+hands:
+  writer:
+    role: Write a one-page report for {{ inputs.audience }}.
+```
+
+```bash
+rig run -i dataset=data/sales.csv -i weeks=8 "Weekly KPI report"
+```
+
+Every hand (and the foreman) gets them after the task, and `{{ inputs.name }}` in a
+`role` is replaced with the value (empty for an optional input left unset):
+
+```
+<task>…</task>
+<inputs>
+<input name="dataset">data/sales.csv</input>
+…
+</inputs>
+```
+
+Unknown or missing required inputs, and values of the wrong type, stop `rig run` before
+the shift starts; a role that references an undeclared input fails `rig check`. The values
+used are stored in `shift.json`.
+
+### output.schema
+
+A hand with `output.schema` must end with JSON matching that JSON Schema (Claude
+structured outputs). Tool calls work as usual before the final reply, and the JSON is what
+downstream hands (or the foreman) receive:
+
+```yaml
+hands:
+  analyst:
+    role: Compute the weekly KPIs from the dataset.
+    tools: [read_file, search]
+    output:
+      schema:
+        type: object
+        properties:
+          kpis:
+            type: array
+            items:
+              type: object
+              properties: { name: { type: string }, value: { type: number }, change_pct: { type: number } }
+              required: [name, value, change_pct]
+          anomalies: { type: array, items: { type: string } }
+        required: [kpis, anomalies]
+```
+
+rig adds `additionalProperties: false` to every object, which structured outputs require;
+setting it to anything else is an error. Numeric and string-length constraints
+(`minimum`, `maxLength`, ...) and recursive schemas aren't supported by the API.
+
 ## Foreman
 
 Instead of fixed `lines`, a rig can have a **foreman**: an orchestrator that decides at

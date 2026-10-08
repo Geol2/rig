@@ -29,11 +29,18 @@ class Shift:
     ok: bool = False
     worktree: worktree.Worktree | None = None
     outcome: worktree.Outcome | None = None
+    # Checked `rig run -i` values with defaults filled in.
+    inputs: dict[str, str] = field(default_factory=dict)
 
 
-def build_prompt(task: str, inputs: dict[str, str], instructions: str | None = None) -> str:
+def build_prompt(
+    task: str, handoffs: dict[str, str], instructions: str | None = None, inputs: dict[str, str] | None = None
+) -> str:
     parts = [f"<task>\n{task}\n</task>"]
-    for name, output in inputs.items():
+    if inputs:
+        lines = "\n".join(f'<input name="{name}">{value}</input>' for name, value in inputs.items())
+        parts.append(f"<inputs>\n{lines}\n</inputs>")
+    for name, output in handoffs.items():
         parts.append(f'<handoff from="{name}">\n{output}\n</handoff>')
     if instructions:
         parts.append(f'<instructions from="foreman">\n{instructions}\n</instructions>')
@@ -55,9 +62,12 @@ async def run_shift(
     on_event: Event = print,
     use_worktree: bool = False,
     verbose: bool = True,
+    inputs: dict[str, str] | None = None,
 ) -> Shift:
     workspace = (root / rig.workspace).resolve()
+    values = rig.resolve_inputs(inputs or {})  # raises InputError before anything is created
     shift = new_shift(root)
+    shift.inputs = values
     mode = "foreman" if rig.foreman else "lines"
     on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")
 
@@ -97,6 +107,7 @@ async def run_shift(
         "rig": rig.name,
         "mode": mode,
         "task": task,
+        "inputs": shift.inputs,
         "ok": shift.ok,
         "branch": shift.worktree.branch if shift.outcome and shift.outcome.changed else None,
         "hands": {
@@ -149,10 +160,10 @@ async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFact
     edges = rig.edges
 
     async def run_hand(name: str) -> HandResult:
-        hand = rig.resolve(name)
-        inputs = {u: shift.results[u].output for u in upstreams(name, edges)}
-        on_event(f"  ▶ {name}" + (f"  ← {', '.join(inputs)}" if inputs else ""))
-        res = await worker.run(hand, build_prompt(task, inputs), tools(hand.tools, name))
+        hand = rig.resolve(name, shift.inputs)
+        handoffs = {u: shift.results[u].output for u in upstreams(name, edges)}
+        on_event(f"  ▶ {name}" + (f"  ← {', '.join(handoffs)}" if handoffs else ""))
+        res = await worker.run(hand, build_prompt(task, handoffs, inputs=shift.inputs), tools(hand.tools, name))
         on_event(f"  ■ {name}  {_done(res)}")
         return res
 
@@ -207,9 +218,9 @@ async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFa
         counts[name] = counts.get(name, 0) + 1
         key = f"{name}#{counts[name]}"
 
-        hand = rig.resolve(name)
+        hand = rig.resolve(name, shift.inputs)
         on_event(f"  ↳ {key}  {instructions.strip().splitlines()[0][:70] if instructions.strip() else ''}")
-        res = await worker.run(hand, build_prompt(task, {}, instructions), tools(hand.tools, key))
+        res = await worker.run(hand, build_prompt(task, {}, instructions, inputs=shift.inputs), tools(hand.tools, key))
         on_event(f"  ■ {key}  {_done(res)}")
         record(key, res)
         if not res.ok:
@@ -221,14 +232,14 @@ async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFa
             last_other = seq
         return res.output
 
-    roster = "\n".join(f"- {n}: {rig.hands[n].role.strip()}" for n in crew)
+    roster = "\n".join(f"- {n}: {rig.resolve(n, shift.inputs).role.strip()}" for n in crew)
     rules = ""
     if foreman.require:
         rules = (
             f"\n\nBefore you finish, {', '.join(foreman.require)} must run after the last change by any "
             "other hand. If they report problems, send the fix back and have them check again."
         )
-    hand = rig.resolve("foreman")
+    hand = rig.resolve("foreman", shift.inputs)
     hand = hand.model_copy(update={"role": f"{hand.role.strip()}\n\n<crew>\n{roster}\n</crew>{rules}"})
     delegate_def = {
         "name": "delegate",
@@ -251,7 +262,7 @@ async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFa
     toolbox = tools(hand.tools, "foreman", extra={"delegate": (delegate_def, delegate)})
 
     on_event(f"  ▶ foreman  crew: {', '.join(crew)}")
-    res = await worker.run(hand, build_prompt(task, {}), toolbox, check=check if foreman.require else None)
+    res = await worker.run(hand, build_prompt(task, {}, inputs=shift.inputs), toolbox, check=check if foreman.require else None)
     on_event(f"  ■ foreman  {_done(res)} · {total} delegations")
     record("foreman", res)
     shift.final = res

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -62,6 +63,78 @@ class Defaults(BaseModel):
     fallbacks: Literal["default"] | None = "default"
 
 
+class InputSpec(BaseModel):
+    """A value given at run time with `rig run -i name=value`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = ""
+    type: Literal["string", "integer", "number", "boolean"] = "string"
+    required: bool = False
+    default: str | int | float | bool | None = None
+
+    @model_validator(mode="after")
+    def _default_fits_type(self) -> InputSpec:
+        if self.default is not None:
+            self.check("default", self.default_text())
+        return self
+
+    def default_text(self) -> str:
+        return str(self.default).lower() if isinstance(self.default, bool) else str(self.default)
+
+    def check(self, name: str, value: str) -> str:
+        """The value as hands will see it, or InputError if it isn't of this input's type."""
+        try:
+            if self.type == "integer":
+                return str(int(value))
+            if self.type == "number":
+                return str(float(value))
+        except ValueError:
+            raise InputError(f"input {name!r} must be {'an integer' if self.type == 'integer' else 'a number'}, got {value!r}") from None
+        if self.type == "boolean":
+            v = value.strip().lower()
+            if v not in BOOLEANS:
+                raise InputError(f"input {name!r} must be true or false, got {value!r}")
+            return str(BOOLEANS[v]).lower()
+        return value
+
+
+BOOLEANS = {"true": True, "yes": True, "1": True, "false": False, "no": False, "0": False}
+# `{{ inputs.name }}` in a role is replaced with the input's value.
+INPUT_REF = re.compile(r"\{\{\s*inputs\.(\w+)\s*\}\}")
+
+
+class InputError(ValueError):
+    pass
+
+
+class Output(BaseModel):
+    """Constrains a hand's final reply to JSON matching `schema` (Claude structured outputs)."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_: dict[str, Any] = Field(alias="schema")
+
+    @field_validator("schema_")
+    @classmethod
+    def _closed_objects(cls, schema: dict[str, Any]) -> dict[str, Any]:
+        return close_objects(schema)
+
+
+def close_objects(node: Any, where: str = "schema") -> Any:
+    """Add `additionalProperties: false` to every object schema, which structured outputs require."""
+    if isinstance(node, list):
+        return [close_objects(n, f"{where}[{i}]") for i, n in enumerate(node)]
+    if not isinstance(node, dict):
+        return node
+    out = {k: close_objects(v, f"{where}.{k}") for k, v in node.items()}
+    if out.get("type") == "object":
+        extra = out.setdefault("additionalProperties", False)
+        if extra is not False:
+            raise ValueError(f"{where}: additionalProperties must be false (structured outputs only allow closed objects)")
+    return out
+
+
 class Hand(BaseModel):
     """A single agent on the rig."""
 
@@ -73,6 +146,7 @@ class Hand(BaseModel):
     max_tokens: int | None = None
     max_turns: int | None = None
     tools: list[str] = Field(default_factory=list)
+    output: Output | None = None
 
     @field_validator("tools")
     @classmethod
@@ -112,6 +186,7 @@ class Rig(BaseModel):
     description: str = ""
     workspace: str = "."
     defaults: Defaults = Field(default_factory=Defaults)
+    inputs: dict[str, InputSpec] = Field(default_factory=dict)
     hands: dict[str, Hand]
     # Edges as chains: "planner -> coder -> reviewer".
     lines: list[str] = Field(default_factory=list)
@@ -137,6 +212,10 @@ class Rig(BaseModel):
     def _check_lines(self) -> Rig:
         if not self.hands:
             raise ValueError("a rig needs at least one hand")
+        for n, h in [*self.hands.items(), ("foreman", self.foreman)]:
+            unknown = {m for m in INPUT_REF.findall(h.role) if m not in self.inputs} if h else set()
+            if unknown:
+                raise ValueError(f"{n}'s role uses undeclared inputs {sorted(unknown)}; add them under `inputs`")
         runners = [n for n, h in [*self.hands.items(), ("foreman", self.foreman)] if h and "run" in h.tools]
         if runners and not self.run.allow:
             raise ValueError(f"{', '.join(runners)} can use `run`, but run.allow is empty; list the allowed commands")
@@ -164,18 +243,40 @@ class Rig(BaseModel):
         layers(list(self.hands), self.edges)
         return self
 
-    def resolve(self, name: str) -> ResolvedHand:
+    def resolve_inputs(self, given: dict[str, str]) -> dict[str, str]:
+        """Checked input values with defaults filled in; raises InputError."""
+        unknown = set(given) - set(self.inputs)
+        if unknown:
+            declared = ", ".join(self.inputs) or "none"
+            raise InputError(f"unknown inputs {sorted(unknown)}; declared: {declared}")
+        values: dict[str, str] = {}
+        missing = []
+        for name, spec in self.inputs.items():
+            if name in given:
+                values[name] = spec.check(name, given[name])
+            elif spec.default is not None:
+                values[name] = spec.check(name, spec.default_text())
+            elif spec.required:
+                missing.append(name)
+        if missing:
+            raise InputError(f"missing required inputs: {', '.join(missing)} (pass -i name=value)")
+        return values
+
+    def resolve(self, name: str, inputs: dict[str, str] | None = None) -> ResolvedHand:
         h = self.foreman if name == "foreman" and self.foreman else self.hands[name]
         d = self.defaults
+        values = inputs or {}
         return ResolvedHand(
             name=name,
-            role=h.role,
+            # An optional input left unset reads as empty.
+            role=INPUT_REF.sub(lambda m: values.get(m.group(1), ""), h.role),
             model=h.model or d.model,
             effort=h.effort or d.effort,
             max_tokens=h.max_tokens or d.max_tokens,
             max_turns=h.max_turns or d.max_turns,
             tools=h.tools,
             fallbacks=d.fallbacks,
+            output_schema=h.output.schema_ if h.output else None,
         )
 
 
@@ -188,6 +289,7 @@ class ResolvedHand(BaseModel):
     max_turns: int
     tools: list[str]
     fallbacks: Literal["default"] | None
+    output_schema: dict[str, Any] | None = None
 
 
 def load(path: str | Path) -> Rig:

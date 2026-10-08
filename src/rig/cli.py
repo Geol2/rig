@@ -16,7 +16,7 @@ from rig import __version__
 from rig.cost import summary as cost_summary
 from rig.cost import usd
 from rig.graph import layers
-from rig.spec import Rig, load
+from rig.spec import InputError, Rig, load
 
 DEFAULT_FILE = "rig.yaml"
 
@@ -44,10 +44,27 @@ def cmd_check(args: argparse.Namespace) -> None:
     if rig.foreman:
         print(f"✓ {rig.name}: foreman + {len(rig.crew)} hands")
         print(f"  foreman → {' | '.join(rig.crew)}  (up to {rig.foreman.max_delegations} delegations)")
-        return
-    print(f"✓ {rig.name}: {len(rig.hands)} hands, {len(rig.edges)} lines")
-    for i, layer in enumerate(layers(list(rig.hands), rig.edges), 1):
-        print(f"  stage {i}: {' | '.join(layer)}")
+    else:
+        print(f"✓ {rig.name}: {len(rig.hands)} hands, {len(rig.edges)} lines")
+        for i, layer in enumerate(layers(list(rig.hands), rig.edges), 1):
+            print(f"  stage {i}: {' | '.join(layer)}")
+    if rig.inputs:
+        def describe(s) -> str:
+            if s.default is not None:
+                return f"default {s.default_text()}"
+            return "required" if s.required else "optional"
+
+        print(f"  inputs: {', '.join(f'{n} ({describe(s)})' for n, s in rig.inputs.items())}")
+
+
+def _parse_inputs(pairs: list[str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for pair in pairs:
+        name, sep, value = pair.partition("=")
+        if not sep or not name.strip():
+            sys.exit(f"rig: bad input {pair!r}; expected -i name=value")
+        values[name.strip()] = value
+    return values
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -56,6 +73,11 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     path = Path(args.file)
     rig = _load_or_exit(path)
+    inputs = _parse_inputs(args.input)
+    try:
+        rig.resolve_inputs(inputs)  # fail before reading stdin or starting the shift
+    except InputError as e:
+        sys.exit(f"rig: {e}")
     task = args.task if args.task is not None else sys.stdin.read()
     if not task.strip():
         sys.exit("rig: empty task (pass it as an argument or on stdin)")
@@ -63,7 +85,8 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     worker = EchoWorker() if args.dry else ClaudeWorker()
     try:
-        shift = asyncio.run(run_shift(rig, task, worker, root=path.resolve().parent, use_worktree=args.worktree, verbose=not args.quiet))
+        shift = asyncio.run(run_shift(rig, task, worker, root=path.resolve().parent, use_worktree=args.worktree,
+                                      verbose=not args.quiet, inputs=inputs))
     except GitError as e:
         sys.exit(f"rig: {e}")
     if shift.final:
@@ -131,6 +154,8 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("--worktree", action="store_true",
                    help="work in a new git worktree; changes are committed to branch rig/<shift-id> for review")
     s.add_argument("-q", "--quiet", action="store_true", help="don't show individual tool calls")
+    s.add_argument("-i", "--input", action="append", default=[], metavar="NAME=VALUE",
+                   help="value for an input declared under `inputs` (repeatable)")
     s.set_defaults(func=cmd_run)
 
     s = sub.add_parser("logs", help="list shifts, or show one (`last` or a shift id)")
