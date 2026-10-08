@@ -22,6 +22,17 @@ rig logs        # list shifts; `rig logs last` shows the latest outputs
 Hands run in stages. A hand starts once every hand with a line into it has finished,
 and hands with no path between them run in parallel.
 
+At the end of a shift rig prints the tokens used and an estimated cost, and stores both
+in `shift.json` (`usage`, plus `cost_usd` per hand); `rig logs` lists the cost per shift:
+
+```
+usage 48,210 in / 6,904 out tok · cache 312,800 read / 41,500 write · est. $0.6010
+```
+
+The estimate uses Claude API list prices from the table in `src/rig/pricing.py`, priced
+by the model that served each request (so a refusal fallback is priced as the fallback model).
+A model missing from the table makes the cost `n/a`.
+
 ## rig.yaml
 
 ```yaml
@@ -165,7 +176,8 @@ merge:   git merge rig/20261008-163910    discard: git branch -D rig/20261008-16
 ```
 
 Uncommitted changes in your working tree are not carried into the worktree (rig warns).
-rig never merges or pushes; that's left to you.
+rig never merges or pushes; that's left to you. `rig logs` lists each shift's branch,
+so you can find it again later.
 
 ## Developing rig with rig
 

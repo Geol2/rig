@@ -3,6 +3,8 @@
 import asyncio
 from types import SimpleNamespace as NS
 
+import pytest
+
 from rig.hand import FALLBACK_BETA, ClaudeWorker
 from rig.spec import Rig
 from rig.tools import Toolbox
@@ -49,6 +51,8 @@ def test_tool_loop(tmp_path):
     assert res.ok and res.output == "done" and res.turns == 2
     assert res.input_tokens == 20
     assert res.cache_read_tokens == 200 and res.cache_write_tokens == 0
+    # No response.model on the fake, so it's priced as the hand's model (Opus 5.5).
+    assert res.cost_usd == pytest.approx(2 * (10 * 4 + 5 * 20 + 100 * 0.20) / 1e6)
     assert (tmp_path / "a.txt").read_text() == "A"
 
     first = client.calls[0]
@@ -104,3 +108,17 @@ def test_max_turns(tmp_path):
     loop = lambda i: response("tool_use", block("tool_use", id=f"t{i}", name="read_file", input={"path": "x"}))
     res = asyncio.run(ClaudeWorker(FakeClient([loop(1), loop(2)])).run(h, "go", Toolbox(tmp_path, h.tools)))
     assert res.stop_reason == "max_turns" and not res.ok
+
+
+def test_cost_follows_the_serving_model(tmp_path):
+    # After a fallback the response names the model that actually ran; unknown models make the cost n/a.
+    served = response("end_turn", block("text", text="ok"))
+    served.model = "claude-sonnet-5-5"
+    h = hand()
+    res = asyncio.run(ClaudeWorker(FakeClient([served])).run(h, "go", Toolbox(tmp_path, h.tools)))
+    assert res.cost_usd == pytest.approx((10 * 2 + 5 * 10 + 100 * 0.20) / 1e6)
+
+    unknown = response("end_turn", block("text", text="ok"))
+    unknown.model = "mystery-model"
+    res = asyncio.run(ClaudeWorker(FakeClient([unknown])).run(h, "go", Toolbox(tmp_path, h.tools)))
+    assert res.cost_usd is None

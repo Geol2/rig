@@ -7,9 +7,9 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
-from rig import worktree
+from rig import pricing, worktree
 from rig.graph import layers, upstreams
 from rig.hand import HandResult, Worker
 from rig.spec import Rig
@@ -93,21 +93,40 @@ async def run_shift(
             shift.outcome = worktree.finish(shift.worktree, message)
             _report_worktree(shift, on_event)
 
+    usage = total_usage(shift.results.values())
     summary = {
         "rig": rig.name,
         "mode": mode,
         "task": task,
         "ok": shift.ok,
         "branch": shift.worktree.branch if shift.outcome and shift.outcome.changed else None,
+        "usage": usage,
         "hands": {
             k: {"stop_reason": r.stop_reason, "turns": r.turns, "input_tokens": r.input_tokens, "output_tokens": r.output_tokens,
-                "cache_read_tokens": r.cache_read_tokens, "cache_write_tokens": r.cache_write_tokens}
+                "cache_read_tokens": r.cache_read_tokens, "cache_write_tokens": r.cache_write_tokens, "cost_usd": r.cost_usd}
             for k, r in shift.results.items()
         },
     }
     (shift.dir / "shift.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    on_event(
+        f"usage {usage['input_tokens']:,} in / {usage['output_tokens']:,} out tok"
+        f" · cache {usage['cache_read_tokens']:,} read / {usage['cache_write_tokens']:,} write"
+        f" · est. {pricing.usd(usage['cost_usd'])}"
+    )
     on_event(f"logs → {shift.dir}")
     return shift
+
+
+def total_usage(results: Iterable[HandResult]) -> dict[str, Any]:
+    """Token totals and estimated cost across a shift's hands (the foreman included)."""
+    total: dict[str, Any] = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_tokens": 0, "cost_usd": 0.0}
+    for r in results:
+        total["input_tokens"] += r.input_tokens
+        total["output_tokens"] += r.output_tokens
+        total["cache_read_tokens"] += r.cache_read_tokens
+        total["cache_write_tokens"] += r.cache_write_tokens
+        total["cost_usd"] = pricing.add(total["cost_usd"], r.cost_usd)
+    return total
 
 
 def _report_worktree(shift: Shift, on_event: Event) -> None:
@@ -128,7 +147,7 @@ def _report_worktree(shift: Shift, on_event: Event) -> None:
 
 def _done(res: HandResult) -> str:
     cached = f", {res.cache_read_tokens} cached" if res.cache_read_tokens else ""
-    return f"[{res.stop_reason}, {res.turns} turns, {res.input_tokens}/{res.output_tokens} tok{cached}]"
+    return f"[{res.stop_reason}, {res.turns} turns, {res.input_tokens}/{res.output_tokens} tok{cached}, {pricing.usd(res.cost_usd)}]"
 
 
 async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFactory) -> None:
