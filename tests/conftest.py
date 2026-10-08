@@ -10,7 +10,9 @@ def _annotate(path: str, line: int, title: str, text: str) -> None:
     text = "\n".join(text.splitlines()[-25:])
     text = text.replace("%", "%25").replace("\r", "").replace("\n", "%0A")
     title = title.replace("%", "%25").replace(",", "%2C").replace("::", " ")
-    out = f"::error file={path},line={line},title={title}::{text}\n"
+    # Leading newline: pytest -q's progress dots leave the cursor mid-line, and GitHub only
+    # reads a workflow command at the start of a line.
+    out = f"\n::error file={path},line={line},title={title}::{text}\n"
     # Bytes, as UTF-8: Windows runners' console encoding can't take Korean or "✗".
     stream = getattr(sys.__stdout__, "buffer", None)
     if stream:
