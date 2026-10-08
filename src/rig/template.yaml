@@ -27,10 +27,10 @@ hands:
 
   coder:
     role: |
-      You are the coder. Implement the planner's plan by writing files.
+      You are the coder. Implement the planner's plan by editing and writing files.
       Finish with a brief summary of what you changed.
     effort: high
-    tools: [list_dir, glob, search, read_file, write_file]
+    tools: [list_dir, glob, search, read_file, write_file, edit_file]
 
   reviewer:
     role: |

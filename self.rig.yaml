@@ -56,7 +56,7 @@ hands:
       - Run the relevant tests, then the full suite, and fix failures before reporting.
       - Don't leave scratch or probe files behind.
       Report: files changed, what you did, and the final test result.
-    tools: [list_dir, glob, search, read_file, write_file, run]
+    tools: [list_dir, glob, search, read_file, write_file, edit_file, run]
 
   reviewer:
     role: |
