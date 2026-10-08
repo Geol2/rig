@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 import rig
@@ -65,6 +67,39 @@ def test_check_missing_file_exits_with_error(tmp_path, monkeypatch):
     msg = _exit_message(excinfo)
     assert "rig.yaml not found" in msg
     assert "rig init" in msg
+
+
+def _shift(tmp_path, shift_id, summary):
+    d = tmp_path / ".rig" / "shifts" / shift_id
+    d.mkdir(parents=True)
+    (d / "a.md").write_text("out", encoding="utf-8")
+    (d / "shift.json").write_text(json.dumps(summary), encoding="utf-8")
+
+
+def test_logs_show_cost(tmp_path, monkeypatch, capsys):
+    totals = {"input_tokens": 1234, "output_tokens": 56, "cache_read_tokens": 0, "cache_write_tokens": 0, "cost_usd": 1.5}
+    _shift(tmp_path, "20250101-000000", {"mode": "lines", "ok": True, "task": "old task"})
+    _shift(tmp_path, "20250102-000000", {"mode": "lines", "ok": True, "task": "priced", "totals": totals})
+    _shift(tmp_path, "20250103-000000", {"mode": "foreman", "ok": False, "task": "unpriced", "totals": {**totals, "cost_usd": None}})
+    monkeypatch.chdir(tmp_path)
+
+    main(["logs"])
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].endswith("old task") and "$" not in lines[0] and "n/a" not in lines[0]
+    assert "$1.50  priced" in lines[1]
+    assert "n/a  unpriced" in lines[2]
+    assert len({line.index(t) for line, t in zip(lines, ["old task", "priced", "unpriced"])}) == 1
+
+    main(["logs", "20250102-000000"])
+    out = capsys.readouterr().out
+    assert out.startswith("tokens: 1,234 in · 56 out · est. $1.50\n")
+    assert "── a ──\nout" in out
+
+    main(["logs", "last"])
+    assert capsys.readouterr().out.startswith("tokens: 1,234 in · 56 out · est. n/a\n")
+
+    main(["logs", "20250101-000000"])
+    assert capsys.readouterr().out.startswith("── a ──")
 
 
 def test_check_malformed_yaml_exits_with_error(tmp_path, monkeypatch):
