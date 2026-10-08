@@ -23,6 +23,8 @@ class RunPolicy(BaseModel):
     allow: list[str] = Field(default_factory=list)
     timeout: int = Field(default=120, ge=1, le=3600)
     max_output: int = Field(default=20000, ge=1000)
+    # With several `workspaces`: the one commands run in (and that their path arguments must stay inside).
+    workspace: str | None = None
 
     @field_validator("allow")
     @classmethod
@@ -99,6 +101,7 @@ class InputSpec(BaseModel):
         return value
 
 
+WORKSPACE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 BOOLEANS = {"true": True, "yes": True, "1": True, "false": False, "no": False, "0": False}
 # `{{ inputs.name }}` in a role is replaced with the input's value.
 INPUT_REF = re.compile(r"\{\{\s*inputs\.(\w+)\s*\}\}")
@@ -185,6 +188,9 @@ class Rig(BaseModel):
     name: str
     description: str = ""
     workspace: str = "."
+    # Several projects in one shift, by name: {backend: D:/work/api, frontend: D:/work/web}.
+    # Hands then see one tree whose top-level folders are these names.
+    workspaces: dict[str, str] = Field(default_factory=dict)
     defaults: Defaults = Field(default_factory=Defaults)
     inputs: dict[str, InputSpec] = Field(default_factory=dict)
     hands: dict[str, Hand]
@@ -193,6 +199,12 @@ class Rig(BaseModel):
     foreman: Foreman | None = None
     run: RunPolicy = Field(default_factory=RunPolicy)
     search: SearchPolicy = Field(default_factory=SearchPolicy)
+
+    def workspace_dirs(self, base: Path) -> dict[str, Path]:
+        """Project folders by name, resolved against `base` (the rig file's folder); "." for a single workspace."""
+        if self.workspaces:
+            return {n: (base / p).resolve() for n, p in self.workspaces.items()}
+        return {".": (base / self.workspace).resolve()}
 
     @property
     def crew(self) -> list[str]:
@@ -219,6 +231,17 @@ class Rig(BaseModel):
         runners = [n for n, h in [*self.hands.items(), ("foreman", self.foreman)] if h and "run" in h.tools]
         if runners and not self.run.allow:
             raise ValueError(f"{', '.join(runners)} can use `run`, but run.allow is empty; list the allowed commands")
+        if self.workspaces:
+            if self.workspace != ".":
+                raise ValueError("use either `workspace` or `workspaces`, not both")
+            bad = [n for n in self.workspaces if not WORKSPACE_NAME.fullmatch(n) or n in (".", "..")]
+            if bad:
+                raise ValueError(f"workspace names must be plain folder-like names (letters, digits, - _ .): {bad}")
+            if runners and not self.run.workspace and len(self.workspaces) > 1:
+                raise ValueError(f"{', '.join(runners)} can use `run`; set run.workspace to the project commands run in "
+                                 f"({', '.join(self.workspaces)})")
+        if self.run.workspace and self.run.workspace not in self.workspaces:
+            raise ValueError(f"run.workspace {self.run.workspace!r} isn't one of `workspaces`")
         if self.foreman:
             if self.lines:
                 raise ValueError("use either `foreman` or `lines`, not both")

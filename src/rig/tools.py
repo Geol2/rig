@@ -9,7 +9,7 @@ import shlex
 import shutil
 import subprocess
 import time
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Awaitable, Callable, Iterator
 
 from rig.spec import RunPolicy, SearchPolicy
@@ -239,10 +239,13 @@ def glob_regex(pattern: str) -> re.Pattern[str]:
     return re.compile("".join(out) + r"\Z")
 
 
+FILE_TOOLS = {"read_file", "write_file", "edit_file", "list_dir", "glob", "search"}
+
+
 class Toolbox:
     def __init__(
         self,
-        workspace: Path,
+        workspace: Path | dict[str, Path],
         names: list[str],
         extra: dict[str, tuple[dict[str, Any], Handler]] | None = None,
         run_policy: RunPolicy | None = None,
@@ -250,7 +253,15 @@ class Toolbox:
         on_call: Callable[[str], None] | None = None,
         search_policy: SearchPolicy | None = None,
     ):
-        self.workspace = workspace.resolve()
+        if isinstance(workspace, dict) and list(workspace) != ["."]:
+            # Several projects: hands see one tree whose top-level folders are the project names.
+            self.roots: dict[str, Path] | None = {n: p.resolve() for n, p in workspace.items()}
+            run_in = (run_policy.workspace if run_policy else None) or next(iter(self.roots))
+            # `run` executes here, and its path arguments must stay inside it.
+            self.workspace = self.roots[run_in]
+        else:
+            self.roots = None
+            self.workspace = (workspace["."] if isinstance(workspace, dict) else workspace).resolve()
         self.names = names
         # Run-time tools such as the foreman's `delegate`: name -> (definition, async handler).
         self.extra = extra or {}
@@ -270,7 +281,32 @@ class Toolbox:
             else DEFINITIONS[n]
             for n in self.names
         ]
+        if self.roots:
+            note = self._roots_note()
+            builtins = [
+                {**d, "description": f"{d['description']} {note}"} if d["name"] in FILE_TOOLS
+                else {**d, "description": f"{d['description']} Commands run in {self._root_name(self.workspace)}/."}
+                if d["name"] == "run" else d
+                for d in builtins
+            ]
         return builtins + [d for d, _ in self.extra.values()]
+
+    def _roots_note(self) -> str:
+        names = ", ".join(f"{n}/" for n in self.roots)
+        return f"The workspace holds several projects; every path starts with a project name ({names}), and '.' lists them."
+
+    def _root_name(self, root: Path) -> str:
+        return next(n for n, r in self.roots.items() if r == root)
+
+    def _top(self, rel: str) -> bool:
+        """Whether `rel` is the virtual top level that holds the projects."""
+        return self.roots is not None and not PurePosixPath(rel.replace("\\", "/")).parts
+
+    def _bases(self, rel: str) -> list[tuple[Path, str]]:
+        """Where `glob`/`search` start: (folder, prefix that makes paths under it relative to `rel`)."""
+        if self._top(rel):
+            return [(root, f"{name}/") for name, root in self.roots.items()]
+        return [(self._path(rel), "")]
 
     async def call(self, name: str, args: dict[str, Any]) -> str:
         if name in self.extra:
@@ -290,13 +326,27 @@ class Toolbox:
         return result
 
     def _path(self, rel: str) -> Path:
-        p = (self.workspace / rel).resolve()
-        if not p.is_relative_to(self.workspace):
+        if self.roots is None:
+            root, rest = self.workspace, rel
+        else:
+            parts = PurePosixPath(rel.replace("\\", "/")).parts
+            if not parts or parts[0] not in self.roots:
+                raise ToolError(f"{rel!r} doesn't start with a project name. {self._roots_note()}")
+            root, rest = self.roots[parts[0]], "/".join(parts[1:]) or "."
+        p = (root / rest).resolve()
+        if not p.is_relative_to(root):
             raise ToolError(f"path escapes workspace: {rel}")
         return p
 
     def _rel(self, p: Path) -> str:
-        return p.relative_to(self.workspace).as_posix()
+        if self.roots is None:
+            return p.relative_to(self.workspace).as_posix()
+        # Longest root first, in case one project folder sits inside another.
+        for name, root in sorted(self.roots.items(), key=lambda kv: -len(kv[1].parts)):
+            if p.is_relative_to(root):
+                rel = p.relative_to(root).as_posix()
+                return name if rel == "." else f"{name}/{rel}"
+        return p.as_posix()
 
     def _files(self, root: Path) -> Iterator[Path]:
         """Files under root (or root itself), skipping ignored directories, in sorted order."""
@@ -321,6 +371,8 @@ class Toolbox:
         if name == "edit_file":
             return self._edit(args["path"], args["old"], args["new"], bool(args.get("replace_all")))
         if name == "list_dir":
+            if self._top(args["path"]):
+                return "\n".join(f"{n}/" for n in self.roots)
             p = self._path(args["path"])
             if not p.is_dir():
                 raise ToolError(f"no such directory: {args['path']}")
@@ -433,11 +485,11 @@ class Toolbox:
         return f"replaced {n} occurrence(s) in {rel}"
 
     def _glob(self, pattern: str, rel: str) -> str:
-        root = self._path(rel)
-        if not root.is_dir():
+        bases = self._bases(rel)
+        if not all(base.is_dir() for base, _ in bases):
             raise ToolError(f"no such directory: {rel}")
         rx = glob_regex(pattern)
-        hits = [p for p in self._files(root) if rx.match(p.relative_to(root).as_posix())]
+        hits = [p for base, prefix in bases for p in self._files(base) if rx.match(prefix + p.relative_to(base).as_posix())]
         if not hits:
             return "(no matches)"
         out = "\n".join(self._rel(p) for p in hits[:GLOB_LIMIT])
@@ -450,15 +502,15 @@ class Toolbox:
             rx = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
         except re.error as e:
             raise ToolError(f"bad regex: {e}") from e
-        root = self._path(rel)
-        if not root.exists():
+        bases = self._bases(rel)
+        if not all(base.exists() for base, _ in bases):
             raise ToolError(f"no such path: {rel}")
         name_rx = glob_regex(glob) if glob else None
 
         out: list[str] = []
         more = 0
-        for p in self._files(root):
-            if name_rx and not name_rx.match(p.relative_to(root).as_posix() if root.is_dir() else p.name):
+        for base, prefix, p in ((b, pre, p) for b, pre in bases for p in self._files(b)):
+            if name_rx and not name_rx.match(prefix + p.relative_to(base).as_posix() if base.is_dir() else p.name):
                 continue
             try:
                 if p.stat().st_size > MAX_SEARCH_BYTES:

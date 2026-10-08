@@ -78,7 +78,11 @@ class App:
                 entry["error"] = str(e)
                 out.append(entry)
                 continue
-            workspace = (p.parent / rig.workspace).resolve()
+            dirs = rig.workspace_dirs(p.parent)
+            folders = [
+                {"name": "" if n == "." else n, "path": rig.workspace if n == "." else rig.workspaces[n], "ok": d.is_dir()}
+                for n, d in dirs.items()
+            ]
             stages = [rig.crew] if rig.foreman else layers(list(rig.hands), rig.edges)
             writes = any({"write_file", "edit_file"} & set(h.tools) for h in [*rig.hands.values(), rig.foreman] if h)
             entry.update({
@@ -86,8 +90,8 @@ class App:
                 "description": rig.description,
                 "mode": "foreman" if rig.foreman else "lines",
                 "stages": stages,
-                "workspace": rig.workspace,
-                "workspace_ok": workspace.is_dir(),
+                "workspaces": folders,
+                "workspace_ok": all(f["ok"] for f in folders),
                 "writes": writes,
                 "inputs": [
                     {"name": n, "description": s.description, "required": s.required and s.default is None,
@@ -104,16 +108,40 @@ class App:
             raise ValueError(f"no rig file {name!r}")
         return path
 
-    def set_workspace(self, name: str, workspace: str) -> None:
+    def set_workspaces(self, name: str, entries: list[dict[str, str]]) -> None:
+        """Rewrite the rig file's `workspace` / `workspaces`, keeping the rest of the file as written.
+
+        One unnamed entry becomes `workspace: path`; otherwise every entry needs a name and they
+        become a `workspaces:` block.
+        """
         path = self._rig_path(name)
-        workspace = workspace.strip().replace("\\", "/")
-        if not workspace:
-            raise ValueError("workspace is empty")
+        rows = [((e.get("name") or "").strip(), (e.get("path") or "").strip().replace("\\", "/")) for e in entries]
+        rows = [(n, p) for n, p in rows if p]
+        if not rows:
+            raise ValueError("add at least one project folder")
+        if len(rows) == 1 and not rows[0][0]:
+            block = f"workspace: {json.dumps(rows[0][1], ensure_ascii=False)}\n"
+        else:
+            names = [n for n, _ in rows]
+            if not all(names):
+                raise ValueError("with several projects, give each one a name (e.g. backend, frontend)")
+            if len(set(names)) < len(names):
+                raise ValueError("project names must be different")
+            block = "workspaces:\n" + "".join(
+                f"  {n}: {json.dumps(p, ensure_ascii=False)}\n" for n, p in rows
+            )
         text = path.read_text(encoding="utf-8")
-        line = f"workspace: {json.dumps(workspace, ensure_ascii=False)}"
-        new, n = re.subn(r"^workspace:.*$", line, text, count=1, flags=re.M)
-        if not n:
-            new = re.sub(r"^(name:.*)$", rf"\1\n{line}", text, count=1, flags=re.M)
+        # The current setting: a `workspace:` line and/or a `workspaces:` line with its indented entries.
+        current = re.compile(r"^workspaces?:[^\n]*\n?(?:[ \t]+[^\n]*\n?)*", re.M)
+        m = current.search(text)
+        if m:
+            new = text[: m.start()] + block + current.sub("", text[m.end():])
+        else:
+            new = re.sub(r"^(name:[^\n]*\n)", lambda mm: mm.group(1) + block, text, count=1, flags=re.M)
+        load_check = yaml.safe_load(new)
+        from rig.spec import Rig
+
+        Rig.model_validate(load_check)  # never write a file rig can't load
         path.write_text(new, encoding="utf-8")
 
     # --- runs ------------------------------------------------------------------------------------
@@ -125,8 +153,11 @@ class App:
             raise ValueError("enter a task")
         path = self._rig_path(name)
         rig = load(path)
-        if not (path.parent / rig.workspace).is_dir():
-            raise ValueError(f"workspace {rig.workspace} not found; set it first")
+        missing = [n for n, d in rig.workspace_dirs(path.parent).items() if not d.is_dir()]
+        if missing:
+            raise ValueError("project folder not found; fix it first" + ("" if missing == ["."] else f": {', '.join(missing)}"))
+        if use_worktree and rig.workspaces:
+            raise ValueError("worktree doesn't support several projects yet; uncheck it")
         rig.resolve_inputs({k: v for k, v in inputs.items() if v != ""})  # raises InputError
         run = Run(file=name, task=task, dry=dry)
         self.run = run
@@ -237,8 +268,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             try:
                 length = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(min(length, 1_000_000)) or b"{}")
-                if self.path == "/api/workspace":
-                    app.set_workspace(body["file"], body["workspace"])
+                if self.path == "/api/workspaces":
+                    app.set_workspaces(body["file"], body["workspaces"])
                     return self._json(200, {"ok": True})
                 if self.path == "/api/run":
                     run = app.start(body["file"], body.get("task", ""), body.get("inputs") or {},
@@ -298,7 +329,12 @@ code{font-family:var(--mono);font-size:.9em;background:var(--code);padding:1px 4
 .rig b{font-size:15px}.stages{font-family:var(--mono);font-size:12px;color:var(--muted)}
 .tag{display:inline-block;font-size:11px;padding:0 7px;border-radius:999px;border:1px solid currentColor;margin-left:6px;vertical-align:1px}
 .tag.read{color:var(--ok)}.tag.write{color:var(--warn)}
-.ws{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.ws input{flex:1;min-width:200px}
+.ws-rows{display:grid;gap:6px}
+.ws-row{display:grid;grid-template-columns:110px minmax(0,1fr) 22px 30px;gap:6px;align-items:center}
+.ws-row .mark{text-align:center}
+.icon-btn{font:inherit;border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:6px;height:32px;cursor:pointer}
+#ws-box{display:grid;gap:8px}#ws-box[hidden]{display:none}
+p.field{margin:0}
 .status-ok{color:var(--ok)}.status-bad{color:var(--bad)}
 label.field{display:grid;gap:4px;font-size:13px;color:var(--muted)}
 input[type=text],textarea{font:inherit;font-size:14px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:7px 10px;width:100%}
@@ -329,9 +365,13 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
       <h2 id="rigs-h">1. 설정 선택</h2>
       <div class="rigs" id="rigs"><p class="muted small">불러오는 중…</p></div>
       <div id="ws-box" hidden>
-        <label class="field" for="ws">작업할 프로젝트 폴더 (workspace)
-          <span class="ws"><input type="text" id="ws" spellcheck="false"><button class="secondary" id="ws-save">저장</button></span>
-        </label>
+        <p class="field" id="ws-label">작업할 프로젝트 폴더 (workspace)</p>
+        <div class="ws-rows" id="ws-rows" role="group" aria-labelledby="ws-label"></div>
+        <div class="row">
+          <button class="secondary" id="ws-add" type="button">+ 프로젝트 추가</button>
+          <button class="primary" id="ws-save" type="button">저장</button>
+        </div>
+        <p class="small muted" id="ws-hint">프로젝트가 2개 이상이면 각각 이름을 붙이세요. hand들은 <code>이름/경로</code>로 파일을 봅니다 (예: <code>backend/src/...</code>).</p>
         <p class="small" id="ws-status"></p>
       </div>
     </section>
@@ -392,7 +432,8 @@ async function loadRigs() {
       title.append(el('span', {class: 'tag ' + (r.writes ? 'write' : 'read')}, r.writes ? '코드 수정' : '읽기 전용'));
       b.append(title, el('span', {class: 'small muted'}, r.file + (r.description ? ' · ' + r.description : '')),
         el('span', {class: 'stages'}, r.stages.map(s => s.join(' | ')).join('  →  ')),
-        el('span', {class: 'small ' + (r.workspace_ok ? 'status-ok' : 'status-bad')}, (r.workspace_ok ? '✓ ' : '✗ 폴더 없음: ') + r.workspace));
+        ...r.workspaces.map(w => el('span', {class: 'small ' + (w.ok ? 'status-ok' : 'status-bad')},
+          (w.ok ? '✓ ' : '✗ 폴더 없음: ') + (w.name ? w.name + ' · ' : '') + w.path)));
     }
     box.append(b);
   }
@@ -404,8 +445,9 @@ function renderSelected() {
   $('ws-box').hidden = !r || !!r.error;
   const box = $('inputs'); box.textContent = '';
   if (!r || r.error) return;
-  $('ws').value = r.workspace;
-  $('ws-status').textContent = r.workspace_ok ? '✓ 폴더를 찾았습니다.' : '✗ 폴더를 찾을 수 없습니다. 경로를 확인하고 저장하세요.';
+  const rows = $('ws-rows'); rows.textContent = '';
+  for (const w of r.workspaces) addRow(w);
+  $('ws-status').textContent = r.workspace_ok ? '✓ 폴더를 모두 찾았습니다.' : '✗ 찾을 수 없는 폴더가 있습니다. 경로를 확인하고 저장하세요.';
   $('ws-status').className = 'small ' + (r.workspace_ok ? 'status-ok' : 'status-bad');
   for (const i of r.inputs) {
     const id = 'in-' + i.name;
@@ -413,8 +455,22 @@ function renderSelected() {
       el('input', {type: 'text', id, 'data-name': i.name, placeholder: i.default ? '기본값: ' + i.default : ''})));
   }
 }
+let rowSeq = 0;
+function addRow(w = {name: '', path: '', ok: null}) {
+  const n = ++rowSeq;
+  const mark = w.ok === null ? '' : w.ok ? '✓' : '✗';
+  const row = el('div', {class: 'ws-row'},
+    el('input', {type: 'text', class: 'ws-name', id: 'ws-name-' + n, 'aria-label': '프로젝트 이름', placeholder: '이름 (예: backend)', spellcheck: 'false'}),
+    el('input', {type: 'text', class: 'ws-path', id: 'ws-path-' + n, 'aria-label': '폴더 경로', placeholder: 'D:/05_project/...', spellcheck: 'false'}),
+    el('span', {class: 'mark ' + (w.ok ? 'status-ok' : 'status-bad')}, mark),
+    el('button', {type: 'button', class: 'icon-btn', 'aria-label': '이 프로젝트 빼기', onclick: () => row.remove()}, '×'));
+  row.querySelector('.ws-name').value = w.name; row.querySelector('.ws-path').value = w.path;
+  $('ws-rows').append(row);
+}
+$('ws-add').addEventListener('click', () => addRow());
 $('ws-save').addEventListener('click', async () => {
-  try { await api('/api/workspace', {file: selected, workspace: $('ws').value}); await loadRigs(); }
+  const workspaces = [...document.querySelectorAll('.ws-row')].map(r => ({name: r.querySelector('.ws-name').value, path: r.querySelector('.ws-path').value}));
+  try { await api('/api/workspaces', {file: selected, workspaces}); await loadRigs(); }
   catch (e) { $('ws-status').textContent = e.message; $('ws-status').className = 'small status-bad'; }
 });
 
