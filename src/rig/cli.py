@@ -110,6 +110,9 @@ def cmd_run(args: argparse.Namespace) -> None:
     for wt, _ in committed:
         where = f" in {wt.repo}" if len(shift.worktrees) > 1 else ""
         print(f"\nchanges are on branch {wt.branch}{where} (review: git diff {wt.base[:7]}..{wt.branch})")
+    for pr in shift.prs:
+        state = "merged" if pr.merged else pr.note or "open"
+        print(f"PR {pr.url or '(not opened)'}: {state}")
     if not shift.ok:
         sys.exit(1)
 

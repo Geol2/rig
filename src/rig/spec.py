@@ -54,6 +54,33 @@ class SearchPolicy(BaseModel):
         return ignore
 
 
+class Publish(BaseModel):
+    """After a --worktree shift: open a pull request for its branch, and optionally merge it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pr: bool = False                 # push the branch and open a PR (turns on --worktree)
+    base: str | None = None          # PR target; default: the branch checked out when the shift started
+    remote: str = "origin"
+    # The hand whose last reply is posted on the PR and must approve before a merge.
+    approver: str | None = None
+    approve_word: str = "LGTM"
+    auto_merge: bool = False         # merge once the shift is ok, the approver approved, and CI passed
+    merge_method: Literal["squash", "merge", "rebase"] = "squash"
+    require_checks: bool = True      # no CI checks on the PR means no merge
+    ci_timeout: int = Field(default=1800, ge=30)
+    ci_grace: int = Field(default=120, ge=0)   # how long to wait for checks to appear
+    ci_poll: int = Field(default=20, ge=1)
+
+    @model_validator(mode="after")
+    def _merge_needs_pr(self) -> Publish:
+        if self.auto_merge and not self.pr:
+            raise ValueError("publish.auto_merge needs publish.pr: true")
+        if self.auto_merge and not self.approver:
+            raise ValueError("publish.auto_merge needs publish.approver (the hand that must approve, e.g. reviewer)")
+        return self
+
+
 class Defaults(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -201,6 +228,7 @@ class Rig(BaseModel):
     search: SearchPolicy = Field(default_factory=SearchPolicy)
     # Stop the shift once its estimated cost reaches this many USD (see cost.Meter).
     max_cost_usd: float | None = Field(default=None, gt=0)
+    publish: Publish = Field(default_factory=Publish)
 
     def workspace_dirs(self, base: Path) -> dict[str, Path]:
         """Project folders by name, resolved against `base` (the rig file's folder); "." for a single workspace."""
@@ -242,6 +270,8 @@ class Rig(BaseModel):
             if runners and not self.run.workspace and len(self.workspaces) > 1:
                 raise ValueError(f"{', '.join(runners)} can use `run`; set run.workspace to the project commands run in "
                                  f"({', '.join(self.workspaces)})")
+        if self.publish.approver and self.publish.approver not in self.hands:
+            raise ValueError(f"publish.approver {self.publish.approver!r} isn't one of the hands")
         if self.run.workspace and self.run.workspace not in self.workspaces:
             raise ValueError(f"run.workspace {self.run.workspace!r} isn't one of `workspaces`")
         if self.foreman:

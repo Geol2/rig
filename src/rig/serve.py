@@ -94,6 +94,7 @@ class App:
                 "stages": stages,
                 "workspaces": folders,
                 "max_cost_usd": rig.max_cost_usd,
+                "publish": {"pr": rig.publish.pr, "auto_merge": rig.publish.auto_merge},
                 "workspace_ok": all(f["ok"] for f in folders),
                 "writes": writes,
                 "inputs": [
@@ -504,6 +505,7 @@ async function loadRigs() {
     else {
       const title = el('b', {}, r.name);
       title.append(el('span', {class: 'tag ' + (r.writes ? 'write' : 'read')}, r.writes ? '코드 수정' : '읽기 전용'));
+      if (r.publish && r.publish.pr) title.append(el('span', {class: 'tag write'}, r.publish.auto_merge ? 'PR + 자동 병합' : 'PR'));
       b.append(title, el('span', {class: 'small muted'}, r.file + (r.description ? ' · ' + r.description : '')),
         el('span', {class: 'stages'}, r.stages.map(s => s.join(' | ')).join('  →  ')),
         ...r.workspaces.map(w => el('span', {class: 'small ' + (w.ok ? 'status-ok' : 'status-bad')},
