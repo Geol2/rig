@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
-BUILTIN_TOOLS = {"read_file", "write_file", "list_dir"}
+BUILTIN_TOOLS = {"read_file", "write_file", "list_dir", "glob", "search"}
 
 
 class Defaults(BaseModel):

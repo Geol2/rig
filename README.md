@@ -59,7 +59,30 @@ Each hand receives the task plus its upstream hands' outputs:
 <handoff from="planner">…</handoff>
 ```
 
-Built-in tools: `read_file`, `write_file`, `list_dir`.
+Built-in tools (all confined to `workspace`):
+
+| Tool | What it does |
+|---|---|
+| `list_dir` | List a directory |
+| `glob` | Find files by pattern (`**/*.java`, `src/**/test_*.py`) |
+| `search` | Regex search over file contents, like grep; optional `glob` filter and `ignore_case` |
+| `read_file` | Read a file with line numbers; `offset`/`limit` for large files (max 2000 lines per call) |
+| `write_file` | Create or overwrite a file |
+
+`glob` and `search` skip dependency and build directories (`.git`, `node_modules`,
+`.venv`, `target`, `build`, `dist`, ...) and binary files.
+
+### Analyzing another project
+
+Point `workspace` at it (absolute paths work) and leave out `write_file` to keep it read-only:
+
+```yaml
+workspace: D:/05_project/some-service
+hands:
+  analyst:
+    role: Map the architecture and report risks, citing file:line.
+    tools: [list_dir, glob, search, read_file]
+```
 
 ## Foreman
 
