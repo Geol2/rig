@@ -5,8 +5,13 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import shlex
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterator
+
+from rig.spec import RunPolicy
 
 # Directories skipped by `glob` and `search`: VCS data, dependencies, build output.
 IGNORED_DIRS = {
@@ -107,11 +112,43 @@ DEFINITIONS: dict[str, dict[str, Any]] = {
 }
 
 
+def run_definition(policy: RunPolicy) -> dict[str, Any]:
+    allowed = "\n".join(f"- {a}" for a in policy.allow)
+    return {
+        "name": "run",
+        "description": (
+            "Run a command in the workspace root and get its exit code and combined stdout/stderr. "
+            "There is no shell: pipes, redirects, `&&`, `;` and variables don't work, so run one command per call "
+            "(several calls in one turn run in parallel). Use forward slashes in paths. "
+            f"Times out after {policy.timeout}s. Only commands starting with one of these are allowed:\n{allowed}"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"command": {"type": "string", "description": "The command line, e.g. 'uv run pytest -q tests'."}},
+            "required": ["command"],
+            "additionalProperties": False,
+        },
+        "strict": True,
+    }
+
+
+# Unquoted shell operators `run` refuses: commands execute without a shell, so these
+# would silently become literal arguments instead of doing what the model intended.
+SHELL_CHARS = "();<>|&"
+
+
 class ToolError(Exception):
     pass
 
 
 Handler = Callable[[dict[str, Any]], Awaitable[str]]
+
+
+def _tail(text: str, limit: int) -> str:
+    # Keep the end: test summaries and errors usually come last.
+    if len(text) <= limit:
+        return text
+    return f"[{len(text) - limit} earlier chars cut]\n" + text[-limit:]
 
 
 def glob_regex(pattern: str) -> re.Pattern[str]:
@@ -142,15 +179,18 @@ class Toolbox:
         workspace: Path,
         names: list[str],
         extra: dict[str, tuple[dict[str, Any], Handler]] | None = None,
+        run_policy: RunPolicy | None = None,
     ):
         self.workspace = workspace.resolve()
         self.names = names
         # Run-time tools such as the foreman's `delegate`: name -> (definition, async handler).
         self.extra = extra or {}
+        self.run_policy = run_policy or RunPolicy()
 
     @property
     def definitions(self) -> list[dict[str, Any]]:
-        return [DEFINITIONS[n] for n in self.names] + [d for d, _ in self.extra.values()]
+        builtins = [run_definition(self.run_policy) if n == "run" else DEFINITIONS[n] for n in self.names]
+        return builtins + [d for d, _ in self.extra.values()]
 
     async def call(self, name: str, args: dict[str, Any]) -> str:
         if name in self.extra:
@@ -195,7 +235,49 @@ class Toolbox:
             return self._glob(args["pattern"], args.get("path") or ".")
         if name == "search":
             return self._search(args["pattern"], args.get("path") or ".", args.get("glob"), bool(args.get("ignore_case")))
+        if name == "run":
+            return self._run(args["command"])
         raise ToolError(f"unknown tool: {name}")
+
+    def _run(self, command: str) -> str:
+        policy = self.run_policy
+        try:
+            # punctuation_chars splits unquoted operators into their own tokens; quoted text stays intact.
+            lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            if any(set(tok) <= set(SHELL_CHARS) for tok in lexer) or "`" in command.replace("\\`", ""):
+                raise ToolError("shell syntax isn't supported (no pipes, redirects, &&, ;, $()); run one command per call")
+            argv = shlex.split(command)
+        except ValueError as e:
+            raise ToolError(f"can't parse command: {e}") from e
+        if not argv:
+            raise ToolError("empty command")
+        if not any(argv[: len(p)] == p for p in (shlex.split(a) for a in policy.allow)):
+            raise ToolError(f"command not allowed: {command!r}; allowed prefixes: {policy.allow}")
+        for arg in argv[1:]:
+            # Reject path-like arguments that reach outside the workspace.
+            value = arg.split("=", 1)[-1] if arg.startswith("-") else arg
+            if ".." in Path(value).parts or Path(value).is_absolute():
+                if not (self.workspace / value).resolve().is_relative_to(self.workspace):
+                    raise ToolError(f"argument points outside the workspace: {arg}")
+        exe = shutil.which(argv[0])
+        if exe is None:
+            raise ToolError(f"executable not found: {argv[0]}")
+
+        try:
+            proc = subprocess.run(
+                [exe, *argv[1:]],
+                cwd=self.workspace,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                timeout=policy.timeout,
+            )
+        except subprocess.TimeoutExpired as e:
+            partial = (e.output or b"").decode("utf-8", errors="replace")
+            return f"[timed out after {policy.timeout}s]\n{_tail(partial, policy.max_output)}"
+        output = proc.stdout.decode("utf-8", errors="replace")
+        return f"[exit code {proc.returncode}]\n{_tail(output, policy.max_output)}"
 
     def _read(self, rel: str, offset: int, limit: int) -> str:
         p = self._path(rel)

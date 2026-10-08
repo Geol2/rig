@@ -10,7 +10,25 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
-BUILTIN_TOOLS = {"read_file", "write_file", "list_dir", "glob", "search"}
+BUILTIN_TOOLS = {"read_file", "write_file", "list_dir", "glob", "search", "run"}
+
+
+class RunPolicy(BaseModel):
+    """What the `run` tool may execute. Commands run in the workspace without a shell."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Command prefixes, e.g. "uv run pytest" allows "uv run pytest -q tests/x.py".
+    allow: list[str] = Field(default_factory=list)
+    timeout: int = Field(default=120, ge=1, le=3600)
+    max_output: int = Field(default=20000, ge=1000)
+
+    @field_validator("allow")
+    @classmethod
+    def _non_empty(cls, allow: list[str]) -> list[str]:
+        if any(not a.strip() for a in allow):
+            raise ValueError("run.allow entries must not be empty")
+        return allow
 
 
 class Defaults(BaseModel):
@@ -78,6 +96,7 @@ class Rig(BaseModel):
     # Edges as chains: "planner -> coder -> reviewer".
     lines: list[str] = Field(default_factory=list)
     foreman: Foreman | None = None
+    run: RunPolicy = Field(default_factory=RunPolicy)
 
     @property
     def crew(self) -> list[str]:
@@ -97,6 +116,9 @@ class Rig(BaseModel):
     def _check_lines(self) -> Rig:
         if not self.hands:
             raise ValueError("a rig needs at least one hand")
+        runners = [n for n, h in [*self.hands.items(), ("foreman", self.foreman)] if h and "run" in h.tools]
+        if runners and not self.run.allow:
+            raise ValueError(f"{', '.join(runners)} can use `run`, but run.allow is empty; list the allowed commands")
         if self.foreman:
             if self.lines:
                 raise ValueError("use either `foreman` or `lines`, not both")

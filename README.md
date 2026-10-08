@@ -69,6 +69,30 @@ Built-in tools (all confined to `workspace`):
 | `read_file` | Read a file with line numbers; `offset`/`limit` for large files (max 2000 lines per call) |
 | `write_file` | Create or overwrite a file |
 
+| `run` | Run an allowed command (tests, linters, `git diff`) and get exit code + output |
+
+### run
+
+`run` only executes commands that start with an entry in `run.allow`:
+
+```yaml
+run:
+  allow: ["uv run pytest", "git status", "git diff", "git log"]
+  timeout: 120        # seconds per command
+  max_output: 20000   # chars kept (the tail, where test summaries are)
+
+hands:
+  tester:
+    role: Run the tests and report failures.
+    tools: [run, read_file]
+```
+
+Commands run in the workspace with no shell, so pipes, redirects, `&&`, `;` and `$()`
+are rejected. Arguments pointing outside the workspace are rejected too. A failing command
+isn't a tool error: the hand gets `[exit code N]` and the output and decides what to do.
+Allow only what the hands need, since an allowed program can do anything it supports
+(e.g. allowing `python` allows any script).
+
 `glob` and `search` skip dependency and build directories (`.git`, `node_modules`,
 `.venv`, `target`, `build`, `dist`, ...) and binary files.
 

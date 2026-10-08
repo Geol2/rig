@@ -13,6 +13,11 @@ defaults:
   max_turns: 20
   fallbacks: default    # server-side refusal fallback; set to null to disable
 
+# Commands the `run` tool may execute (add `run` to a hand's tools to use it).
+# run:
+#   allow: ["uv run pytest", "git diff", "git status"]
+#   timeout: 120
+
 hands:
   planner:
     role: |

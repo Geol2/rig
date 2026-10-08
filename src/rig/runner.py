@@ -90,7 +90,7 @@ async def _run_lines(rig, task, worker, workspace, shift, record, on_event) -> N
         hand = rig.resolve(name)
         inputs = {u: shift.results[u].output for u in upstreams(name, edges)}
         on_event(f"  ▶ {name}" + (f"  ← {', '.join(inputs)}" if inputs else ""))
-        res = await worker.run(hand, build_prompt(task, inputs), Toolbox(workspace, hand.tools))
+        res = await worker.run(hand, build_prompt(task, inputs), Toolbox(workspace, hand.tools, run_policy=rig.run))
         on_event(f"  ■ {name}  {_done(res)}")
         return res
 
@@ -147,7 +147,7 @@ async def _run_foreman(rig, task, worker, workspace, shift, record, on_event) ->
 
         hand = rig.resolve(name)
         on_event(f"  ↳ {key}  {instructions.strip().splitlines()[0][:70] if instructions.strip() else ''}")
-        res = await worker.run(hand, build_prompt(task, {}, instructions), Toolbox(workspace, hand.tools))
+        res = await worker.run(hand, build_prompt(task, {}, instructions), Toolbox(workspace, hand.tools, run_policy=rig.run))
         on_event(f"  ■ {key}  {_done(res)}")
         record(key, res)
         if not res.ok:
@@ -186,7 +186,7 @@ async def _run_foreman(rig, task, worker, workspace, shift, record, on_event) ->
         },
         "strict": True,
     }
-    toolbox = Toolbox(workspace, hand.tools, extra={"delegate": (delegate_def, delegate)})
+    toolbox = Toolbox(workspace, hand.tools, extra={"delegate": (delegate_def, delegate)}, run_policy=rig.run)
 
     on_event(f"  ▶ foreman  crew: {', '.join(crew)}")
     res = await worker.run(hand, build_prompt(task, {}), toolbox, check=check if foreman.require else None)

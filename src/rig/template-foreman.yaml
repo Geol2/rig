@@ -14,6 +14,11 @@ defaults:
   max_turns: 20
   fallbacks: default
 
+# Commands the `run` tool may execute (add `run` to a hand's tools to use it).
+# run:
+#   allow: ["uv run pytest", "git diff", "git status"]
+#   timeout: 120
+
 foreman:
   # `role` is optional; the built-in foreman prompt is used when omitted.
   effort: high
