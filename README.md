@@ -7,6 +7,7 @@ rig init        # write a starter rig.yaml
 rig check       # validate and show the stages
 rig run "task"  # run a shift
 rig logs        # list shifts; `rig logs last` shows the latest outputs
+rig report      # open the latest shift as a web page
 ```
 
 ## Concepts
@@ -121,6 +122,29 @@ hands:
     role: Map the architecture and report risks, citing file:line.
     tools: [list_dir, glob, search, read_file]
 ```
+
+For a full review there's a ready-made rig: a mapper reads the project, three reviewers
+(bugs, security, db) work in parallel and return findings as JSON, and a summary hand
+says what to fix first.
+
+```bash
+uv run rig -f review.rig.yaml init --template review   # then set `workspace` in the file
+uv run rig -f review.rig.yaml check
+uv run rig -f review.rig.yaml run "Review this project"
+uv run rig -f review.rig.yaml report
+```
+
+### Reports
+
+`rig report [shift]` (default `last`) writes `report.html` into the shift's folder and
+opens it in the browser (`--no-open` to only write it). It's one self-contained file:
+
+- the task, token use and cost, and the number of findings per severity
+- the final hand's reply (or the foreman's) as the summary
+- every finding from hands whose output is `{"findings": [...]}` in one table, most severe
+  first, filterable by severity, hand and text; each row shows `file:line`, the problem
+  and the suggested fix (fields `severity`, `file`, `line`, `title`, `detail`, `suggestion`)
+- each hand's full output
 
 ### inputs
 

@@ -1,0 +1,96 @@
+# review.rig.yaml — a read-only code review of another project.
+#
+#   uv run rig -f review.rig.yaml check
+#   uv run rig -f review.rig.yaml run "이 프로젝트를 리뷰해줘"
+#   uv run rig -f review.rig.yaml report        # opens the results in a browser
+#
+# The hands can only read (no write_file / edit_file / run), so the project is never changed.
+version: 1
+name: code-review
+description: Map a project, review it for bugs, security and DB issues in parallel, then summarize.
+
+# The project to review. Absolute paths work; use forward slashes on Windows too.
+workspace: D:/path/to/project
+
+defaults:
+  model: claude-opus-5-5
+  effort: medium
+  max_tokens: 16000
+  max_turns: 40          # reviewers read many files
+  fallbacks: default
+
+# Folders to skip besides the built-in list (node_modules, build, target, .git, ...).
+search:
+  ignore: [logs, upload, uploads]
+
+hands:
+  mapper:
+    role: |
+      You map a codebase for reviewers who will read it after you.
+      List the main directories and what each holds, the frameworks and languages in use,
+      the entry points (controllers, routes, main classes), where configuration lives,
+      and where database access happens (SQL files, mappers, repositories).
+      Cite real paths. Keep it under 60 lines. Write in Korean.
+    tools: [list_dir, glob, search, read_file]
+
+  bugs:
+    role: |
+      You review a codebase for bugs: null handling, wrong conditions, unclosed resources,
+      thread-safety problems, swallowed exceptions, off-by-one errors, broken edge cases.
+      The mapper's notes tell you where things are. Read the code before reporting:
+      report only problems you can point to, with the exact line number from read_file.
+      Write title, detail and suggestion in Korean.
+    tools: [list_dir, glob, search, read_file]
+    output: &findings
+      schema:
+        type: object
+        properties:
+          findings:
+            type: array
+            items:
+              type: object
+              properties:
+                severity: { type: string, enum: [critical, high, medium, low] }
+                file: { type: string, description: "Path relative to the project root" }
+                line: { type: integer }
+                title: { type: string, description: "One-line summary" }
+                detail: { type: string, description: "What is wrong and when it breaks" }
+                suggestion: { type: string, description: "How to fix it" }
+              required: [severity, file, line, title, detail, suggestion]
+        required: [findings]
+
+  security:
+    role: |
+      You review a codebase for security problems: hardcoded passwords, keys and tokens,
+      SQL injection (string-built SQL, MyBatis ${}), missing authorization checks,
+      path traversal, unsafe file uploads, sensitive data in logs.
+      Never copy a secret's value into your report; name the file, line and key only.
+      Report only problems you can point to, with the exact line number from read_file.
+      Write title, detail and suggestion in Korean.
+    tools: [list_dir, glob, search, read_file]
+    output: *findings
+
+  db:
+    role: |
+      You review database access: queries run inside loops (N+1), SELECT *, missing
+      WHERE or paging on large tables, transactions that are missing or too wide,
+      connections or result sets not closed, likely missing indexes for frequent filters.
+      Report only problems you can point to, with the exact line number from read_file.
+      Write title, detail and suggestion in Korean.
+    tools: [list_dir, glob, search, read_file]
+    output: *findings
+
+  summary:
+    role: |
+      You receive the findings of three reviewers (bugs, security, db) as JSON.
+      Write a short report in Korean for the project's developer:
+      what to fix first (at most 5 items, each with file:line and why),
+      patterns that repeat across the findings, and anything the reviewers disagree on.
+      Don't repeat every finding; the full list is shown next to your summary.
+    tools: []
+
+# mapper first, then the three reviewers in parallel, then the summary.
+lines:
+  - mapper -> bugs -> summary
+  - mapper -> security -> summary
+  - mapper -> db -> summary
