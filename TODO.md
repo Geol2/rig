@@ -13,7 +13,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   rewrite whole files with `write_file`, which costs tokens and risks clobbering
   unrelated lines. Add it to BUILTIN_TOOLS, document it, and give it to coder hands in
   the templates and `self.rig.yaml`.
-- [ ] **Shift cost summary**: total input/output tokens per shift and an estimated USD
+- [x] **Shift cost summary**: total input/output tokens per shift and an estimated USD
   cost (per-model prices in one table, unknown models shown as "n/a"). Print it at the
   end of `rig run` and store it in shift.json; show it in `rig logs`.
 - [ ] **`rig logs` shows the branch** for `--worktree` shifts (from shift.json).

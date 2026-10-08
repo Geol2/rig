@@ -8,6 +8,7 @@ from typing import Any, Callable, Protocol
 
 import anthropic
 
+from rig import pricing
 from rig.spec import ResolvedHand
 from rig.tools import Toolbox, ToolError
 
@@ -25,6 +26,8 @@ class HandResult:
     # Prompt cache usage; input_tokens above counts only the uncached part.
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
+    # Estimated from list prices; None if any request ran on a model with no known price.
+    cost_usd: float | None = 0.0
     transcript: list[dict[str, Any]] = field(default_factory=list)
 
     @property
@@ -81,10 +84,18 @@ class ClaudeWorker:
                 result.stop_reason = "api_error"
                 result.output = f"[API connection error: {e}]"
                 return result
-            result.input_tokens += response.usage.input_tokens
-            result.output_tokens += response.usage.output_tokens
-            result.cache_read_tokens += response.usage.cache_read_input_tokens or 0
-            result.cache_write_tokens += response.usage.cache_creation_input_tokens or 0
+            usage = response.usage
+            cache_read = usage.cache_read_input_tokens or 0
+            cache_write = usage.cache_creation_input_tokens or 0
+            result.input_tokens += usage.input_tokens
+            result.output_tokens += usage.output_tokens
+            result.cache_read_tokens += cache_read
+            result.cache_write_tokens += cache_write
+            # Priced per request by the model that served it, which differs from hand.model after a fallback.
+            model = getattr(response, "model", None) or hand.model
+            result.cost_usd = pricing.add(
+                result.cost_usd, pricing.cost(model, usage.input_tokens, usage.output_tokens, cache_read, cache_write)
+            )
             messages.append({"role": "assistant", "content": response.content})
             result.stop_reason = response.stop_reason or ""
 
