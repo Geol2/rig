@@ -60,6 +60,9 @@ class Foreman(Hand):
     role: str = DEFAULT_FOREMAN_ROLE
     # Hands the foreman may delegate to; empty means all of them.
     crew: list[str] = Field(default_factory=list)
+    # Hands that must run after the last delegation to any other hand before the
+    # foreman may finish, e.g. [reviewer]. Enforced by the harness, not just the prompt.
+    require: list[str] = Field(default_factory=list)
     max_delegations: int = 12
 
 
@@ -102,6 +105,9 @@ class Rig(BaseModel):
             unknown = set(self.foreman.crew) - set(self.hands)
             if unknown:
                 raise ValueError(f"foreman.crew references unknown hands {sorted(unknown)}")
+            missing = set(self.foreman.require) - set(self.crew)
+            if missing:
+                raise ValueError(f"foreman.require lists hands not on the crew: {sorted(missing)}")
         for line in self.lines:
             names = [n.strip() for n in line.split("->")]
             if len(names) < 2 or any(not n for n in names):

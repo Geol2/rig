@@ -71,6 +71,32 @@ def test_refusal_stops(tmp_path):
     assert not res.ok and res.output == "[refused: cyber]"
 
 
+def test_api_error_ends_hand_cleanly(tmp_path):
+    import anthropic
+    import httpx2
+
+    class Failing(FakeClient):
+        async def create(self, **kwargs):
+            req = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+            raise anthropic.BadRequestError(
+                "Your credit balance is too low", response=httpx2.Response(400, request=req), body=None
+            )
+
+    h = hand()
+    res = asyncio.run(ClaudeWorker(Failing([])).run(h, "go", Toolbox(tmp_path, h.tools)))
+    assert res.stop_reason == "api_error" and not res.ok
+    assert "400" in res.output and "credit balance" in res.output
+
+
+def test_finish_check_continues_the_loop(tmp_path):
+    client = FakeClient([response("end_turn", block("text", text="early")), response("end_turn", block("text", text="final"))])
+    objections = iter(["review first", None])
+    h = hand()
+    res = asyncio.run(ClaudeWorker(client).run(h, "go", Toolbox(tmp_path, h.tools), check=lambda: next(objections)))
+    assert res.output == "final" and res.turns == 2
+    assert client.calls[1]["messages"][-1] == {"role": "user", "content": "review first"}
+
+
 def test_max_turns(tmp_path):
     h = hand().model_copy(update={"max_turns": 2})
     loop = lambda i: response("tool_use", block("tool_use", id=f"t{i}", name="read_file", input={"path": "x"}))

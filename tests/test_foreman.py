@@ -24,21 +24,28 @@ def make(**overrides):
 class ScriptedWorker:
     """The foreman runs `script` against its toolbox; every other hand echoes its instructions."""
 
-    def __init__(self, script):
-        self.script = script
+    def __init__(self, script, *retries):
+        # `retries` run in turn each time the finish check objects, like the model's next turns.
+        self.scripts = [script, *retries]
         self.foreman_role = ""
+        self.objections: list[str] = []
 
-    async def run(self, hand: ResolvedHand, prompt: str, toolbox: Toolbox) -> HandResult:
+    async def run(self, hand: ResolvedHand, prompt: str, toolbox: Toolbox, check=None) -> HandResult:
         if hand.name == "foreman":
             self.foreman_role = hand.role
-            output = await self.script(toolbox)
+            for script in self.scripts:
+                output = await script(toolbox)
+                objection = check() if check else None
+                if objection is None:
+                    break
+                self.objections.append(objection)
         else:
             output = f"{hand.name} did: {prompt.split('<instructions from=\"foreman\">')[1].split('</')[0].strip()}"
         return HandResult(name=hand.name, output=output, stop_reason="end_turn", turns=1)
 
 
-def run(rig, script, tmp_path):
-    worker = ScriptedWorker(script)
+def run(rig, script, tmp_path, *retries):
+    worker = ScriptedWorker(script, *retries)
     shift = asyncio.run(run_shift(rig, "build it", worker, root=tmp_path, on_event=lambda _: None))
     return shift, worker
 
@@ -90,10 +97,53 @@ def test_delegation_limit(tmp_path):
     assert len([k for k in shift.results if k.startswith("coder#")]) == 3
 
 
+def requiring(max_delegations=6):
+    return make(foreman={"crew": ["coder", "reviewer"], "require": ["reviewer"], "max_delegations": max_delegations})
+
+
+def delegating(*hands):
+    async def script(tb):
+        for h in hands:
+            await tb.call("delegate", {"hand": h, "instructions": "work"})
+        return "final"
+    return script
+
+
+def test_require_pushes_back_until_reviewed(tmp_path):
+    shift, worker = run(requiring(), delegating("coder"), tmp_path, delegating("reviewer"))
+    assert len(worker.objections) == 1 and "reviewer" in worker.objections[0]
+    assert shift.ok and "reviewer#1" in shift.results
+    assert "reviewer must run after the last change" in worker.foreman_role
+
+
+def test_review_must_follow_the_latest_change(tmp_path):
+    # Reviewed, then the coder changed things again: a second review is needed.
+    shift, worker = run(requiring(), delegating("coder", "reviewer", "coder"), tmp_path, delegating("reviewer"))
+    assert len(worker.objections) == 1
+    assert shift.ok and "reviewer#2" in shift.results
+
+
+def test_reviewed_work_finishes_without_objection(tmp_path):
+    shift, worker = run(requiring(), delegating("coder", "reviewer"), tmp_path)
+    assert worker.objections == [] and shift.ok
+
+
+def test_require_unmet_at_limit_marks_shift_incomplete(tmp_path):
+    shift, worker = run(requiring(max_delegations=2), delegating("coder", "coder"), tmp_path)
+    assert worker.objections == []
+    assert shift.final.ok and not shift.ok
+
+
+def test_no_require_no_check(tmp_path):
+    shift, worker = run(make(), delegating("coder"), tmp_path)
+    assert worker.objections == [] and shift.ok
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
         {"lines": ["coder -> reviewer"]},
+        {"foreman": {"crew": ["coder"], "require": ["reviewer"]}},
         {"foreman": {"crew": ["ghost"]}},
         {"hands": {"foreman": {"role": "x"}}, "foreman": {}},
     ],

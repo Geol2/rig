@@ -72,6 +72,7 @@ foreman:
   effort: high
   tools: [list_dir, read_file]   # optional: look around before delegating
   crew: [coder, reviewer]        # optional: defaults to every hand
+  require: [reviewer]            # optional: must check the latest work before finishing
   max_delegations: 8
   # role: ...                    # optional: overrides the built-in foreman prompt
 
@@ -84,6 +85,11 @@ The foreman gets a `delegate(hand, instructions)` tool and sees its crew's roles
 Each delegation starts the hand fresh with `<task>` + `<instructions from="foreman">`;
 several delegations in one turn run in parallel. A rig uses either `foreman` or `lines`.
 Delegated runs are logged as `<hand>-<n>.md` next to `foreman.md`.
+
+`require` is enforced by the harness, not just the prompt: each listed hand must
+finish successfully after the last delegation to any other hand. If the foreman tries to
+finish before that, rig tells it what's missing and the loop continues. If the delegation
+limit runs out first, the shift ends but is marked incomplete.
 
 ## Setup
 

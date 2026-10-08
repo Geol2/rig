@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 import anthropic
 
@@ -29,15 +29,24 @@ class HandResult:
         return self.stop_reason == "end_turn"
 
 
+# Called when a hand tries to finish. Returns None to allow it, or a message
+# telling the hand what is still missing (the loop then continues).
+FinishCheck = Callable[[], str | None]
+
+
 class Worker(Protocol):
-    async def run(self, hand: ResolvedHand, prompt: str, toolbox: Toolbox) -> HandResult: ...
+    async def run(
+        self, hand: ResolvedHand, prompt: str, toolbox: Toolbox, check: FinishCheck | None = None
+    ) -> HandResult: ...
 
 
 class ClaudeWorker:
     def __init__(self, client: anthropic.AsyncAnthropic | None = None):
         self.client = client or anthropic.AsyncAnthropic()
 
-    async def run(self, hand: ResolvedHand, prompt: str, toolbox: Toolbox) -> HandResult:
+    async def run(
+        self, hand: ResolvedHand, prompt: str, toolbox: Toolbox, check: FinishCheck | None = None
+    ) -> HandResult:
         # Append-only history: response content (including thinking blocks) goes back unchanged.
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
         result = HandResult(name=hand.name, output="", stop_reason="", turns=0, transcript=messages)
@@ -56,7 +65,17 @@ class ClaudeWorker:
 
         while result.turns < hand.max_turns:
             result.turns += 1
-            response = await self.client.beta.messages.create(messages=messages, **params)
+            try:
+                response = await self.client.beta.messages.create(messages=messages, **params)
+            except anthropic.APIStatusError as e:
+                # The SDK already retried 429/5xx; what reaches here won't succeed on a blind retry.
+                result.stop_reason = "api_error"
+                result.output = f"[API error {e.status_code}: {e.message}]"
+                return result
+            except anthropic.APIConnectionError as e:
+                result.stop_reason = "api_error"
+                result.output = f"[API connection error: {e}]"
+                return result
             result.input_tokens += response.usage.input_tokens
             result.output_tokens += response.usage.output_tokens
             messages.append({"role": "assistant", "content": response.content})
@@ -70,7 +89,11 @@ class ClaudeWorker:
                 continue
             if response.stop_reason != "tool_use":
                 result.output = "".join(b.text for b in response.content if b.type == "text")
-                return result
+                objection = check() if check and response.stop_reason == "end_turn" else None
+                if objection is None:
+                    return result
+                messages.append({"role": "user", "content": objection})
+                continue
 
             # Parallel tool calls run concurrently; all results go back in one user message.
             calls = [b for b in response.content if b.type == "tool_use"]
@@ -93,7 +116,9 @@ async def _call(toolbox: Toolbox, block: Any) -> dict[str, Any]:
 class EchoWorker:
     """Offline worker for `rig run --dry`: no API calls, just shows what each hand would receive."""
 
-    async def run(self, hand: ResolvedHand, prompt: str, toolbox: Toolbox) -> HandResult:
+    async def run(
+        self, hand: ResolvedHand, prompt: str, toolbox: Toolbox, check: FinishCheck | None = None
+    ) -> HandResult:
         tools = [d["name"] for d in toolbox.definitions] or "-"
         output = f"({hand.name} on {hand.model}, effort={hand.effort}, tools={tools})\n{prompt}"
         return HandResult(name=hand.name, output=output, stop_reason="end_turn", turns=0)

@@ -19,6 +19,7 @@ foreman:
   effort: high
   tools: [list_dir, read_file]   # lets the foreman look around before delegating
   crew: [coder, reviewer]        # omit to allow every hand
+  require: [reviewer]            # must check the latest work before the foreman can finish
   max_delegations: 8
 
 hands:

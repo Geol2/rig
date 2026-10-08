@@ -111,8 +111,30 @@ async def _run_foreman(rig, task, worker, workspace, shift, record, on_event) ->
     crew = rig.crew
     counts: dict[str, int] = {}
     total = 0
+    # Completion order of successful delegations, for `require`.
+    seq = 0
+    last_other = 0
+    last_required: dict[str, int] = {}
+    unmet_at_finish: list[str] = []
+
+    def check() -> str | None:
+        pending = [r for r in foreman.require if last_required.get(r, 0) <= last_other]
+        if not pending:
+            return None
+        if total >= foreman.max_delegations:
+            # Can't delegate any more; let it finish but mark the shift incomplete.
+            unmet_at_finish[:] = pending
+            on_event(f"  ✗ delegation limit reached before {', '.join(pending)} reviewed the latest work")
+            return None
+        on_event(f"  ↺ foreman tried to finish; still required: {', '.join(pending)}")
+        return (
+            f"You can't finish yet: {', '.join(pending)} must run on the latest work first. "
+            "Delegate to them with everything they need to check, address what they report, "
+            "then give the final result."
+        )
 
     async def delegate(args: dict[str, Any]) -> str:
+        nonlocal seq, last_other
         nonlocal total
         name, instructions = args["hand"], args["instructions"]
         if name not in crew:
@@ -130,11 +152,22 @@ async def _run_foreman(rig, task, worker, workspace, shift, record, on_event) ->
         record(key, res)
         if not res.ok:
             raise ToolError(f"{name} did not finish cleanly ({res.stop_reason}): {res.output}")
+        seq += 1
+        if name in foreman.require:
+            last_required[name] = seq
+        else:
+            last_other = seq
         return res.output
 
     roster = "\n".join(f"- {n}: {rig.hands[n].role.strip()}" for n in crew)
+    rules = ""
+    if foreman.require:
+        rules = (
+            f"\n\nBefore you finish, {', '.join(foreman.require)} must run after the last change by any "
+            "other hand. If they report problems, send the fix back and have them check again."
+        )
     hand = rig.resolve("foreman")
-    hand = hand.model_copy(update={"role": f"{hand.role.strip()}\n\n<crew>\n{roster}\n</crew>"})
+    hand = hand.model_copy(update={"role": f"{hand.role.strip()}\n\n<crew>\n{roster}\n</crew>{rules}"})
     delegate_def = {
         "name": "delegate",
         "description": (
@@ -156,8 +189,8 @@ async def _run_foreman(rig, task, worker, workspace, shift, record, on_event) ->
     toolbox = Toolbox(workspace, hand.tools, extra={"delegate": (delegate_def, delegate)})
 
     on_event(f"  ▶ foreman  crew: {', '.join(crew)}")
-    res = await worker.run(hand, build_prompt(task, {}), toolbox)
+    res = await worker.run(hand, build_prompt(task, {}), toolbox, check=check if foreman.require else None)
     on_event(f"  ■ foreman  {_done(res)} · {total} delegations")
     record("foreman", res)
     shift.final = res
-    shift.ok = res.ok
+    shift.ok = res.ok and not unmet_at_finish
