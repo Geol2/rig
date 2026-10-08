@@ -69,6 +69,19 @@ def test_markdown_lists_and_headings():
     assert report.markdown("# Title\n- a\n- b\n\ntext `x`") == "<h3>Title</h3>\n<ul><li>a</li><li>b</li></ul>\n<p>text <code>x</code></p>"
 
 
+def test_markdown_edge_cases():
+    # An empty item, a nested marker, and a number without the dot's trailing space.
+    assert report.markdown("- \n  * b\n3. c\n10.no") == "<ul><li></li><li>b</li><li>c</li></ul>\n<p>10.no</p>"
+
+
+def test_markdown_is_linear_on_long_lines():
+    import time
+
+    start = time.monotonic()
+    report.markdown(" " * 200_000 + "x\n" + "1" * 200_000)
+    assert time.monotonic() - start < 1
+
+
 def test_cli_report_writes_latest(tmp_path, monkeypatch, capsys):
     make_shift(tmp_path, {"a": "old"}, shift_id="20261008-100000")
     newest = make_shift(tmp_path, {"a": "new"}, shift_id="20261008-110000")

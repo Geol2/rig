@@ -88,11 +88,11 @@ def markdown(text: str) -> str:
             out.append(f"<h{level}>{_inline(m.group(2))}</h{level}>")
             i += 1
             continue
-        if re.match(r"\s*([-*]|\d+\.)\s+", line):
-            ordered = bool(re.match(r"\s*\d+\.", line))
+        if _list_item(line) is not None:
+            ordered = line.lstrip()[0].isdigit()
             items = []
-            while i < len(lines) and re.match(r"\s*([-*]|\d+\.)\s+", lines[i]):
-                items.append(re.sub(r"\s*([-*]|\d+\.)\s+", "", lines[i], count=1))
+            while i < len(lines) and (item := _list_item(lines[i])) is not None:
+                items.append(item)
                 i += 1
             tag = "ol" if ordered else "ul"
             out.append(f"<{tag}>" + "".join(f"<li>{_inline(it)}</li>" for it in items) + f"</{tag}>")
@@ -101,11 +101,25 @@ def markdown(text: str) -> str:
             i += 1
             continue
         para = []
-        while i < len(lines) and lines[i].strip() and not re.match(r"(```|#{1,6}\s|\s*([-*]|\d+\.)\s+)", lines[i]):
+        while i < len(lines) and lines[i].strip() and not (
+            lines[i].startswith("```") or re.match(r"#{1,6}\s", lines[i]) or _list_item(lines[i]) is not None
+        ):
             para.append(lines[i])
             i += 1
         out.append(f"<p>{_inline(' '.join(para))}</p>")
     return "\n".join(out)
+
+
+# A list marker at the start of a line, after any indentation: "- ", "* ", "12. ".
+# Matched on the left-stripped line, so the pattern has no leading quantifier to backtrack over.
+_LIST_MARK = re.compile(r"(?:[-*]|\d{1,9}\.)[ \t]")
+
+
+def _list_item(line: str) -> str | None:
+    """The text of a Markdown list item, or None if the line isn't one."""
+    stripped = line.lstrip()
+    m = _LIST_MARK.match(stripped)
+    return stripped[m.end():].lstrip() if m else None
 
 
 def _inline(text: str) -> str:
