@@ -13,7 +13,7 @@ defaults:
   model: claude-opus-5-5
   effort: medium
   max_tokens: 16000
-  max_turns: 30
+  max_turns: 40
   fallbacks: default
 
 run:

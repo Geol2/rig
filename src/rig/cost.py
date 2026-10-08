@@ -3,27 +3,48 @@
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
-# List prices in USD per million tokens: model id -> (input, output). Add new models here;
-# models not listed are shown as "n/a".
-PRICES: dict[str, tuple[float, float]] = {
-    "claude-opus-4-5": (5, 25),
-    "claude-opus-4-1": (15, 75),
-    "claude-opus-4": (15, 75),
-    "claude-sonnet-4-5": (3, 15),
-    "claude-sonnet-4": (3, 15),
-    "claude-haiku-4-5": (1, 5),
-    "claude-3-5-haiku": (0.8, 4),
+
+class Price(NamedTuple):
+    """USD per million tokens. cache_read is None where it is the usual 0.1x input."""
+
+    input: float
+    output: float
+    cache_read: float | None = None
+
+
+# Anthropic API list prices. Add new models here; models not listed are shown as "n/a".
+PRICES: dict[str, Price] = {
+    "claude-fable-5-1": Price(10, 50, cache_read=0.25),
+    "claude-fable-5": Price(10, 50),
+    "claude-opus-5-5": Price(4, 20, cache_read=0.20),
+    "claude-opus-5": Price(5, 25),
+    "claude-opus-4-8": Price(5, 25),
+    "claude-opus-4-7": Price(5, 25),
+    "claude-opus-4-6": Price(5, 25),
+    "claude-opus-4-5": Price(5, 25),
+    "claude-opus-4-1": Price(15, 75),
+    "claude-opus-4": Price(15, 75),
+    "claude-sonnet-5-5": Price(2, 10, cache_read=0.20),
+    "claude-sonnet-5": Price(2, 10),
+    "claude-sonnet-4-6": Price(3, 15),
+    "claude-sonnet-4-5": Price(3, 15),
+    "claude-sonnet-4": Price(3, 15),
+    # Prompts up to 100K tokens; longer prompts cost $0.50 / $2.50 (not modelled).
+    "claude-haiku-5-5": Price(0.10, 0.50),
+    "claude-haiku-4-5": Price(1, 5),
+    "claude-3-5-haiku": Price(0.8, 4),
 }
 
-# Cache pricing relative to the input price (writes are 5-minute ephemeral, as hand.py uses).
+# Default cache pricing relative to the input price (writes are 5-minute ephemeral, as hand.py uses).
 CACHE_READ_FACTOR = 0.1
 CACHE_WRITE_FACTOR = 1.25
 
 _DATED = re.compile(r"-\d{8}$")
 
 
-def price(model: str) -> tuple[float, float] | None:
+def price(model: str) -> Price | None:
     """Prices for a model id, also accepting a dated id like `claude-sonnet-4-5-20250929`."""
     return PRICES.get(model) or PRICES.get(_DATED.sub("", model))
 
@@ -33,9 +54,13 @@ def cost(model: str, input_tokens: int, output_tokens: int, cache_read_tokens: i
     p = price(model)
     if p is None:
         return None
-    inp, out = p
-    cached = cache_read_tokens * CACHE_READ_FACTOR + cache_write_tokens * CACHE_WRITE_FACTOR
-    return ((input_tokens + cached) * inp + output_tokens * out) / 1_000_000
+    read = p.cache_read if p.cache_read is not None else p.input * CACHE_READ_FACTOR
+    return (
+        input_tokens * p.input
+        + cache_write_tokens * p.input * CACHE_WRITE_FACTOR
+        + cache_read_tokens * read
+        + output_tokens * p.output
+    ) / 1_000_000
 
 
 def usd(x: float | None) -> str:
