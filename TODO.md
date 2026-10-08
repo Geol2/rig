@@ -19,4 +19,4 @@ Keep items small enough for one reviewed change. Add context under an item when 
 - [x] **`rig logs` shows the branch** for `--worktree` shifts (from shift.json).
 - [x] **Configurable ignore list** for `glob`/`search`: `search.ignore` in rig.yaml adds
   to or replaces the built-in IGNORED_DIRS (some projects keep sources in `build/`).
-- [ ] **`.gitattributes`** so text files are committed with LF (silences CRLF warnings).
+- [x] **`.gitattributes`** so text files are committed with LF (silences CRLF warnings).

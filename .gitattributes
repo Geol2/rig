@@ -1,0 +1,3 @@
+# Commit text files with LF and check them out with LF on every OS,
+# so Windows checkouts don't produce CRLF warnings or CRLF-only diffs.
+* text=auto eol=lf
