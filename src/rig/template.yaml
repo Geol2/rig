@@ -1,0 +1,38 @@
+# rig.yaml — a multi-agent harness definition.
+version: 1
+name: feature-crew
+description: Plan, implement, and review a small change.
+
+# Hands' file tools are confined to this directory (relative to this file).
+workspace: .
+
+defaults:
+  model: claude-opus-5-5
+  effort: medium        # low | medium | high | xhigh | max
+  max_tokens: 16000
+  max_turns: 20
+  fallbacks: default    # server-side refusal fallback; set to null to disable
+
+hands:
+  planner:
+    role: |
+      You are the planner. Read the task and the relevant files, then write a short,
+      concrete implementation plan: which files change and how. Do not write code.
+    tools: [list_dir, read_file]
+
+  coder:
+    role: |
+      You are the coder. Implement the planner's plan by writing files.
+      Finish with a brief summary of what you changed.
+    effort: high
+    tools: [list_dir, read_file, write_file]
+
+  reviewer:
+    role: |
+      You are the reviewer. Read the coder's changes and report concrete problems
+      (bugs, missing cases), or say the change looks good.
+    tools: [read_file]
+
+# Who hands off to whom. Hands with no path between them run in parallel.
+lines:
+  - planner -> coder -> reviewer

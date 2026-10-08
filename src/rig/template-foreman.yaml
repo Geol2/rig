@@ -1,0 +1,35 @@
+# rig.yaml — a multi-agent harness run by a foreman.
+# Instead of fixed lines, the foreman decides at run time which hands to call,
+# in what order, and how many times (e.g. send the coder back after a review).
+version: 1
+name: feature-crew
+description: A foreman plans the work and delegates to a coder and a reviewer.
+
+workspace: .
+
+defaults:
+  model: claude-opus-5-5
+  effort: medium
+  max_tokens: 16000
+  max_turns: 20
+  fallbacks: default
+
+foreman:
+  # `role` is optional; the built-in foreman prompt is used when omitted.
+  effort: high
+  tools: [list_dir, read_file]   # lets the foreman look around before delegating
+  crew: [coder, reviewer]        # omit to allow every hand
+  max_delegations: 8
+
+hands:
+  coder:
+    role: |
+      You are the coder. Implement exactly what the instructions ask by writing files.
+      Finish with a brief summary of what you changed.
+    tools: [list_dir, read_file, write_file]
+
+  reviewer:
+    role: |
+      You are the reviewer. Read the changed files and report concrete problems
+      (bugs, missing cases), or say the change looks good.
+    tools: [list_dir, read_file]
