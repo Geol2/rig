@@ -31,9 +31,11 @@ def _load_or_exit(path: Path) -> Rig:
 
 
 def _check_workspace(rig: Rig, path: Path) -> None:
-    workspace = path.resolve().parent / rig.workspace
-    if not workspace.is_dir():
-        sys.exit(f"rig: workspace {rig.workspace} not found (set `workspace` in {path} to the project folder)")
+    for name, folder in rig.workspace_dirs(path.resolve().parent).items():
+        if not folder.is_dir():
+            if name == ".":
+                sys.exit(f"rig: workspace {rig.workspace} not found (set `workspace` in {path} to the project folder)")
+            sys.exit(f"rig: workspace {name} ({rig.workspaces[name]}) not found (fix it under `workspaces` in {path})")
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -55,6 +57,8 @@ def cmd_check(args: argparse.Namespace) -> None:
         print(f"✓ {rig.name}: {len(rig.hands)} hands, {len(rig.edges)} lines")
         for i, layer in enumerate(layers(list(rig.hands), rig.edges), 1):
             print(f"  stage {i}: {' | '.join(layer)}")
+    if rig.workspaces:
+        print(f"  workspaces: {', '.join(f'{n} ({p})' for n, p in rig.workspaces.items())}")
     if rig.inputs:
         def describe(s) -> str:
             if s.default is not None:

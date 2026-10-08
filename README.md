@@ -112,6 +112,26 @@ search:
 `.git` and `.rig` are always skipped. When the list differs from the default, the `glob`
 and `search` tool descriptions name the skipped directories so the hands know.
 
+### Several projects at once
+
+To work across projects in one shift (say a backend and its frontend), name them under
+`workspaces` instead of setting `workspace`:
+
+```yaml
+workspaces:
+  backend:  D:/work/orders-api
+  frontend: D:/work/orders-web
+```
+
+The hands then see one tree whose top-level folders are those names: `list_dir .` shows
+`backend/` and `frontend/`, every path starts with a name (`backend/src/...`), and `glob`
+and `search` from `.` cover both projects. The tool descriptions tell the hands this.
+
+- A hand with `run` needs `run.workspace` (one of the names) when there's more than one
+  project; commands run there and their path arguments must stay inside it.
+- `--worktree` isn't supported with `workspaces` yet.
+- `rig serve` edits the list: add a row per project, name each one, and save.
+
 ### Analyzing another project
 
 Point `workspace` at it (absolute paths work) and leave out `write_file` and `edit_file` to keep it read-only:

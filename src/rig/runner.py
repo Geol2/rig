@@ -64,7 +64,11 @@ async def run_shift(
     verbose: bool = True,
     inputs: dict[str, str] | None = None,
 ) -> Shift:
-    workspace = (root / rig.workspace).resolve()
+    if use_worktree and rig.workspaces:
+        raise worktree.GitError("--worktree doesn't support several `workspaces` yet; run without it, or use one workspace")
+    dirs = rig.workspace_dirs(root)
+    # One folder, or {name: folder} for several projects.
+    workspace: Path | dict[str, Path] = dirs if rig.workspaces else dirs["."]
     values = rig.resolve_inputs(inputs or {})  # raises InputError before anything is created
     shift = new_shift(root)
     shift.inputs = values

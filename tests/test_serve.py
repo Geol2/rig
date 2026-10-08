@@ -63,7 +63,7 @@ def test_page_and_rigs(server):
 def test_set_workspace_keeps_the_rest(server, tmp_path):
     _, base = server
     (tmp_path / "other proj").mkdir()
-    assert call(base + "/api/workspace", {"file": "review.rig.yaml", "workspace": str(tmp_path / "other proj")})[0] == 200
+    assert call(base + "/api/workspaces", {"file": "review.rig.yaml", "workspaces": [{"name": "", "path": str(tmp_path / "other proj")}]})[0] == 200
     text = (tmp_path / "review.rig.yaml").read_text(encoding="utf-8")
     assert f'workspace: "{(tmp_path / "other proj").as_posix()}"' in text and "inputs:" in text
     assert call(base + "/api/rigs")[1][0]["workspace_ok"]
