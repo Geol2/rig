@@ -61,6 +61,21 @@ def test_page_and_rigs(server):
     assert r["inputs"] == [{"name": "module", "description": "", "required": True, "default": ""}]
 
 
+def test_unreadable_rig_files_show_their_error(tmp_path):
+    (tmp_path / "dup.yaml").write_text("name: d\nhands:\n  a: {role: A}\n  a: {role: B}\n", encoding="utf-8")
+    (tmp_path / "korean.yaml").write_bytes("name: t\nhands:\n  a: {role: 역할}\n".encode("cp949"))
+    (tmp_path / "notes.yaml").write_bytes("title: 역할\n".encode("cp949"))  # not a rig: ignored
+    rigs = App(tmp_path).rigs()
+    assert [(r["file"], r["error"]) for r in rigs] == [
+        ("dup.yaml", 'duplicate key "a" in hands at line 4 (first at line 3); remove or rename one'),
+        ("korean.yaml", "not UTF-8 (byte 0xbf at line 3, column 13); save the file as UTF-8"),
+    ]
+    with pytest.raises(ValueError, match="not UTF-8"):
+        App(tmp_path).set_workspaces("korean.yaml", [{"name": "", "path": "proj"}])
+    with pytest.raises(ValueError, match='duplicate key "a"'):
+        App(tmp_path).set_workspaces("dup.yaml", [{"name": "", "path": "proj"}])
+
+
 def test_set_workspace_keeps_the_rest(server, tmp_path):
     _, base = server
     (tmp_path / "other proj").mkdir()

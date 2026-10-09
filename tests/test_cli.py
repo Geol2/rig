@@ -127,6 +127,25 @@ def test_check_malformed_yaml_exits_with_error(tmp_path, monkeypatch):
     assert "unclosed" in msg or "line 2" in msg
 
 
+def test_check_duplicate_key_exits_with_error(tmp_path, monkeypatch):
+    (tmp_path / "rig.yaml").write_text("name: t\nhands:\n  a: {role: A}\n  b: {role: B}\n  a: {role: C}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["check"])
+    msg = _exit_message(excinfo)
+    assert msg.startswith("rig: rig.yaml is invalid")
+    assert 'duplicate key "a" in hands at line 5 (first at line 3); remove or rename one' in msg
+
+
+def test_check_non_utf8_file_exits_with_error(tmp_path, monkeypatch):
+    (tmp_path / "rig.yaml").write_bytes("name: t\nhands:\n  a: {role: 역할}\n".encode("cp949"))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["check"])
+    msg = _exit_message(excinfo)
+    assert msg == "rig: rig.yaml is invalid\nnot UTF-8 (byte 0xbf at line 3, column 13); save the file as UTF-8"
+
+
 def test_run_crash_exits_1_without_traceback(tmp_path, monkeypatch, capsys):
     async def crash(*args, **kwargs):
         raise RuntimeError("boom")

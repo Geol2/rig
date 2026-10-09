@@ -21,6 +21,9 @@ rig serve       # do all of the above from a local web page
 | **foreman** | An orchestrator that delegates to hands at run time, instead of lines |
 | **shift** | One run of the rig on a task, logged under `.rig/shifts/<id>/` |
 
+`rig.yaml` must be saved as UTF-8, and a key repeated in the same mapping (say, two `coder:`
+hands) is rejected with both line numbers instead of the last one silently winning.
+
 Hands run in stages. A hand starts once every hand with a line into it has finished,
 and hands with no path between them run in parallel.
 

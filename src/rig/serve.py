@@ -26,7 +26,7 @@ from rig import report
 from rig.cost import Meter, usd
 from rig.graph import layers
 from rig.runner import PROGRESS_LOG, RUNNING, ShiftEvent
-from rig.spec import InputError, load
+from rig.spec import InputError, RigFileError, load, parse_yaml, read_rig_text
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 
@@ -69,8 +69,13 @@ class App:
         files = []
         for p in sorted([*self.root.glob("*.yaml"), *self.root.glob("*.yml")]):
             try:
-                data = yaml.safe_load(p.read_text(encoding="utf-8"))
-            except (yaml.YAMLError, OSError, UnicodeDecodeError):
+                raw = p.read_bytes()
+                try:
+                    text = raw.decode("utf-8")
+                except UnicodeDecodeError:  # still listed if it's a rig, so load() can say what's wrong
+                    text = raw.decode("utf-8", errors="replace")
+                data = yaml.safe_load(text)
+            except (yaml.YAMLError, OSError):
                 continue
             if isinstance(data, dict) and "hands" in data:
                 files.append(p)
@@ -82,7 +87,7 @@ class App:
             entry: dict[str, Any] = {"file": p.name}
             try:
                 rig = load(p)
-            except (ValidationError, yaml.YAMLError) as e:
+            except (ValidationError, yaml.YAMLError, RigFileError) as e:
                 entry["error"] = str(e)
                 out.append(entry)
                 continue
@@ -140,7 +145,7 @@ class App:
             block = "workspaces:\n" + "".join(
                 f"  {n}: {json.dumps(p, ensure_ascii=False)}\n" for n, p in rows
             )
-        text = path.read_text(encoding="utf-8")
+        text = read_rig_text(path)
         # The current setting: a `workspace:` line and/or a `workspaces:` line with its indented entries.
         current = re.compile(r"^workspaces?:[^\n]*\n?(?:[ \t]+[^\n]*\n?)*", re.M)
         m = current.search(text)
@@ -148,7 +153,7 @@ class App:
             new = text[: m.start()] + block + current.sub("", text[m.end():])
         else:
             new = re.sub(r"^(name:[^\n]*\n)", lambda mm: mm.group(1) + block, text, count=1, flags=re.M)
-        load_check = yaml.safe_load(new)
+        load_check = parse_yaml(new)
         from rig.spec import Rig
 
         Rig.model_validate(load_check)  # never write a file rig can't load
