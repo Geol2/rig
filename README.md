@@ -351,6 +351,12 @@ the output and in `shift.json` (`prs`):
    if none appear within `ci_grace` (2 minutes) it doesn't merge, unless
    `require_checks: false`.
 
+Before the shift, rig fetches the PR's base branch (`sync`, on by default) and starts from
+whichever is newer: the remote (so after an auto-merged PR the next shift needs no
+`git pull`) or your local branch (so a TODO item you committed but haven't pushed is
+included). If they have diverged, or the fetch fails, it starts from local and says so.
+Your own checkout isn't touched.
+
 The review is posted as a comment because GitHub doesn't let an account approve its own
 PR. With several workspaces, each changed repository gets its own PR. `self.rig.yaml` uses
 this: the reviewer ends with a line that is just `LGTM` only when nothing must change.
