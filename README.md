@@ -114,6 +114,8 @@ Built-in tools (all confined to `workspace`):
 | `edit_file` | Replace an exact string in a file (`old` → `new`); fails if `old` is missing or appears more than once, unless `replace_all` |
 | `run` | Run an allowed command (tests, linters, `git diff`) and get exit code + output |
 
+`write_file` and `edit_file` refuse paths inside `.git` or `.rig` (any depth, any case), so a hand can't plant git hooks or change shift records; reading them still works.
+
 ### run
 
 `run` only executes commands that start with an entry in `run.allow`:

@@ -126,10 +126,49 @@ Keep items small enough for one reviewed change. Add context under an item when 
   shift.json `hands` order and print the error or stop reason first. Tests in
   `test_cli.py`.
   Note: the running.json check moved to `runner.live()` (shared by serve and cli); the list shows running / error / stopped / ok / incomplete (error wins over stopped, a dead pid's running.json is incomplete); `rig logs <id>` prints the error, the stop reason and "still running" before the cost line, then hands in shift.json order (`coder#10` heading) and leftover .md in natural order.
+- [x] **`write_file`/`edit_file`로 `.git`·`.rig` 수정 금지**: `tools.py` `Toolbox._path`는
+  workspace 밖으로 나가는 경로만 막아서, hand가 `write_file`로 `.git/hooks/pre-commit`이나
+  `.git/config`(`core.hooksPath`, `core.fsmonitor`)를 쓸 수 있습니다. 그러면 `run.allow`에 없는
+  임의 코드가 다음 `git commit`이나 허용된 `git status` 때 실행되어 `run.allow` 제한이 무의미해지고,
+  `.rig/`에 쓰면 다른 shift의 기록(`shift.json`, `running.json`)이나 `.rig/stop`을 바꿀 수 있습니다
+  (`glob`/`search`는 이미 `ALWAYS_IGNORED`로 이 둘을 건너뜀). `write_file`과 `edit_file`(`Toolbox.run`,
+  `_edit`)에서 경로의 어느 구성요소든 `.git` 또는 `.rig`이면(대소문자 무시, `workspaces`의 프로젝트
+  경로 포함) "rig가 관리하는 폴더라 쓸 수 없다"는 ToolError로 거부하세요. 읽기는 그대로 둡니다.
+  README의 Built-in tools 표 근처에 한 줄 추가. 완료 기준: `tests/test_tools.py`에 `.git/hooks/x`,
+  `sub/.git/config`, `.RIG/shifts/a.md`, `workspaces` 모드의 `backend/.git/config` 쓰기·편집이
+  거부되고 파일이 생기지 않는지, `.github/workflows/ci.yml`이나 `.gitignore`는 여전히 쓸 수 있는지 테스트.
+  Note: `Toolbox._writable` checks the resolved path relative to its root (the project root in `workspaces` mode), so a `--worktree` workspace under `.rig/worktrees/` still writes and a symlink into `.git` is refused; the check runs before `write_file` creates folders, and `_path` callers are unchanged (it now wraps `_locate`, which returns root and path).
 
 ## Backlog
 
 From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
+- [ ] **`shift.json`을 원자적으로 쓰고, 깨진 파일 하나가 목록 전체를 망가뜨리지 않게**: `runner.py`
+  `_write_summary`는 `write_text`로 바로 덮어써서(shift당 최대 두 번, publish 후 한 번 더) 쓰는 도중
+  프로세스가 죽거나 디스크가 차면 반쯤 쓰인 JSON이 남습니다. 그러면 `cli.py` `_read_summary`(`rig logs`
+  목록), `serve.py` `App.shifts`(history 전체가 오류)와 `App.shift_log`, `report.py` `collect`가 모두
+  `json.loads`에서 예외를 내고, 한 폴더 때문에 `rig logs`가 traceback으로 끝나고 `rig serve` history가
+  비게 됩니다. 같은 폴더의 임시 파일에 쓴 뒤 `os.replace`로 바꾸고, 네 곳의 읽기는 공용 함수 하나로
+  모아 읽을 수 없는 `shift.json`을 `{}`로 다루세요(`rig logs` 목록 상태는 `unreadable`, 상세 보기는
+  그 사실을 맨 앞에 출력). 완료 기준: `test_cli.py`와 `test_serve.py`에서 잘린 `shift.json`이 있는
+  폴더가 섞여 있어도 `rig logs`, `rig logs <id>`, `App.shifts()`, `rig report`가 동작하는지, 그리고
+  `_write_summary`가 임시 파일을 남기지 않는지 테스트.
+- [ ] **input 이름 검증과 치환되지 않는 `{{ … }}` 잡기**: `spec.py`의 `inputs` 키는 아무 문자열이나
+  허용되지만 `INPUT_REF`는 `\w+`만 찾습니다. 그래서 `due-date` 같은 input을 role에서
+  `{{ inputs.due-date }}`로 쓰면 치환도 안 되고 `_check_lines`의 미선언 input 검사에도 안 걸려, 모델이
+  중괄호 문자 그대로를 받습니다. `{{ input.x }}`(단수) 같은 오타도 같은 식으로 조용히 남고, 이름에 `"`가
+  있으면 `runner.py` `build_prompt`의 `<input name="…">` 속성이 깨집니다. `Rig._check_lines`에서 input
+  이름을 `\w+`(fullmatch)로 제한해 어떤 이름이 틀렸는지 말하고, role(foreman 포함)에 `INPUT_REF`에
+  맞지 않는 `{{ … inputs … }}`/`{{ input… }}` 형태가 있으면 해당 hand와 원문을 짚어 거부하세요. README
+  inputs 절에 이름 규칙 한 줄. 완료 기준: `tests/test_inputs.py`에 하이픈·공백·따옴표 이름, `{{ inputs.due-date }}`,
+  `{{ input.x }}`가 `rig check`에서 거부되는 테스트와, 모든 템플릿과 `self.rig.yaml`이 여전히 로드되는지 확인.
+- [ ] **CLI 인자 검증: 중복 `-i`와 shift id 경로**: `cli.py` `_parse_inputs`는 `-i n=a -i n=b`에서
+  앞 값을 조용히 버립니다. `cmd_logs`와 `cmd_report`는 `shifts_dir / args.shift`를 그대로 써서
+  `rig report ..`가 `.rig/report.html`을 쓰고 `rig logs ../..`가 shift가 아닌 폴더의 `*.md`를
+  출력합니다(`serve.py` `App._shift_dir`은 이미 부모 폴더를 확인함). 같은 이름이 두 번 오면
+  "input 'n' given twice"로 종료하고, shift id는 `_shift_dir`처럼 `.rig/shifts` 바로 아래 폴더인지
+  확인하는 공용 함수로 고르세요(`last`는 그대로). 완료 기준: `tests/test_cli.py`에 중복 `-i`, `..`,
+  `../..`, 존재하지 않는 id가 각각 명확한 메시지로 종료되는지 테스트.
 
 ## Needs a design first
 
