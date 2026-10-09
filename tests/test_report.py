@@ -41,14 +41,32 @@ def test_collect_merges_and_sorts_findings(tmp_path):
     assert [(r["severity"], r["file"], r["area"]) for r in data["findings"]] == [
         ("critical", "conf.properties", "security"), ("high", "a.py", "security"), ("high", "b.py", "bugs"), ("low", "b.py", "bugs"),
     ]
-    assert data["final"] == "summary"
+    assert data["final"] == ["summary"]  # no "final" in shift.json: the last hand
 
 
 def test_foreman_reply_is_the_summary(tmp_path):
     d = make_shift(tmp_path, {"reviewer#1": json.dumps({"findings": []}), "foreman": "Done."}, mode="foreman")
     data = report.collect(d)
-    assert data["final"] == "foreman"
+    assert data["final"] == ["foreman"]
     assert {h["key"] for h in data["hands"]} == {"reviewer#1", "foreman"}
+
+
+def test_every_final_hand_is_a_summary(tmp_path):
+    d = make_shift(tmp_path, {
+        "mapper": "## Map",
+        "bugs": json.dumps({"findings": [finding("high", "b.py", 1)]}),
+        "s1": "First **summary**.",
+        "s2": "Second summary.",
+    }, final=["bugs", "s1", "s2", "gone"])
+    data = report.collect(d)
+    assert data["final"] == ["bugs", "s1", "s2"]  # unknown keys dropped
+    page = report.render(data)
+    assert page.count('<section class="final">') == 2
+    assert page.index("Summary <small>from s1</small>") < page.index("Summary <small>from s2</small>")
+    assert page.count("First <strong>summary</strong>.") == 1 and page.count("Second summary.") == 1
+    # Summaries aren't repeated in the Hands list; a final hand with findings still is.
+    hands = page[page.index("<h2>Hands</h2>"):page.index("<script>")]
+    assert "<b>mapper</b>" in hands and "<b>bugs</b>" in hands and "<b>s1</b>" not in hands and "<b>s2</b>" not in hands
 
 
 def test_render(tmp_path):

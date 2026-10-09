@@ -106,8 +106,8 @@ def cmd_run(args: argparse.Namespace) -> None:
                                       verbose=not args.quiet, inputs=inputs, meter=Meter(args.max_cost)))
     except GitError as e:
         sys.exit(f"rig: {e}")
-    if shift.final:
-        print(f"\n── {shift.final.name} ──\n{shift.final.output}")
+    for r in shift.finals:
+        print(f"\n── {r.name} ──\n{r.output}")
     committed = shift.committed()
     for wt, _ in committed:
         where = f" in {wt.repo}" if len(shift.worktrees) > 1 else ""

@@ -74,6 +74,20 @@ def test_dry_shift_hands_off(tmp_path):
                                                  "a.transcript.json", "b.transcript.json", "c.transcript.json"}
 
 
+def test_every_last_stage_hand_is_final(tmp_path):
+    shift = asyncio.run(run_shift(make(), "do it", EchoWorker(), root=tmp_path, on_event=lambda _: None))
+    assert [r.name for r in shift.finals] == ["b", "c"]  # YAML order
+    assert shift.final.name == "c"
+    assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["final"] == ["b", "c"]
+
+
+def test_single_last_hand_is_final(tmp_path):
+    shift = asyncio.run(run_shift(make(lines=["a -> b -> c"]), "do it", EchoWorker(), root=tmp_path,
+                                  on_event=lambda _: None))
+    assert [r.name for r in shift.finals] == ["c"]
+    assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["final"] == ["c"]
+
+
 def test_refusal_is_reported_in_progress(tmp_path):
     from rig.hand import HandResult, refusal_message
 
@@ -116,6 +130,8 @@ def test_crashing_hand_does_not_take_down_its_siblings(tmp_path):
     assert any("upstream hands did not finish cleanly: ['a']" in e for e in events)
     hands = summary(shift)["hands"]
     assert hands["a"]["stop_reason"] == "error" and hands["b"]["stop_reason"] == "end_turn"
+    # The last stage never ran, so there's no final result.
+    assert shift.finals == [] and summary(shift)["final"] == []
 
 
 def test_crashed_shift_still_writes_shift_json(tmp_path, monkeypatch):
