@@ -58,6 +58,19 @@ def test_read_write_edit_by_project_path(projects):
     assert tb.run("read_file", {"path": "frontend/src/new.js"}) == "1\ta = 2"
 
 
+def test_write_edit_refuse_project_git(projects):
+    tb = Toolbox(projects, TOOLS)
+    with pytest.raises(ToolError, match="which rig and git manage"):
+        tb.run("write_file", {"path": "backend/.git/config", "content": "evil"})
+    assert not (projects["backend"] / ".git").exists()
+    config = projects["backend"] / ".git/config"
+    config.parent.mkdir()
+    config.write_text("safe", encoding="utf-8")
+    with pytest.raises(ToolError, match="which rig and git manage"):
+        tb.run("edit_file", {"path": "backend/.git/config", "old": "safe", "new": "evil"})
+    assert config.read_text(encoding="utf-8") == "safe"
+
+
 @pytest.mark.parametrize(
     "path, message",
     [

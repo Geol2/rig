@@ -339,6 +339,10 @@ class Toolbox:
         return result
 
     def _path(self, rel: str) -> Path:
+        return self._locate(rel)[1]
+
+    def _locate(self, rel: str) -> tuple[Path, Path]:
+        """(root `rel` belongs to, resolved path), refusing paths that escape that root."""
         if self.roots is None:
             root, rest = self.workspace, rel
         else:
@@ -349,6 +353,18 @@ class Toolbox:
         p = (root / rest).resolve()
         if not p.is_relative_to(root):
             raise ToolError(f"path escapes workspace: {rel}")
+        return root, p
+
+    def _writable(self, rel: str) -> Path:
+        """`_path` for write_file/edit_file: also refuses anything inside .git or .rig.
+
+        Checked relative to the root (a --worktree workspace itself sits under .rig/worktrees/),
+        on the resolved path, so a symlink into .git is caught too.
+        """
+        root, p = self._locate(rel)
+        for part in p.relative_to(root).parts:
+            if part.lower() in ALWAYS_IGNORED:
+                raise ToolError(f"{rel} is inside {part}/, which rig and git manage; write_file and edit_file can't change it")
         return p
 
     def _rel(self, p: Path) -> str:
@@ -377,7 +393,7 @@ class Toolbox:
         if name == "read_file":
             return self._read(args["path"], args.get("offset") or 1, args.get("limit") or READ_LIMIT)
         if name == "write_file":
-            p = self._path(args["path"])
+            p = self._writable(args["path"])
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(args["content"], encoding="utf-8")
             return f"wrote {len(args['content'])} chars to {args['path']}"
@@ -473,7 +489,7 @@ class Toolbox:
         return body
 
     def _edit(self, rel: str, old: str, new: str, replace_all: bool) -> str:
-        p = self._path(rel)
+        p = self._writable(rel)
         if not p.is_file():
             raise ToolError(f"no such file: {rel}")
         if not old:

@@ -217,6 +217,62 @@ def test_path_escape_blocked(tmp_path):
             tb.run(name, args)
 
 
+MANAGED = [".git/hooks/x", "sub/.git/config", ".RIG/shifts/a.md", ".rig/stop", ".git"]
+
+
+@pytest.mark.parametrize("path", MANAGED)
+def test_write_refuses_git_and_rig(tmp_path, path):
+    tb = Toolbox(tmp_path, ALL)
+    with pytest.raises(ToolError, match="which rig and git manage"):
+        tb.run("write_file", {"path": path, "content": "evil"})
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("path", MANAGED)
+def test_edit_refuses_git_and_rig(tmp_path, path):
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("safe", encoding="utf-8")
+    with pytest.raises(ToolError, match="which rig and git manage"):
+        Toolbox(tmp_path, ALL).run("edit_file", {"path": path, "old": "safe", "new": "evil"})
+    assert target.read_text(encoding="utf-8") == "safe"
+
+
+@pytest.mark.parametrize("path", [".github/workflows/ci.yml", ".gitignore", ".rigrc", "src/git/x.py"])
+def test_write_and_edit_near_git_still_allowed(tmp_path, path):
+    tb = Toolbox(tmp_path, ALL)
+    tb.run("write_file", {"path": path, "content": "a = 1\n"})
+    tb.run("edit_file", {"path": path, "old": "1", "new": "2"})
+    assert (tmp_path / path).read_text(encoding="utf-8") == "a = 2\n"
+
+
+def test_write_in_workspace_under_rig_worktrees(tmp_path):
+    # --worktree mode: the workspace itself lives in .rig/worktrees/<id>.
+    ws = tmp_path / ".rig" / "worktrees" / "abc"
+    ws.mkdir(parents=True)
+    tb = Toolbox(ws, ALL)
+    tb.run("write_file", {"path": "src/x.txt", "content": "hi"})
+    tb.run("edit_file", {"path": "src/x.txt", "old": "hi", "new": "ho"})
+    assert (ws / "src/x.txt").read_text(encoding="utf-8") == "ho"
+    with pytest.raises(ToolError, match="which rig and git manage"):
+        tb.run("write_file", {"path": ".git", "content": "gitdir: elsewhere"})
+
+
+def test_write_refuses_symlink_into_git(tmp_path):
+    (tmp_path / ".git").mkdir()
+    try:
+        (tmp_path / "link").symlink_to(tmp_path / ".git", target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("can't create symlinks here")
+    with pytest.raises(ToolError, match="which rig and git manage"):
+        Toolbox(tmp_path, ALL).run("write_file", {"path": "link/config", "content": "evil"})
+    assert list((tmp_path / ".git").iterdir()) == []
+
+
+def test_read_git_still_allowed(repo):
+    assert repo.run("read_file", {"path": ".git/config"}) == "1\thello git"
+
+
 def test_tool_not_granted(tmp_path):
     tb = Toolbox(tmp_path, ["read_file"])
     with pytest.raises(ToolError):
