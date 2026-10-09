@@ -252,7 +252,11 @@ class App:
         lines = text.splitlines()
         if text and not text.endswith("\n"):
             lines.pop()  # half-written; it comes with the next poll
-        return {"lines": lines[since:], "total": len(lines), "running": bool(_live(d))}
+        running = bool(_live(d))
+        ok = None
+        if not running and (d / "shift.json").exists():
+            ok = json.loads((d / "shift.json").read_text(encoding="utf-8")).get("ok")
+        return {"lines": lines[since:], "total": len(lines), "running": running, "ok": ok}
 
     def report_html(self, shift_id: str) -> str:
         return report.render(report.collect(self._shift_dir(shift_id)),
@@ -525,7 +529,8 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
       <thead><tr><th>실행</th><th>설정</th><th>요구사항</th><th>상태</th><th class="num">발견</th><th class="num">비용</th><th></th></tr></thead>
       <tbody id="shifts"></tbody>
     </table></div>
-    <p class="small muted">터미널에서 <code>rig run</code>으로 시작한 실행도 여기 나타납니다. 로그를 누르면 진행 상황을 실시간으로 볼 수 있습니다.</p>
+    <div class="row"><p class="small muted" style="margin:0">터미널에서 <code>rig run</code>으로 시작한 실행도 새로고침 없이 여기 나타나고, 아래 로그 창에 자동으로 열립니다. 끝나면 탭 제목에 표시됩니다.</p>
+      <button class="secondary" id="notify" type="button" hidden>끝나면 알림 받기</button></div>
   </section>
   <section class="panel" id="viewer" aria-labelledby="viewer-h" hidden>
     <div class="row"><h2 id="viewer-h">실행 로그</h2><span class="pill" id="v-pill"></span>
@@ -685,8 +690,12 @@ async function poll() {
     $('run-cost').textContent = '비용 ' + (c.unpriced ? '≥' : '') + c.spent + (c.limit ? ' / 상한 ' + c.limit : '')
       + (c.stopping === 'budget' ? ' · 상한 도달' : c.stopping ? (s.status === 'running' ? ' · 중지 중' : ' · 중지됨') : '');
   }
+  if (s.shift_id) ownShift = s.shift_id;
+  if (ownRunning && s.status !== 'running') finished(s.shift_id || '', s.status === 'done' ? 'done' : s.status);
+  ownRunning = s.status === 'running';
   if (s.status === 'running') polling = setTimeout(poll, 1000); else loadShifts();
 }
+let ownShift = null, ownRunning = false;
 
 async function loadShifts() {
   const rows = await api('/api/shifts');
@@ -701,16 +710,28 @@ async function loadShifts() {
       el('td', {class: 'id'}, s.id), el('td', {}, s.rig), el('td', {}, s.task),
       el('td', {}, state), el('td', {class: 'num'}, String(s.findings || '')), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
   }
+  follow(rows);
+}
+// A run that starts elsewhere (rig run in a terminal) opens in the log panel by itself, unless
+// another running one is already open there. Runs started from this page show above instead.
+const followed = new Set();
+function follow(rows) {
+  for (const s of rows) {
+    if (!s.running || !s.log || followed.has(s.id) || s.id === ownShift) continue;
+    followed.add(s.id);
+    if (!viewing || !vRunning) openLog(s.id, false);
+  }
 }
 // Pick up runs started elsewhere (rig run in a terminal) and ones that finished.
 setInterval(() => { if (!document.hidden) loadShifts().catch(() => {}); }, 5000);
 
-let viewing = null, vSince = 0, vTimer = null;
-function openLog(id) {
-  viewing = id; vSince = 0; $('v-log').textContent = '';
+let viewing = null, vSince = 0, vTimer = null, vRunning = false;
+function openLog(id, scroll = true) {
+  viewing = id; vSince = 0; vRunning = false; $('v-log').textContent = '';
   $('viewer-h').textContent = '실행 로그 · ' + id;
   $('v-report').href = '/shifts/' + encodeURIComponent(id) + '/report';
-  $('viewer').hidden = false; $('viewer').scrollIntoView({behavior: 'smooth'});
+  $('viewer').hidden = false;
+  if (scroll) $('viewer').scrollIntoView({behavior: 'smooth'});
   pollLog();
 }
 async function pollLog() {
@@ -720,11 +741,34 @@ async function pollLog() {
   const s = await api('/shifts/' + encodeURIComponent(id) + '/log?since=' + vSince).catch(() => null);
   if (!s || id !== viewing) return;
   if (s.lines.length) { const log = $('v-log'); log.textContent += s.lines.join('\n') + '\n'; log.scrollTop = log.scrollHeight; vSince = s.total; }
-  $('v-pill').className = 'pill ' + (s.running ? 'running' : 'done');
-  $('v-pill').textContent = s.running ? '실행 중' : '끝남';
+  const state = s.running ? 'running' : s.ok === false ? 'incomplete' : 'done';
+  $('v-pill').className = 'pill ' + state;
+  $('v-pill').textContent = LABEL[state];
   $('v-report').hidden = s.running;
+  if (vRunning && !s.running) finished(id, state);
+  vRunning = s.running;
   if (s.running) vTimer = setTimeout(pollLog, 1000); else loadShifts();
 }
+
+// When a run ends: the tab title says so, and a desktop notification if allowed.
+const TITLE = document.title;
+function finished(id, state) {
+  const what = (state === 'done' ? '✓ ' : '✗ ') + LABEL[state];
+  document.title = what + ' · ' + TITLE;
+  if (window.Notification && Notification.permission === 'granted') {
+    try { new Notification('rig 실행 ' + LABEL[state], {body: id}); } catch (e) {}
+  }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = TITLE; });
+function notifyButton() {
+  const b = $('notify');
+  b.hidden = !(window.Notification && Notification.permission === 'default');
+}
+$('notify').addEventListener('click', async () => {
+  try { await Notification.requestPermission(); } catch (e) {}
+  notifyButton();
+});
+notifyButton();
 $('v-close').addEventListener('click', () => { viewing = null; clearTimeout(vTimer); $('viewer').hidden = true; });
 
 let fix = null;
