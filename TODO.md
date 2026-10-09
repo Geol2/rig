@@ -59,17 +59,18 @@ Keep items small enough for one reviewed change. Add context under an item when 
   aren't plain names (letters, digits, `-`, `_`), and say which name is wrong and what is
   allowed. Add the bad names to `test_invalid_rigs_rejected` and check that all templates
   and `self.rig.yaml` still load.
+- [x] **Prompt tags can't be broken by their content**: task, handoff and input values are
+  placed inside `<task>`, `<handoff>`, `<inputs>` tags without escaping (`runner.py`
+  `build_prompt`), so content containing `</handoff>` can make the model misread the
+  structure. Neutralize closing tags inside values (e.g. `</handoff>` → `<\/handoff>`) and
+  test it.
+  Note: closing tags of task/inputs/input/handoff/instructions become `<\/tag>` (case-insensitive, whole names only); opening tags are left as-is.
 
 ## Backlog
 
 From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
 in priority order. Line numbers are from that review and may have moved.
 
-- [ ] **Prompt tags can't be broken by their content**: task, handoff and input values are
-  placed inside `<task>`, `<handoff>`, `<inputs>` tags without escaping (`runner.py`
-  `build_prompt`), so content containing `</handoff>` can make the model misread the
-  structure. Neutralize closing tags inside values (e.g. `</handoff>` → `<\/handoff>`) and
-  test it.
 - [ ] **Faster run history in `rig serve`**: the history list re-reads and re-parses every
   past shift's outputs on each request to count findings (`serve.py` `shifts`). Store the
   findings count in shift.json when a shift ends and read only shift.json in the list.

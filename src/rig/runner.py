@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -69,17 +70,27 @@ class Shift:
         return [(wt, o) for wt, o in zip(self.worktrees, self.outcomes) if o.changed and not o.kept_at]
 
 
+# Closing tags of build_prompt's own blocks, e.g. "</handoff>" or "</ Task >";
+# not "</taskbar>", "</task-list>" or "</handoff.v2>".
+_CLOSING_TAG = re.compile(r"</(?=\s*(?:task|inputs|input|handoff|instructions)(?![\w:.-]))", re.IGNORECASE)
+
+
+def _neutralize(text: str) -> str:
+    """Write closing tags of the prompt's blocks as `<\\/tag>` so content can't end a block early."""
+    return _CLOSING_TAG.sub(r"<\\/", text)
+
+
 def build_prompt(
     task: str, handoffs: dict[str, str], instructions: str | None = None, inputs: dict[str, str] | None = None
 ) -> str:
-    parts = [f"<task>\n{task}\n</task>"]
+    parts = [f"<task>\n{_neutralize(task)}\n</task>"]
     if inputs:
-        lines = "\n".join(f'<input name="{name}">{value}</input>' for name, value in inputs.items())
+        lines = "\n".join(f'<input name="{name}">{_neutralize(value)}</input>' for name, value in inputs.items())
         parts.append(f"<inputs>\n{lines}\n</inputs>")
     for name, output in handoffs.items():
-        parts.append(f'<handoff from="{name}">\n{output}\n</handoff>')
+        parts.append(f'<handoff from="{name}">\n{_neutralize(output)}\n</handoff>')
     if instructions:
-        parts.append(f'<instructions from="foreman">\n{instructions}\n</instructions>')
+        parts.append(f'<instructions from="foreman">\n{_neutralize(instructions)}\n</instructions>')
     return "\n\n".join(parts)
 
 
