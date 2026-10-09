@@ -55,7 +55,7 @@ defaults:
   model: claude-opus-5-5
   effort: medium        # low | medium | high | xhigh | max
   max_tokens: 16000
-  max_turns: 20
+  max_turns: 20         # at least 1 (also max_tokens, foreman.max_delegations)
   fallbacks: default    # server-side refusal fallback; null disables
   clear_tool_results: false  # clear old tool results in long conversations; on by default for the foreman
 

@@ -73,11 +73,35 @@ def test_clear_tool_results_from_defaults():
         {"hands": {"x.y": {"role": "A"}}, "lines": []},
         {"hands": {"": {"role": "A"}}, "lines": []},
         {"hands": {"a\n": {"role": "A"}}, "lines": []},
+        {"defaults": {"max_turns": 0}},
+        {"defaults": {"max_turns": -1}},
+        {"defaults": {"max_tokens": 0}},
+        {"defaults": {"max_tokens": -1}},
+        {"hands": {"a": {"role": "A", "max_turns": 0}}, "lines": []},
+        {"hands": {"a": {"role": "A", "max_turns": -1}}, "lines": []},
+        {"hands": {"a": {"role": "A", "max_tokens": 0}}, "lines": []},
+        {"hands": {"a": {"role": "A", "max_tokens": -1}}, "lines": []},
+        {"lines": [], "foreman": {"max_turns": 0}},
+        {"lines": [], "foreman": {"max_delegations": 0}},
+        {"lines": [], "foreman": {"max_delegations": -1}},
     ],
 )
 def test_invalid_rigs_rejected(overrides):
     with pytest.raises(ValidationError):
         make(**overrides)
+
+
+def test_minimum_limits_accepted():
+    rig = make(defaults={"max_turns": 1, "max_tokens": 1},
+               hands={"a": {"role": "A", "max_turns": 1, "max_tokens": 1}, "b": {"role": "B"}, "c": {"role": "C"}},
+               lines=[], foreman={"max_delegations": 1})
+    assert rig.foreman.max_delegations == 1
+    assert (rig.resolve("a").max_turns, rig.resolve("a").max_tokens) == (1, 1)
+
+
+def test_unset_limits_resolve_to_defaults():
+    rig = make()
+    assert (rig.resolve("a").max_turns, rig.resolve("a").max_tokens) == (20, 16000)
 
 
 def test_bad_hand_names_reported_together():
