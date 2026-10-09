@@ -32,18 +32,18 @@ Keep items small enough for one reviewed change. Add context under an item when 
   second and collide on the branch (`worktree.create` fails). If the branch already exists,
   add a `-2`, `-3` suffix the way shift ids do. Test with two roots on one repo.
   Note: with several repos, each repo may get a different suffix; `shift.branch` is the first changed repo's branch.
+- [x] **Keep secrets out of `run` subprocesses**: commands from the `run` tool inherit the
+  whole environment, including `ANTHROPIC_API_KEY`, so `uv run pytest` or any project code
+  can read it (`tools.py` `_run`, `worktree.py` `env`). Drop variables whose names look
+  secret by default (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, `ANTHROPIC_*`), with a
+  `run.env_passthrough` list in rig.yaml for names a project really needs. Document it; test
+  that a child process can't see the key.
 
 ## Backlog
 
 From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
 in priority order. Line numbers are from that review and may have moved.
 
-- [ ] **Keep secrets out of `run` subprocesses**: commands from the `run` tool inherit the
-  whole environment, including `ANTHROPIC_API_KEY`, so `uv run pytest` or any project code
-  can read it (`tools.py` `_run`, `worktree.py` `env`). Drop variables whose names look
-  secret by default (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, `ANTHROPIC_*`), with a
-  `run.env_passthrough` list in rig.yaml for names a project really needs. Document it; test
-  that a child process can't see the key.
 - [ ] **Warn when the cost limit can't work**: with a model missing from `cost.PRICES`, its
   cost is unknown and `max_cost_usd` / `--max-cost` silently stops limiting (`cost.py`).
   `rig check` and the start of `rig run` (and `rig serve`) should warn, naming the hand and

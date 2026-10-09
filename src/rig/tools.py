@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import fnmatch
 import os
 import re
 import shlex
@@ -10,7 +11,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Awaitable, Callable, Iterator
+from typing import Any, Awaitable, Callable, Iterator, Mapping
 
 from rig.spec import RunPolicy, SearchPolicy
 
@@ -180,6 +181,18 @@ def search_definition(name: str, ignored: set[str]) -> dict[str, Any]:
 # would silently become literal arguments instead of doing what the model intended.
 SHELL_CHARS = "();<>|&"
 
+# Environment variables `run` drops (matched case-insensitively) unless `run.env_passthrough` names them.
+SECRET_ENV = ("*_KEY", "*_TOKEN", "*_SECRET", "*PASSWORD*", "ANTHROPIC_*")
+
+
+def run_env(base: Mapping[str, str], passthrough: list[str]) -> dict[str, str]:
+    """A copy of `base` without variables whose names look secret, except those in `passthrough`."""
+    keep = {n.upper() for n in passthrough}
+    return {
+        k: v for k, v in base.items()
+        if k.upper() in keep or not any(fnmatch.fnmatchcase(k.upper(), p) for p in SECRET_ENV)
+    }
+
 
 class ToolError(Exception):
     pass
@@ -268,7 +281,7 @@ class Toolbox:
         self.run_policy = run_policy or RunPolicy()
         # Directory names `glob` and `search` skip.
         self.ignored = ignored_dirs(search_policy or SearchPolicy())
-        # Environment for `run` subprocesses; None inherits rig's own.
+        # Environment for `run` subprocesses; None inherits rig's own. Secrets are filtered either way.
         self.env = env
         # Progress callback: one line per built-in tool call (run-time tools log themselves).
         self.on_call = on_call
@@ -427,7 +440,7 @@ class Toolbox:
             proc = subprocess.run(
                 [exe, *argv[1:]],
                 cwd=self.workspace,
-                env=self.env,
+                env=run_env(self.env if self.env is not None else os.environ, policy.env_passthrough),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,

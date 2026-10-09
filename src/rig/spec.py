@@ -25,6 +25,8 @@ class RunPolicy(BaseModel):
     max_output: int = Field(default=20000, ge=1000)
     # With several `workspaces`: the one commands run in (and that their path arguments must stay inside).
     workspace: str | None = None
+    # Environment variables commands keep even though their names look secret, e.g. GITHUB_TOKEN.
+    env_passthrough: list[str] = Field(default_factory=list)
 
     @field_validator("allow")
     @classmethod
@@ -32,6 +34,13 @@ class RunPolicy(BaseModel):
         if any(not a.strip() for a in allow):
             raise ValueError("run.allow entries must not be empty")
         return allow
+
+    @field_validator("env_passthrough")
+    @classmethod
+    def _env_names(cls, names: list[str]) -> list[str]:
+        if any(not n.strip() for n in names):
+            raise ValueError("run.env_passthrough entries must not be empty")
+        return names
 
 
 class SearchPolicy(BaseModel):

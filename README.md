@@ -99,6 +99,7 @@ run:
   allow: ["uv run pytest", "git status", "git diff", "git log"]
   timeout: 120        # seconds per command
   max_output: 20000   # chars kept (the tail, where test summaries are)
+  env_passthrough: [GITHUB_TOKEN]   # secret-looking variables commands still get
 
 hands:
   tester:
@@ -111,6 +112,11 @@ are rejected. Arguments pointing outside the workspace are rejected too. A faili
 isn't a tool error: the hand gets `[exit code N]` and the output and decides what to do.
 Allow only what the hands need, since an allowed program can do anything it supports
 (e.g. allowing `python` allows any script).
+
+Commands get rig's environment minus variables whose names look secret: `*_KEY`,
+`*_TOKEN`, `*_SECRET`, `*PASSWORD*` and `ANTHROPIC_*` (case-insensitive), so e.g.
+`ANTHROPIC_API_KEY` never reaches test code. `env_passthrough` lists names to keep
+anyway, for projects whose tests really need one.
 
 `glob` and `search` skip dependency and build directories (`.git`, `node_modules`,
 `.venv`, `target`, `build`, `dist`, ...) and binary files. `search` in rig.yaml changes
