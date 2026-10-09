@@ -26,7 +26,8 @@ class Shift:
     dir: Path
     # Keyed by hand name in lines mode; "foreman" and "<hand>#<n>" in foreman mode.
     results: dict[str, HandResult] = field(default_factory=dict)
-    final: HandResult | None = None
+    # The hands of the last stage in lines mode, in YAML order; [foreman result] in foreman mode.
+    finals: list[HandResult] = field(default_factory=list)
     ok: bool = False
     # One per git repository the shift works in (several with `workspaces`), branch rig/<id> in each
     # (or rig/<id>-2, ... in a repo where that's already taken).
@@ -40,6 +41,11 @@ class Shift:
     prs: list[publish.PullRequest] = field(default_factory=list)
     # "<Type>: <message>" if the shift crashed, "interrupted" on Ctrl-C/cancel; None otherwise.
     error: str | None = None
+
+    @property
+    def final(self) -> HandResult | None:
+        """The last final result; see `finals` for all of them when the last stage is parallel."""
+        return self.finals[-1] if self.finals else None
 
     @property
     def worktree(self) -> worktree.Worktree | None:
@@ -243,6 +249,8 @@ def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Met
             for k, r in shift.results.items()
         },
         "totals": _totals(list(shift.results.values())),
+        # Keys of the hands whose replies are the shift's result (the last stage, or "foreman").
+        "final": [r.name for r in shift.finals],
         "prs": [pr.as_dict() for pr in shift.prs],
         "max_cost_usd": meter.limit,
         "stopped": meter.stop_reason,
@@ -278,8 +286,12 @@ async def _publish(rig: Rig, task: str, shift: Shift, on_event: Event) -> None:
     else:
         why_not = ""
     first = task.strip().splitlines()[0][:70] if task.strip() else f"shift {shift.id}"
+    if len(shift.finals) > 1:
+        result = "\n\n".join(f"## {r.name}\n\n{r.output.strip()}" for r in shift.finals)
+    else:
+        result = shift.final.output.strip() if shift.final else ""
     body = "\n\n".join(filter(None, [
-        shift.final.output.strip() if shift.final else "",
+        result,
         f"---\nShift `{shift.id}` of rig `{rig.name}` · est. cost {cost.usd(shift.meter.spent)}",
     ]))
     for wt, _ in shift.committed():
@@ -414,6 +426,7 @@ async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFact
         on_event(f"  ■ {name}  {_done(res, shift.meter)}")
         return res
 
+    last_layer: list[str] = []
     for layer in layers(list(rig.hands), edges):
         if shift.meter.stop_reason:
             on_event(f"  ✗ not starting {', '.join(layer)}: {shift.meter.message()}")
@@ -424,8 +437,9 @@ async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFact
             return
         for res in await asyncio.gather(*(run_hand(n) for n in layer)):
             record(res.name, res)
+        last_layer = layer
 
-    shift.final = list(shift.results.values())[-1]
+    shift.finals = [shift.results[n] for n in last_layer]
     shift.ok = all(r.ok for r in shift.results.values())
 
 
@@ -516,5 +530,5 @@ async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFa
     res = await worker.run(hand, build_prompt(task, {}, inputs=shift.inputs), toolbox, check=check if foreman.require else None)
     on_event(f"  ■ foreman  {_done(res, shift.meter)} · {total} delegations")
     record("foreman", res)
-    shift.final = res
+    shift.finals = [res]
     shift.ok = res.ok and not unmet_at_finish

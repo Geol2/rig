@@ -46,16 +46,17 @@ Keep items small enough for one reviewed change. Add context under an item when 
   (tool calls and results) but is never written (`hand.py`). Write it next to the output as
   `<key>.transcript.json` (SDK blocks via `model_dump()`), including for hands that errored
   or were stopped, so failed hands can be examined afterwards. Mention it in the README.
+- [x] **Final result with a parallel last stage**: in lines mode, when the last stage has
+  several hands, only the last one in YAML order becomes `shift.final` and gets printed
+  (`runner.py` `_run_lines`). Print every final-stage hand's output under its name, and have
+  `rig report` treat them all as the summary.
+  Note: shift.json `final` lists the final hands' keys; a lines shift that stops early has none.
 
 ## Backlog
 
 From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
 in priority order. Line numbers are from that review and may have moved.
 
-- [ ] **Final result with a parallel last stage**: in lines mode, when the last stage has
-  several hands, only the last one in YAML order becomes `shift.final` and gets printed
-  (`runner.py` `_run_lines`). Print every final-stage hand's output under its name, and have
-  `rig report` treat them all as the summary.
 - [ ] **Prompt tags can't be broken by their content**: task, handoff and input values are
   placed inside `<task>`, `<handoff>`, `<inputs>` tags without escaping (`runner.py`
   `build_prompt`), so content containing `</handoff>` can make the model misread the

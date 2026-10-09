@@ -32,7 +32,7 @@ if [[ "$branch" != "main" ]]; then
   exit 0
 fi
 if ! git fetch -q "$remote" main; then
-  echo "! $remote에서 받아오지 못했습니다. 지금 코드 그대로 진행합니다."
+  echo "! ${remote}에서 받아오지 못했습니다. 지금 코드 그대로 진행합니다."
   exit 0
 fi
 upstream="$(git rev-parse FETCH_HEAD)"
@@ -50,7 +50,7 @@ if git merge-base --is-ancestor HEAD "$upstream"; then
     echo "! main을 최신으로 받지 못했습니다 (추적 안 되는 파일과 겹침?). 지금 코드 그대로 진행합니다."
   fi
 elif git merge-base --is-ancestor "$upstream" HEAD; then
-  echo "✓ main이 $remote보다 앞서 있음 (아직 올리지 않은 커밋 $(git rev-list --count "$upstream"..HEAD)개)"
+  echo "✓ main이 ${remote}보다 앞서 있음 (아직 올리지 않은 커밋 $(git rev-list --count "$upstream"..HEAD)개)"
 else
   ahead="$(git rev-list --count "$upstream"..HEAD)"
   if git rebase -q "$upstream" >/dev/null 2>&1; then

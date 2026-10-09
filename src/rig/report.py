@@ -47,8 +47,12 @@ def collect(shift_dir: Path) -> dict[str, Any]:
         for f in found or []:
             rows.append({**f, "area": key.split("#")[0]})
     rows.sort(key=lambda r: (_rank(r.get("severity")), str(r.get("file", "")), _line(r.get("line"))))
-    # The final word: the foreman's reply, or the last hand to finish in lines mode.
-    final = "foreman" if "foreman" in keys else (keys[-1] if keys else None)
+    # The final word: the keys shift.json names (every last-stage hand in lines mode, or the foreman).
+    # Older shift.json files have no list: then the foreman's reply, or the last hand to finish.
+    if isinstance(summary.get("final"), list):
+        final = [k for k in summary["final"] if k in keys]
+    else:
+        final = ["foreman"] if "foreman" in keys else ([keys[-1]] if keys else [])
     return {"id": shift_dir.name, "summary": summary, "hands": hands, "findings": rows, "final": final}
 
 
@@ -165,10 +169,13 @@ def render(data: dict[str, Any], fix_link: Callable[[int], str] | None = None) -
     if s.get("ok") is False:
         meta.append('<span class="bad">incomplete</span>')
 
-    final = next((h for h in data["hands"] if h["key"] == data["final"]), None)
-    final_html = ""
-    if final and final["findings"] is None:
-        final_html = f'<section class="final"><h2>Summary <small>from {html.escape(final["key"])}</small></h2>{markdown(final["output"])}</section>'
+    by_key = {h["key"]: h for h in data["hands"]}
+    # Final hands with findings stay in the Hands list; the rest become Summary sections.
+    finals = [by_key[k] for k in data["final"] if k in by_key and by_key[k]["findings"] is None]
+    final_html = "".join(
+        f'<section class="final"><h2>Summary <small>from {html.escape(h["key"])}</small></h2>{markdown(h["output"])}</section>'
+        for h in finals
+    )
 
     table = ""
     if rows:
@@ -194,7 +201,7 @@ def render(data: dict[str, Any], fix_link: Callable[[int], str] | None = None) -
   </table></div>
 </section>"""
 
-    hand_sections = "".join(_hand(h) for h in data["hands"] if h is not final or h["findings"] is not None)
+    hand_sections = "".join(_hand(h) for h in data["hands"] if not any(h is f for f in finals))
     inputs = s.get("inputs") or {}
     inputs_html = "".join(f"<li><code>{html.escape(k)}</code> = {html.escape(str(v))}</li>" for k, v in inputs.items())
 

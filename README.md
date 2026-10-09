@@ -24,7 +24,10 @@ rig serve       # do all of the above from a local web page
 Hands run in stages. A hand starts once every hand with a line into it has finished,
 and hands with no path between them run in parallel.
 
-At the end of `rig run`, each shift prints its total tokens and an estimated USD cost.
+At the end of `rig run`, each hand of the last stage (or the foreman) has its output printed
+under its name; when the last stage runs in parallel, every one of them is printed, and a
+`publish.pr` body gets each under a `## <name>` heading. Each shift also prints its total
+tokens and an estimated USD cost.
 Both are stored in `.rig/shifts/<id>/shift.json` and shown by `rig logs`. Prices live in
 `src/rig/cost.py`; models not listed there show "n/a". A shift that crashes still writes
 `shift.json`, with the exception in an `error` field.
@@ -190,7 +193,7 @@ uv run rig -f review.rig.yaml report
 opens it in the browser (`--no-open` to only write it). It's one self-contained file:
 
 - the task, token use and cost, and the number of findings per severity
-- the final hand's reply (or the foreman's) as the summary
+- every last-stage hand's reply (or the foreman's) as the summary, one section per hand
 - every finding from hands whose output is `{"findings": [...]}` in one table, most severe
   first, filterable by severity, hand and text; each row shows `file:line`, the problem
   and the suggested fix (fields `severity`, `file`, `line`, `title`, `detail`, `suggestion`)

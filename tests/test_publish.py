@@ -162,7 +162,7 @@ class Crew:
         return HandResult(hand.name, self.verdict, "end_turn", 1)
 
 
-def shift_with(repo, verdict, monkeypatch, tmp_path):
+def shift_with(repo, verdict, monkeypatch, tmp_path, hands=None, lines=("coder -> reviewer",)):
     gh = FakeGh(checks=[[{"name": "tests", "bucket": "pass"}]])
 
     def run(args, cwd, stdin=None):
@@ -175,8 +175,8 @@ def shift_with(repo, verdict, monkeypatch, tmp_path):
     monkeypatch.setattr(publish, "run_cmd", run)
     rig = Rig.model_validate({
         "name": "t", "workspace": str(repo),
-        "hands": {"coder": {"role": "C", "tools": ["write_file"]}, "reviewer": {"role": "R"}},
-        "lines": ["coder -> reviewer"],
+        "hands": {"coder": {"role": "C", "tools": ["write_file"]}, "reviewer": {"role": "R"}, **(hands or {})},
+        "lines": list(lines),
         "publish": {"pr": True, "approver": "reviewer", "auto_merge": True, "ci_poll": 1},
     })
     events = []
@@ -196,6 +196,14 @@ def test_end_to_end_merge(repo, monkeypatch, tmp_path):
     assert gh.ran("gh", "pr", "merge")
     summary = json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))
     assert summary["prs"] == [{"repo": str(repo.resolve()), "branch": branch, "url": URL, "number": 7, "merged": True, "note": ""}]
+
+
+def test_pr_body_has_every_final_hand(repo, monkeypatch, tmp_path):
+    repo, _ = repo
+    shift, gh, events = shift_with(repo, "LGTM", monkeypatch, tmp_path, hands={"tester": {"role": "T"}},
+                                   lines=["coder -> reviewer", "coder -> tester"])
+    (create,) = gh.ran("gh", "pr", "create")
+    assert create[1].startswith("## reviewer\n\nLGTM\n\n## tester\n\nLGTM\n\n---\nShift ")
 
 
 def test_end_to_end_reviewer_did_not_approve(repo, monkeypatch, tmp_path):

@@ -143,6 +143,18 @@ def test_run_crash_exits_1_without_traceback(tmp_path, monkeypatch, capsys):
     assert json.loads((shift_dir / "shift.json").read_text(encoding="utf-8"))["error"] == "RuntimeError: boom"
 
 
+def test_run_prints_every_last_stage_hand(tmp_path, monkeypatch, capsys):
+    (tmp_path / "rig.yaml").write_text(
+        "name: t\nhands:\n  a: {role: A}\n  b: {role: B}\n  c: {role: C}\nlines: ['a -> b', 'a -> c']\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    main(["run", "--dry", "-q", "go"])
+    out = capsys.readouterr().out
+    assert "\n── b ──\n" in out and "\n── c ──\n" in out
+    assert "── a ──" not in out
+    assert out.index("── b ──") < out.index("── c ──")
+
+
 def test_logs_shows_worktree_branch(tmp_path, monkeypatch, capsys):
     _shift(tmp_path, "20261008-100000", {"mode": "lines", "ok": True, "task": "plain run", "branch": None})
     _shift(tmp_path, "20261008-110000", {"mode": "lines", "ok": True, "task": "worktree run", "branch": "rig/20261008-110000"})
