@@ -280,6 +280,22 @@ class Rig(BaseModel):
             edges.extend(zip(names, names[1:]))
         return edges
 
+    def hand_warnings(self) -> list[str]:
+        """Warnings about hands that can never run, or whose output no other hand gets."""
+        if self.foreman:
+            if not self.foreman.crew:
+                return []
+            off = [n for n in self.hands if n not in self.foreman.crew]
+            return [f"⚠ hands not on foreman.crew never run: {', '.join(off)}; add them to the crew or remove them"] if off else []
+        if not self.lines:
+            return []
+        on_lines = {n for edge in self.edges for n in edge}
+        alone = [n for n in self.hands if n not in on_lines]
+        if not alone:
+            return []
+        return [f"⚠ hands on no line run alone in stage 1 and no hand gets their output: {', '.join(alone)}; "
+                "add them to a line or remove them"]
+
     @model_validator(mode="after")
     def _check_lines(self) -> Rig:
         if not self.hands:
@@ -318,6 +334,9 @@ class Rig(BaseModel):
             missing = set(self.foreman.require) - set(self.crew)
             if missing:
                 raise ValueError(f"foreman.require lists hands not on the crew: {sorted(missing)}")
+            if self.publish.approver and self.publish.approver not in self.crew:
+                raise ValueError(f"publish.approver {self.publish.approver!r} isn't on foreman.crew, so it never runs "
+                                 "and can't approve; add it to the crew")
         for line in self.lines:
             names = [n.strip() for n in line.split("->")]
             if len(names) < 2 or any(not n for n in names):

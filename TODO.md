@@ -108,12 +108,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   and have `_load_or_exit` say "save the file as UTF-8". The serve page should show these
   errors too. Tests in `test_cli.py` for both cases.
   Note: spec.load raises RigFileError (duplicate key with its path and both lines, aliases included; non-UTF-8 with byte/line/column and "save the file as UTF-8"); `<<` merge overrides aren't duplicates; a UTF-8 BOM is fine; rig serve lists undecodable rig files with the error.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **Catch hands that never run, and an approver that can't approve**: in foreman mode,
+- [x] **Catch hands that never run, and an approver that can't approve**: in foreman mode,
   hands not in `foreman.crew` never run, and `publish.approver` only has to be one of
   `hands` (`spec.py` `_check_lines`). An approver left off the crew never replies, so
   `auto_merge` can never happen and nothing says why until a whole shift has been paid
@@ -121,6 +116,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   its output. Make an approver outside `rig.models()` a validation error. Have `rig check`
   (and the start of `rig run`) warn about hands that aren't on the crew, or aren't on any
   line when the rig has `lines`. Test the error and the warnings.
+  Note: in foreman mode the approver must be on the crew (validation error); `Rig.hand_warnings()` (hands off the crew / on no line) is printed before the price warnings in `rig check` and at the start of `rig run`.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **`rig logs` shows status and order correctly**: the list prints `incomplete` for a shift
   that is still running (no shift.json yet) and for one that crashed or hit the cost limit
   alike (`cli.py` `cmd_logs`). `rig logs <id>` prints `*.md` in name order, so `coder-10`

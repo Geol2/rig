@@ -84,6 +84,7 @@ def test_clear_tool_results_from_defaults():
         {"lines": [], "foreman": {"max_turns": 0}},
         {"lines": [], "foreman": {"max_delegations": 0}},
         {"lines": [], "foreman": {"max_delegations": -1}},
+        {"lines": [], "foreman": {"crew": ["a"]}, "publish": {"approver": "b"}},
     ],
 )
 def test_invalid_rigs_rejected(overrides):
@@ -124,7 +125,58 @@ def test_plain_hand_names_accepted():
 @pytest.mark.parametrize("path", [*sorted((Path(__file__).parents[1] / "src" / "rig").glob("template*.yaml")),
                                   Path(__file__).parents[1] / "self.rig.yaml"], ids=lambda p: p.name)
 def test_shipped_rigs_load(path):
-    assert load(path).hands
+    rig = load(path)
+    assert rig.hands
+    assert rig.hand_warnings() == []
+
+
+def test_approver_off_crew_rejected():
+    with pytest.raises(ValidationError) as excinfo:
+        make(lines=[], foreman={"crew": ["a", "c"]}, publish={"approver": "b"})
+    assert ("publish.approver 'b' isn't on foreman.crew, so it never runs and can't approve; "
+            "add it to the crew") in str(excinfo.value)
+
+
+def test_approver_on_crew_accepted():
+    assert make(lines=[], foreman={"crew": ["a", "b"]}, publish={"approver": "b"}).publish.approver == "b"
+    # With no explicit crew every hand is on it.
+    assert make(lines=[], foreman={}, publish={"approver": "b"}).publish.approver == "b"
+
+
+def test_hand_warnings_hands_off_crew():
+    rig = make(hands={"c": {"role": "C"}, "a": {"role": "A"}, "b": {"role": "B"}}, lines=[], foreman={"crew": ["a"]})
+    assert rig.hand_warnings() == ["⚠ hands not on foreman.crew never run: c, b; add them to the crew or remove them"]
+
+
+def test_hand_warnings_foreman_without_crew():
+    assert make(lines=[], foreman={}).hand_warnings() == []
+
+
+def test_hand_warnings_hand_on_no_line():
+    rig = make(lines=["a -> b"])
+    assert rig.hand_warnings() == ["⚠ hands on no line run alone in stage 1 and no hand gets their output: c; "
+                                   "add them to a line or remove them"]
+
+
+def test_hand_warnings_line_without_spaces():
+    rig = make(lines=["a->b"])
+    assert rig.hand_warnings() == ["⚠ hands on no line run alone in stage 1 and no hand gets their output: c; "
+                                   "add them to a line or remove them"]
+
+
+def test_hand_warnings_none_when_all_on_lines_or_no_lines():
+    assert make().hand_warnings() == []
+    assert make(lines=[]).hand_warnings() == []
+
+
+def test_shift_warns_about_hands_first(tmp_path):
+    rig = make(hands={"a": {"role": "A", "model": "claude-opus-9"}, "b": {"role": "B"}, "c": {"role": "C"}},
+               lines=["a -> b"])
+    events = []
+    asyncio.run(run_shift(rig, "do it", EchoWorker(), root=tmp_path, on_event=events.append))
+    assert events[0].startswith("shift ")
+    assert events[1].startswith("⚠ hands on no line run alone in stage 1 and no hand gets their output: c;")
+    assert events[2].startswith("⚠ no price for model 'claude-opus-9' (hands: a)")
 
 
 @pytest.mark.parametrize(
