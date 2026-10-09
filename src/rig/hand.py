@@ -42,6 +42,27 @@ class HandResult:
         # Turns served by a server-side fallback model are still priced at `model`.
         return cost.cost(self.model, self.input_tokens, self.output_tokens, self.cache_read_tokens, self.cache_write_tokens)
 
+    def transcript_json(self) -> list[Any]:
+        """The transcript as plain JSON values (SDK blocks via model_dump)."""
+        return _jsonable(self.transcript)
+
+
+def _jsonable(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if hasattr(value, "model_dump"):
+        try:
+            return value.model_dump(mode="json")
+        except Exception:
+            pass
+    if hasattr(value, "__dict__"):
+        return _jsonable(vars(value))
+    return str(value)
+
 
 # What each refusal category (response.stop_details.category) means, and what to do about it.
 REFUSAL_HELP = {

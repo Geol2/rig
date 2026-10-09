@@ -169,7 +169,9 @@ async def run_shift(
 
         def record(key: str, res: HandResult) -> None:
             shift.results[key] = res
-            (shift.dir / f"{key.replace('#', '-')}.md").write_text(res.output, encoding="utf-8")
+            stem = key.replace('#', '-')
+            (shift.dir / f"{stem}.md").write_text(res.output, encoding="utf-8")
+            _write_transcript(shift.dir / f"{stem}.transcript.json", res)
             if res.stop_reason == "refusal":
                 # Say which hand was declined and why, right in the progress output.
                 on_event(f"  ✗ {key}: {res.output}")
@@ -372,6 +374,22 @@ def _done(res: HandResult, meter: cost.Meter | None = None) -> str:
         if meter.limit is not None:
             total += f" of {cost.usd(meter.limit)}"
     return f"[{res.stop_reason}, {res.turns} turns, {res.input_tokens}/{res.output_tokens} tok{cached}]{total}"
+
+
+def _write_transcript(path: Path, res: HandResult) -> None:
+    """Save the hand's full conversation; a transcript that won't serialize must not crash the shift."""
+    try:
+        text = json.dumps(res.transcript_json(), ensure_ascii=False, indent=2)
+    except Exception:
+        try:
+            text = json.dumps(res.transcript, ensure_ascii=False, indent=2, default=str)
+        except Exception:
+            return
+    try:
+        # errors="replace": a lone surrogate (e.g. an undecodable filename) becomes "?" instead of raising.
+        path.write_text(text, encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 async def _guarded_run(worker: Worker, hand, label: str, prompt: str, toolbox: Toolbox, on_event: Event) -> HandResult:
