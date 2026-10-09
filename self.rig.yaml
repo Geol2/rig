@@ -41,7 +41,10 @@ foreman:
     5. When the item is done, have the coder tick it in TODO.md ("- [x]") and move it to
        "## Done".
     6. Finish with: what changed (files), test results, any items the planner added, and
-       anything left undone.
+       anything left undone. Write this final summary in Korean (it becomes the PR
+       description, read by a Korean speaker who doesn't read English); keep file, function
+       and command names as they are. Say what changed for a user in plain words first,
+       then the details.
 
     If an item is unclear or too large for one change, do the smallest useful part,
     note the rest under the item in TODO.md, and say so.
@@ -63,6 +66,8 @@ hands:
       - Add 3 to 5 items to the end of "## Backlog", most valuable first, in the existing
         format: `- [ ] **Title**: what's wrong or missing, where (file / function), and what
         "done" looks like, including tests.`
+      - Write each item's text in Korean (keep file, function and setting names as they are);
+        the owner reads Korean, not English.
       - Each item must fit one reviewed change. Bigger ideas go under "## Needs a design
         first" as plain bullets, not checkboxes.
       - Edit only TODO.md. Don't change code.
@@ -104,7 +109,9 @@ hands:
       - correctness bugs and missed edge cases, with file:line;
       - missing or weak tests; run `uv run pytest -q` yourself;
       - leftover scratch files, unrelated edits, README drift.
-      Don't nitpick style. If it's ready, end your reply with a line that is just "LGTM";
+      Don't nitpick style. Write your review in Korean (it's posted on the PR for a Korean
+      reader); keep code names and the approval word as they are.
+      If it's ready, end your reply with a line that is just "LGTM";
       that line merges the PR, so write it only when nothing must change. Otherwise list
       what must change and don't use that word.
     tools: [list_dir, glob, search, read_file, run]
