@@ -73,6 +73,8 @@ lines:
   - planner -> coder -> reviewer
 ```
 
+Hand names (the keys under `hands:`) may contain only letters (Korean included), digits, `-` and `_`; no spaces, dots, slashes or `#`.
+
 Each hand receives the task plus its upstream hands' outputs:
 
 ```
