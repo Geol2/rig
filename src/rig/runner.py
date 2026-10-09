@@ -14,6 +14,7 @@ from typing import Any, Callable
 from rig import cost, publish, worktree
 from rig.graph import layers, upstreams
 from rig.hand import HandResult, Worker
+from rig.report import findings_of
 from rig.spec import Publish, Rig
 from rig.tools import Toolbox, ToolError
 
@@ -260,6 +261,8 @@ def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Met
             for k, r in shift.results.items()
         },
         "totals": _totals(list(shift.results.values())),
+        # Findings across all hands' JSON outputs, so the serve history needn't re-read every output.
+        "findings": sum(len(findings_of(r.output) or []) for r in shift.results.values()),
         # Keys of the hands whose replies are the shift's result (the last stage, or "foreman").
         "final": [r.name for r in shift.finals],
         "prs": [pr.as_dict() for pr in shift.prs],

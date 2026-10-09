@@ -228,7 +228,9 @@ class App:
             s = json.loads((d / "shift.json").read_text(encoding="utf-8")) if (d / "shift.json").exists() else {}
             live = _live(d)  # started here or by `rig run` in a terminal
             task = (s.get("task") or (live or {}).get("task") or "").strip().splitlines()
-            findings = sum(len(h["findings"] or []) for h in report.collect(d)["hands"]) if s else 0
+            findings = s.get("findings")
+            if not isinstance(findings, int):  # older shift.json: count from the outputs
+                findings = sum(len(h["findings"] or []) for h in report.collect(d)["hands"]) if s else 0
             out.append({
                 "id": d.name, "rig": s.get("rig") or (live or {}).get("rig", ""), "ok": s.get("ok"),
                 "task": task[0] if task else "",

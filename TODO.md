@@ -65,15 +65,16 @@ Keep items small enough for one reviewed change. Add context under an item when 
   structure. Neutralize closing tags inside values (e.g. `</handoff>` → `<\/handoff>`) and
   test it.
   Note: closing tags of task/inputs/input/handoff/instructions become `<\/tag>` (case-insensitive, whole names only); opening tags are left as-is.
+- [x] **Faster run history in `rig serve`**: the history list re-reads and re-parses every
+  past shift's outputs on each request to count findings (`serve.py` `shifts`). Store the
+  findings count in shift.json when a shift ends and read only shift.json in the list.
+  Note: older shift.json files without `findings` fall back to counting from the outputs.
 
 ## Backlog
 
 From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
 in priority order. Line numbers are from that review and may have moved.
 
-- [ ] **Faster run history in `rig serve`**: the history list re-reads and re-parses every
-  past shift's outputs on each request to count findings (`serve.py` `shifts`). Store the
-  findings count in shift.json when a shift ends and read only shift.json in the list.
 - [ ] **Structured progress events**: `rig serve` gets the shift id by matching the text of
   the first progress line with a regex (`serve.py` `Run.log`), which breaks if the wording
   changes. Have `run_shift` also report structured events (at least shift started with its

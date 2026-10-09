@@ -30,7 +30,8 @@ under its name; when the last stage runs in parallel, every one of them is print
 tokens and an estimated USD cost.
 Both are stored in `.rig/shifts/<id>/shift.json` and shown by `rig logs`. Prices live in
 `src/rig/cost.py`; models not listed there show "n/a". A shift that crashes still writes
-`shift.json`, with the exception in an `error` field.
+`shift.json`, with the exception in an `error` field. `shift.json` also keeps the total
+number of findings (see [Reports](#reports)) as `findings`, which `rig serve`'s history shows.
 
 Each hand's output is saved as `<hand>.md` in the shift directory, and its full
 conversation (tool calls and results) as `<hand>.transcript.json` next to it, also for
