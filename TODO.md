@@ -77,15 +77,15 @@ Keep items small enough for one reviewed change. Add context under an item when 
 - [x] **CI on Python 3.11 too**: `requires-python = ">=3.11"` but CI only ran 3.13. The test
   matrix now runs 3.11 and 3.13 on Ubuntu and Windows.
   Note: `tests/test_foreman.py` had a backslash inside an f-string expression (a SyntaxError before 3.12); no other 3.12+ constructs were found. Ruff was split out (see "Needs a design first") because it needs `uv lock` and running ruff, which hands can't do.
+- [x] **Worker tests for the missing paths**: `tests/test_worker.py` doesn't cover
+  `pause_turn` continuing the loop, a model without a price (cost `None`, meter `unpriced`),
+  or `max_tokens` ending a hand. Add those.
 
 ## Backlog
 
 From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
 in priority order. Line numbers are from that review and may have moved.
 
-- [ ] **Worker tests for the missing paths**: `tests/test_worker.py` doesn't cover
-  `pause_turn` continuing the loop, a model without a price (cost `None`, meter `unpriced`),
-  or `max_tokens` ending a hand. Add those.
 - [ ] **Clear old tool results in long hands**: conversations only grow; a long hand (most of
   all a foreman collecting delegate results) eventually exceeds the context window and ends
   with `api_error`, losing its work. Turn on the API's tool-result clearing (context

@@ -5,6 +5,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 
+from rig import cost
 from rig.hand import FALLBACK_BETA, ClaudeWorker, _call
 from rig.spec import Rig
 from rig.tools import Toolbox
@@ -101,6 +102,52 @@ def test_finish_check_continues_the_loop(tmp_path):
     res = asyncio.run(ClaudeWorker(client).run(h, "go", Toolbox(tmp_path, h.tools), check=lambda: next(objections)))
     assert res.output == "final" and res.turns == 2
     assert client.calls[1]["messages"][-1] == {"role": "user", "content": "review first"}
+
+
+def test_pause_turn_continues_the_loop(tmp_path):
+    paused = response("pause_turn", block("text", text="partial"))
+    client = FakeClient([paused, response("end_turn", block("text", text="done"))])
+    h = hand()
+    res = asyncio.run(ClaudeWorker(client).run(h, "go", Toolbox(tmp_path, h.tools)))
+    assert res.ok and res.output == "done" and res.turns == 2
+    assert res.input_tokens == 20 and res.output_tokens == 10
+    assert len(client.calls) == 2
+    # The paused turn is resent as-is; no user message follows it.
+    last = client.calls[1]["messages"][-1]
+    assert last["role"] == "assistant" and last["content"] == paused.content
+
+
+def test_unpriced_model_marks_meter(tmp_path):
+    h = hand().model_copy(update={"model": "claude-unknown-9"})
+    meter = cost.Meter(limit=1.0)
+    client = FakeClient([response("end_turn", block("text", text="ok"))])
+    res = asyncio.run(ClaudeWorker(client, meter=meter).run(h, "go", Toolbox(tmp_path, h.tools)))
+    assert res.ok and res.model == "claude-unknown-9" and res.cost_usd is None
+    assert meter.unpriced is True and meter.spent == 0
+    assert meter.stop_reason is None
+
+
+def test_priced_model_counts_toward_meter(tmp_path):
+    h = hand()
+    meter = cost.Meter(limit=1.0)
+    client = FakeClient([response("end_turn", block("text", text="ok"))])
+    res = asyncio.run(ClaudeWorker(client, meter=meter).run(h, "go", Toolbox(tmp_path, h.tools)))
+    assert meter.unpriced is False and meter.spent > 0
+    assert res.cost_usd == pytest.approx(meter.spent)
+
+
+def test_max_tokens_ends_hand(tmp_path):
+    client = FakeClient([response("max_tokens", block("text", text="cut "), block("text", text="off"))])
+    checked = []
+    h = hand()
+    res = asyncio.run(ClaudeWorker(client).run(
+        h, "go", Toolbox(tmp_path, h.tools), check=lambda: checked.append(True) or "should not be used",
+    ))
+    assert res.stop_reason == "max_tokens" and not res.ok
+    assert res.output == "cut off" and res.turns == 1
+    assert len(client.calls) == 1
+    # The finish check only runs on end_turn.
+    assert checked == []
 
 
 def test_unexpected_tool_exception_is_a_tool_error(tmp_path, monkeypatch):
