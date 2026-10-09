@@ -149,6 +149,20 @@ Keep items small enough for one reviewed change. Add context under an item when 
   폴더가 섞여 있어도 `rig logs`, `rig logs <id>`, `App.shifts()`, `rig report`가 동작하는지, 그리고
   `_write_summary`가 임시 파일을 남기지 않는지 테스트.
   Note: `_write_summary` writes `shift.json.tmp` then `os.replace`s it (removed on failure); `report.read_summary` (used by `rig logs`, `rig report`, `App.shifts`, `App.shift_log`) returns `{}` plus a reason for a broken file; `rig logs` shows `unreadable` and the detail view starts with "✗ cannot read shift.json (…); showing hand outputs only". The serve log viewer pill still shows 완료 for `ok: null` (serve.py, `s.ok === false ? 'incomplete' : 'done'`) — a separate fix.
+- [x] **중단된 shift 이어 하기: `rig run --resume <shift-id|last>`**: 지금은 shift가 중간에 멈추면
+  (Ctrl+C, 비용 상한, 에러) `runner.py` `run_shift`의 `finally`가 hand들이 쓴 내용을 `rig/<id>` 브랜치에
+  커밋하고 shift.json에 `error`/`stopped`를 남기지만, 다음 실행은 그걸 쓰지 않고 base 브랜치에서 같은 일을
+  처음부터 다시 합니다(비용 중복, 브랜치만 쌓임). `--resume`을 주면: 그 shift의 shift.json에서 task·inputs·
+  브랜치(`worktrees[].branch`, 커밋이 있었던 것)를 읽고, base 대신 **그 브랜치 끝에서** 새 worktree를 만들어
+  새 shift로 실행합니다(새 shift id, shift.json에 `resumed_from: <id>`). 이어 하는 hand(foreman 모드면
+  foreman, lines 모드면 첫 stage)의 프롬프트 앞에 `<resumed>` 블록으로 "이전 실행이 중단됨(이유), 이전 shift의
+  hand별 결과 요약(각 `<hand>.md` 앞부분), 브랜치에 이미 있는 변경(`git diff --stat base..branch`)"을 넣고
+  "이미 된 부분은 다시 하지 말고 남은 부분만 마무리"라고 지시합니다. 끝난(ok) shift나 브랜치가 없는 shift를
+  주면 이유를 말하고 종료. `worktree.py`에 기존 브랜치에서 worktree를 만드는 경로가 필요합니다(새 브랜치
+  이름은 지금처럼 `rig/<새 id>`, 시작점만 다름). README에 한 단락. 완료 기준: `tests/`에 Ctrl+C로 끊긴
+  shift(가짜 worker로 KeyboardInterrupt)를 `--resume last`로 이어 받아 새 worktree가 이전 브랜치 커밋을
+  포함하고, 프롬프트에 `<resumed>`가 들어가고, `resumed_from`이 기록되는 테스트; ok인 shift는 거부되는 테스트.
+  Note: the resumed worktree starts at the old branch's tip but keeps the old shift's base (`worktree.create(start=, base=)`), so diff/PR cover both runs; `worktree.finish` keeps a branch with no new changes when it carries commits past its base; `--resume` refuses a task argument or `-i` (task and inputs come from the old shift.json); `<resumed>` closing tags are neutralized too. The `rig serve` page has no resume button yet.
 
 ## Backlog
 

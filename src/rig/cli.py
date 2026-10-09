@@ -83,27 +83,41 @@ def _parse_inputs(pairs: list[str]) -> dict[str, str]:
 
 def cmd_run(args: argparse.Namespace) -> None:
     from rig.hand import ClaudeWorker, EchoWorker
-    from rig.runner import run_shift
+    from rig.runner import ResumeError, load_resume, run_shift
+    from rig.worktree import GitError
 
+    if args.resume and (args.task is not None or args.input):
+        sys.exit("rig: --resume reuses the old shift's task and inputs; drop the task argument and -i")
     path = Path(args.file)
     rig = _load_or_exit(path)
     _check_workspace(rig, path)
     if args.max_cost is not None and args.max_cost <= 0:
         sys.exit("rig: --max-cost must be more than 0")
-    inputs = _parse_inputs(args.input)
+    resume = None
+    if args.resume:
+        try:
+            resume = load_resume(path.resolve().parent, args.resume, rig)
+        except (ResumeError, GitError) as e:
+            sys.exit(f"rig: {e}")
+        inputs = resume.inputs
+    else:
+        inputs = _parse_inputs(args.input)
     try:
         rig.resolve_inputs(inputs)  # fail before reading stdin or starting the shift
     except InputError as e:
         sys.exit(f"rig: {e}")
-    task = args.task if args.task is not None else sys.stdin.read()
+    if resume:
+        task = resume.task
+    else:
+        task = args.task if args.task is not None else sys.stdin.read()
     if not task.strip():
         sys.exit("rig: empty task (pass it as an argument or on stdin)")
-    from rig.worktree import GitError
 
     worker = EchoWorker() if args.dry else ClaudeWorker()
     try:
         shift = asyncio.run(run_shift(rig, task, worker, root=path.resolve().parent, use_worktree=args.worktree,
-                                      verbose=not args.quiet, inputs=inputs, meter=Meter(args.max_cost)))
+                                      verbose=not args.quiet, inputs=inputs, meter=Meter(args.max_cost),
+                                      resume=resume))
     except GitError as e:
         sys.exit(f"rig: {e}")
     for r in shift.finals:
@@ -132,13 +146,9 @@ def _status(summary: dict, running: bool, unreadable: bool = False) -> str:
 
 
 def _stop_line(summary: dict) -> str:
-    if summary["stopped"] != "budget":
-        return "✗ stopped: stopped by user"
-    spent = usd((summary.get("totals") or {}).get("cost_usd"))
-    limit = summary.get("max_cost_usd")
-    if limit is None:
-        return f"✗ stopped: cost limit reached ({spent} spent)"
-    return f"✗ stopped: cost limit {usd(limit)} reached ({spent} spent)"
+    from rig.report import stop_text
+
+    return f"✗ stopped: {stop_text(summary)}"
 
 
 def _natural(name: str) -> list:
@@ -182,6 +192,8 @@ def cmd_logs(args: argparse.Namespace) -> None:
         sys.exit(f"rig: no shift {args.shift}")
     summary, reason = read_summary(shift)
     head = []
+    if summary.get("resumed_from"):
+        head.append(f"↻ resumed from {summary['resumed_from']}")
     if reason is not None:
         head.append(f"✗ cannot read shift.json ({reason}); showing hand outputs only")
     if summary.get("error"):
@@ -253,6 +265,9 @@ def main(argv: list[str] | None = None) -> None:
                    help="stop once the shift's estimated cost reaches this (overrides max_cost_usd)")
     s.add_argument("-i", "--input", action="append", default=[], metavar="NAME=VALUE",
                    help="value for an input declared under `inputs` (repeatable)")
+    s.add_argument("--resume", metavar="SHIFT",
+                   help="continue a stopped or failed shift (`last` or a shift id) on a new branch from its branch; "
+                        "task and inputs come from it")
     s.set_defaults(func=cmd_run)
 
     s = sub.add_parser("logs", help="list shifts, or show one (`last` or a shift id)")

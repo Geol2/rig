@@ -43,6 +43,17 @@ def read_summary(shift_dir: Path) -> tuple[dict[str, Any], str | None]:
     return data, None
 
 
+def stop_text(summary: dict[str, Any]) -> str:
+    """Why a shift with `stopped` set in its shift.json stopped, e.g. "cost limit $1.00 reached ($1.02 spent)"."""
+    if summary.get("stopped") != "budget":
+        return "stopped by user"
+    spent = usd((summary.get("totals") or {}).get("cost_usd"))
+    limit = summary.get("max_cost_usd")
+    if limit is None:
+        return f"cost limit reached ({spent} spent)"
+    return f"cost limit {usd(limit)} reached ({spent} spent)"
+
+
 def collect(shift_dir: Path) -> dict[str, Any]:
     """Everything the page shows, read from a shift directory."""
     summary, _ = read_summary(shift_dir)

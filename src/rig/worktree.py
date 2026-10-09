@@ -128,11 +128,17 @@ def newest_start(repo: Path, remote: str, branch: str) -> tuple[str, str]:
     return head, f"! local {branch} and {remote}/{branch} have diverged; starting from local {branch}"
 
 
-def create(workspace: Path, dest: Path, branch: str, start: str | None = None) -> Worktree:
+def create(workspace: Path, dest: Path, branch: str, start: str | None = None, base: str | None = None) -> Worktree:
     """A new worktree at `dest` on a new branch named `branch` (or `branch-2`, ... if taken),
-    from `start` (a commit) or else the repo's HEAD."""
+    from `start` (a commit or branch name) or else the repo's HEAD.
+
+    `base` is the commit the work is measured from (`git diff base..branch`, the PR); it defaults
+    to the start commit. A resumed shift starts at the old branch's tip but keeps the old base,
+    so its diff covers the earlier shift's work too.
+    """
     repo = repo_of(workspace)
-    base = start or git("rev-parse", "HEAD", cwd=repo).strip()
+    start = _commit_of(start or "HEAD", repo)
+    base = base or start
     dirty = bool(git("status", "--porcelain", cwd=repo).strip())
     dest.parent.mkdir(parents=True, exist_ok=True)
     base_branch = current_branch(repo)
@@ -143,7 +149,7 @@ def create(workspace: Path, dest: Path, branch: str, start: str | None = None) -
         if _branch_exists(repo, name):
             continue
         try:
-            git("branch", name, base, cwd=repo)
+            git("branch", name, start, cwd=repo)
         except GitError:
             if _branch_exists(repo, name):
                 continue
@@ -155,6 +161,10 @@ def create(workspace: Path, dest: Path, branch: str, start: str | None = None) -
             raise
         return Worktree(repo=repo, path=dest.resolve(), branch=name, base=base, dirty=dirty, base_branch=base_branch)
     raise GitError(f"no free branch name for {branch} after {MAX_BRANCH_TRIES} tries")
+
+
+def _commit_of(rev: str, cwd: Path, env: Mapping[str, str] | None = None) -> str:
+    return git("rev-parse", "--verify", f"{rev}^{{commit}}", cwd=cwd, env=env).strip()
 
 
 def discard(wt: Worktree) -> None:
@@ -175,17 +185,19 @@ class Outcome:
 def finish(wt: Worktree, message: str) -> Outcome:
     """Commit everything the shift changed onto the branch, then remove the worktree.
 
-    No changes: the branch is deleted too. If committing fails, the worktree is kept
-    so nothing is lost.
+    No changes: the branch is deleted too, unless it already carries commits past `base`
+    (a resumed shift's branch holds the earlier shift's work). If committing fails, the
+    worktree is kept so nothing is lost.
     """
     env = wt.env
     try:
         git("add", "-A", cwd=wt.path, env=env)
-        if not git("status", "--porcelain", cwd=wt.path, env=env).strip():
+        if git("status", "--porcelain", cwd=wt.path, env=env).strip():
+            git("commit", "-q", "-m", message, cwd=wt.path, env=env)
+        elif _commit_of("HEAD", wt.path, env) == _commit_of(wt.base, wt.repo):
             _remove(wt)
             git("branch", "-D", wt.branch, cwd=wt.repo)
             return Outcome(changed=False, commit=None, stat="", kept_at=None, error=None)
-        git("commit", "-q", "-m", message, cwd=wt.path, env=env)
         commit = git("rev-parse", "--short", "HEAD", cwd=wt.path, env=env).strip()
     except GitError as e:
         # Leave the worktree as is so nothing the hands wrote is lost.
