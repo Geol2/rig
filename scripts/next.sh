@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # One command for working on rig with rig: update, make sure the web page is up, run.
 #
-#   scripts/next.sh                    # the next item in TODO.md
+#   scripts/next.sh                    # the next item in TODO.md, by name (scripts/next-task.sh)
 #   scripts/next.sh "fix the typo in README"
 #   MAX_COST=5 scripts/next.sh         # cost limit in USD (default 3)
 #   PORT=8001 scripts/next.sh          # rig serve port (default 8000)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-task="${*:-Do the next item in TODO.md}"
 port="${PORT:-8000}"
 log=".rig/serve.log"
 
@@ -21,6 +20,8 @@ fi
 #    works around conflicts; see sync-main.sh). Shifts start from the newest of local and
 #    remote main anyway (publish.sync); this is for rig itself.
 scripts/sync-main.sh
+# The task: what was passed, or else the next TODO.md item by name (read after the update).
+if [[ $# -gt 0 ]]; then task="$*"; else task="$(scripts/next-task.sh)"; fi
 # Dependencies from the lockfile, wheels only (no build scripts run); rig itself runs from src/.
 # Relative on purpose: hands' commands inherit it, and in a worktree it means that worktree's src/.
 uv sync -q --locked --no-build --no-install-project
@@ -42,5 +43,5 @@ else
 fi
 
 # 3. Run. rig makes a branch, opens the PR, and merges it when the review and CI pass.
-echo "▶ $task"
+echo "▶ $(head -n 1 <<<"$task")"
 exec uv run -q --no-sync python -m rig -f self.rig.yaml run --max-cost "${MAX_COST:-3}" "$task"
