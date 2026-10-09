@@ -1,8 +1,11 @@
-"""scripts/sync-main.sh against real repositories: a bare remote and a clone of it."""
+"""scripts/sync-main.sh against real repositories: a bare remote and a clone of it; auto.sh,
+next-task.sh, resume-target.py and next.sh."""
 
+import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -209,3 +212,162 @@ def test_next_task_with_an_empty_backlog_asks_the_planner(tmp_path):
 def test_next_task_without_a_todo_file(tmp_path):
     out = subprocess.run(["bash", str(NEXT_TASK), str(tmp_path / "missing.md")], capture_output=True, text=True)
     assert out.returncode == 0 and out.stdout.startswith("TODO 새 항목 기획")
+
+
+SCRIPTS = Path(__file__).parent.parent / "scripts"
+RESUME_TARGET = SCRIPTS / "resume-target.py"
+TASK = "TODO 항목 처리: x"
+
+
+@pytest.fixture
+def rig_repo(repo):
+    """The `repo` fixture with a rig.yaml whose workspace is the repo itself."""
+    (repo / "rig.yaml").write_text(
+        "name: t\nworkspace: .\nhands:\n  coder:\n    role: Code.\n    tools: [write_file]\n", encoding="utf-8")
+    (repo / ".gitignore").write_text(".rig/\n", encoding="utf-8")
+    return repo
+
+
+def stopped_shift(repo, shift_id, task=TASK, resumed_from=None, branch=True, **summary):
+    """A shift folder like one `rig run --worktree` leaves when interrupted, with commit on rig/<id>."""
+    base = git(repo, "rev-parse", "main")
+    sha = base
+    if branch:
+        tree = git(repo, "rev-parse", "main^{tree}")
+        sha = git(repo, "commit-tree", tree, "-p", base, "-m", f"rig: {shift_id}")
+        git(repo, "update-ref", f"refs/heads/rig/{shift_id}", sha)
+    data = {"rig": "t", "task": task, "ok": False, "error": "interrupted", "resumed_from": resumed_from,
+            "worktrees": [{"repo": str(repo), "branch": f"rig/{shift_id}", "base": base, "commit": sha,
+                           "changed": True, "kept_at": None}],
+            "hands": {}, **summary}
+    folder = repo / ".rig" / "shifts" / shift_id
+    folder.mkdir(parents=True)
+    (folder / "shift.json").write_text(json.dumps(data), encoding="utf-8")
+
+
+def resume_target(repo, task=TASK):
+    out = subprocess.run([sys.executable, str(RESUME_TARGET), str(repo / "rig.yaml"), task],
+                         capture_output=True, text=True, encoding="utf-8",
+                         env={**os.environ, "PYTHONPATH": str(SCRIPTS.parent / "src")})
+    assert out.returncode == 0, out.stderr
+    return out.stdout, out.stderr
+
+
+def test_resume_target_picks_up_a_stopped_shift(rig_repo):
+    stopped_shift(rig_repo, "20260101-000000")
+    assert resume_target(rig_repo, f"  {TASK}\n") == ("20260101-000000\n", "")
+
+
+def test_resume_target_picks_up_a_shift_resumed_once(rig_repo):
+    stopped_shift(rig_repo, "20260101-000000")
+    stopped_shift(rig_repo, "20260101-000001", resumed_from="20260101-000000")
+    assert resume_target(rig_repo) == ("20260101-000001\n", "")
+
+
+def test_resume_target_starts_afresh_for_another_task(rig_repo):
+    stopped_shift(rig_repo, "20260101-000000", task="something else")
+    assert resume_target(rig_repo) == ("", "")
+
+
+def test_resume_target_starts_afresh_after_an_ok_shift(rig_repo):
+    stopped_shift(rig_repo, "20260101-000000", ok=True, error=None)
+    assert resume_target(rig_repo) == ("", "")
+
+
+def test_resume_target_picks_up_an_ok_shift_that_hit_its_budget(rig_repo):
+    stopped_shift(rig_repo, "20260101-000000", ok=True, error=None, stopped="budget")
+    assert resume_target(rig_repo) == ("20260101-000000\n", "")
+
+
+def test_resume_target_starts_afresh_after_a_merged_pr(rig_repo):
+    stopped_shift(rig_repo, "20260101-000000",
+                  prs=["junk", {"url": "https://example.com/pr/1", "merged": True, "note": None}])
+    out, err = resume_target(rig_repo)
+    assert out == "" and "! 이어 하지 않고 새로 시작: 20260101-000000 (이미 병합된 PR 있음)" in err
+
+
+def test_resume_target_starts_afresh_for_another_rig(rig_repo):
+    stopped_shift(rig_repo, "20260101-000000", rig="other")
+    out, err = resume_target(rig_repo)
+    assert out == "" and "! 이어 하지 않고 새로 시작: 20260101-000000 (이어 할 수 없음)" in err
+
+
+def test_resume_target_starts_afresh_after_two_resumes(rig_repo):
+    stopped_shift(rig_repo, "20260101-000000")
+    stopped_shift(rig_repo, "20260101-000001", resumed_from="20260101-000000")
+    stopped_shift(rig_repo, "20260101-000002", resumed_from="20260101-000001")
+    out, err = resume_target(rig_repo)
+    assert out == "" and "! 이어 하지 않고 새로 시작: 20260101-000002 (이미 두 번 이어 했음)" in err
+
+
+def test_resume_target_starts_afresh_without_a_branch(rig_repo):
+    stopped_shift(rig_repo, "20260101-000000", branch=False)  # branch deleted
+    out, err = resume_target(rig_repo)
+    assert out == "" and "! 이어 하지 않고 새로 시작: 20260101-000000 (브랜치에 이어 할 커밋 없음)" in err
+    stopped_shift(rig_repo, "20260101-000001", worktrees=[])  # nothing committed
+    out, err = resume_target(rig_repo)
+    assert out == "" and "! 이어 하지 않고 새로 시작: 20260101-000001 (브랜치에 이어 할 커밋 없음)" in err
+    assert "Error" not in err and "branch" not in err
+
+
+def test_resume_target_without_shifts(rig_repo):
+    assert resume_target(rig_repo) == ("", "")
+
+
+FAKE_UV = """#!/usr/bin/env bash
+printf '%s\\n' "$@" -- >> "$UV_LOG"
+exit 0
+"""
+
+
+def next_sh(tmp_path, resume_id):
+    """Runs scripts/next.sh with fake sync-main/next-task/resume-target, uv and curl; returns
+    (stdout, each uv call's argument list). The fake uv logs one argument per line and `--`
+    after each call (TASK has no newline)."""
+    (tmp_path / "scripts").mkdir()
+    shutil.copy(SCRIPTS / "next.sh", tmp_path / "scripts" / "next.sh")
+    fakes = {"scripts/sync-main.sh": "#!/usr/bin/env bash\nexit 0\n",
+             "scripts/next-task.sh": f"#!/usr/bin/env bash\necho '{TASK}'\n",
+             "bin/uv": FAKE_UV, "bin/curl": "#!/usr/bin/env bash\nexit 0\n"}
+    for name, text in fakes.items():
+        path = tmp_path / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        path.chmod(0o755)
+    # next.sh runs resume-target.py through uv, so the fake uv stands in for it and prints the id.
+    if resume_id:
+        (tmp_path / "bin" / "uv").write_text(FAKE_UV.replace(
+            "exit 0", f'for arg in "$@"; do [[ "$arg" == scripts/resume-target.py ]] && echo {resume_id}; done\n'
+                      'exit 0'), encoding="utf-8")
+    log = tmp_path / "uv.log"
+    out = subprocess.run(["bash", "scripts/next.sh"], cwd=tmp_path, capture_output=True, text=True, encoding="utf-8",
+                         env={**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+                              "ANTHROPIC_API_KEY": "x", "UV_LOG": str(log), "MAX_COST": "3"})
+    assert out.returncode == 0, out.stderr
+    calls, call = [], []
+    for line in log.read_text(encoding="utf-8").splitlines():
+        if line == "--":
+            calls.append(call)
+            call = []
+        else:
+            call.append(line)
+    return out.stdout, calls
+
+
+def resume_target_call(calls):
+    return next(call for call in calls if "scripts/resume-target.py" in call)
+
+
+def test_next_sh_resumes_the_stopped_shift(tmp_path):
+    out, calls = next_sh(tmp_path, "20260101-000000")
+    assert out.index(f"▶ {TASK}") < out.index("↻ 중단된 작업 이어 하기: 20260101-000000")
+    assert resume_target_call(calls)[-3:] == ["scripts/resume-target.py", "self.rig.yaml", TASK]
+    assert calls[-1][-4:] == ["--max-cost", "3", "--resume", "20260101-000000"]
+    assert not any(TASK in arg for arg in calls[-1])
+
+
+def test_next_sh_starts_afresh_without_a_shift_to_resume(tmp_path):
+    out, calls = next_sh(tmp_path, None)
+    assert "↻" not in out
+    assert resume_target_call(calls)[-3:] == ["scripts/resume-target.py", "self.rig.yaml", TASK]
+    assert calls[-1][-4:] == ["run", "--max-cost", "3", TASK] and "--resume" not in calls[-1]
