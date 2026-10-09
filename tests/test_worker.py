@@ -5,7 +5,7 @@ from types import SimpleNamespace as NS
 
 import pytest
 
-from rig.hand import FALLBACK_BETA, ClaudeWorker
+from rig.hand import FALLBACK_BETA, ClaudeWorker, _call
 from rig.spec import Rig
 from rig.tools import Toolbox
 
@@ -101,6 +101,34 @@ def test_finish_check_continues_the_loop(tmp_path):
     res = asyncio.run(ClaudeWorker(client).run(h, "go", Toolbox(tmp_path, h.tools), check=lambda: next(objections)))
     assert res.output == "final" and res.turns == 2
     assert client.calls[1]["messages"][-1] == {"role": "user", "content": "review first"}
+
+
+def test_unexpected_tool_exception_is_a_tool_error(tmp_path, monkeypatch):
+    # Raised directly: what a bad path raises differs by OS (Linux: ValueError for a NUL byte;
+    # Windows: no error, just "no such file").
+    def broken(self, name, args):
+        raise ValueError("embedded null byte")
+
+    monkeypatch.setattr(Toolbox, "run", broken)
+    h = hand()
+    call = block("tool_use", id="t1", name="read_file", input={"path": "a"})
+    result = asyncio.run(_call(Toolbox(tmp_path, h.tools), call))
+    assert result["is_error"] and result["content"] == "Error: ValueError: embedded null byte"
+
+
+def test_unexpected_client_exception_keeps_partial_result(tmp_path):
+    class Breaking(FakeClient):
+        async def create(self, **kwargs):
+            if self.responses:
+                return await super().create(**kwargs)
+            raise RuntimeError("sdk bug")
+
+    turn = response("tool_use", block("tool_use", id="t1", name="read_file", input={"path": "x"}))
+    h = hand()
+    res = asyncio.run(ClaudeWorker(Breaking([turn])).run(h, "go", Toolbox(tmp_path, h.tools)))
+    assert res.stop_reason == "error" and not res.ok
+    assert res.output == "[error: RuntimeError: sdk bug]"
+    assert res.turns == 2 and res.input_tokens == 10 and res.output_tokens == 5
 
 
 def test_max_turns(tmp_path):

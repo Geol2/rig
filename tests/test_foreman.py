@@ -139,6 +139,37 @@ def test_no_require_no_check(tmp_path):
     assert worker.objections == [] and shift.ok
 
 
+def test_crashing_delegate_is_a_tool_error_for_the_foreman(tmp_path):
+    class Crashing(ScriptedWorker):
+        async def run(self, hand, prompt, toolbox, check=None):
+            if hand.name == "reviewer":
+                raise ValueError("embedded null byte")
+            return await super().run(hand, prompt, toolbox, check)
+
+    async def script(tb):
+        with pytest.raises(ToolError, match=r"did not finish cleanly \(error\): \[error: ValueError: embedded null byte\]"):
+            await tb.call("delegate", {"hand": "reviewer", "instructions": "check"})
+        return "done anyway"
+
+    worker = Crashing(script)
+    shift = asyncio.run(run_shift(make(), "build it", worker, root=tmp_path, on_event=lambda _: None))
+    assert shift.results["reviewer#1"].stop_reason == "error" and shift.error is None
+    assert shift.final.output == "done anyway"
+    assert (shift.dir / "reviewer-1.md").read_text(encoding="utf-8") == "[error: ValueError: embedded null byte]"
+
+
+def test_crashing_foreman_still_writes_shift_json(tmp_path):
+    async def script(tb):
+        await tb.call("delegate", {"hand": "coder", "instructions": "write x"})
+        raise RuntimeError("sdk bug")
+
+    shift, _ = run(make(), script, tmp_path)
+    assert not shift.ok and shift.error == "RuntimeError: sdk bug"
+    summary = json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))
+    assert summary["ok"] is False and summary["error"] == "RuntimeError: sdk bug"
+    assert list(summary["hands"]) == ["coder#1"] and summary["hands"]["coder#1"]["turns"] == 1
+
+
 @pytest.mark.parametrize(
     "overrides",
     [

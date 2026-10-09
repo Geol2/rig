@@ -101,6 +101,44 @@ def test_run_errors(server, body, message):
     assert status == 400 and message in data["error"]
 
 
+def test_concurrent_starts_start_one_run(server):
+    app, _ = server
+    app._work = lambda *args: None  # the run stays "running"; nothing really runs
+    barrier = threading.Barrier(8)
+    started, refused = [], []
+
+    def start():
+        barrier.wait()
+        try:
+            started.append(app.start("review.rig.yaml", "x", {"module": "m"}, dry=True, use_worktree=False))
+        except ValueError as e:
+            refused.append(str(e))
+
+    threads = [threading.Thread(target=start) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(started) == 1 and app.run is started[0]
+    assert refused == ["a run is already in progress"] * 7
+
+
+def test_crashed_shift_shows_as_failed(server, monkeypatch):
+    app, _ = server
+
+    async def crash(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("rig.runner._run_lines", crash)
+    app.start("review.rig.yaml", "x", {"module": "m"}, dry=True, use_worktree=False)
+    for _ in range(100):
+        if app.run.status != "running":
+            break
+        time.sleep(0.02)
+    assert app.run.status == "failed"
+    assert "✗ shift failed: RuntimeError: boom" in app.run.lines
+
+
 def test_guards(server):
     _, base = server
     # Other Host names (DNS rebinding) and POSTs without the X-Rig header (other sites) are refused.

@@ -204,3 +204,22 @@ def test_end_to_end_reviewer_did_not_approve(repo, monkeypatch, tmp_path):
     (pr,) = shift.prs
     assert pr.url == URL and not pr.merged and "reviewer didn't approve" in pr.note
     assert not gh.ran("gh", "pr", "merge")
+
+
+def test_crashed_shift_is_not_published(repo, monkeypatch, tmp_path):
+    repo, remote = repo
+    real = __import__("rig.runner", fromlist=["build_prompt"]).build_prompt
+
+    def broken(task, handoffs, *args, **kwargs):
+        if handoffs:  # the reviewer's prompt: crash after the coder already changed a.py
+            raise RuntimeError("bad prompt")
+        return real(task, handoffs, *args, **kwargs)
+
+    monkeypatch.setattr("rig.runner.build_prompt", broken)
+    shift, gh, events = shift_with(repo, "LGTM", monkeypatch, tmp_path)
+    assert shift.error == "RuntimeError: bad prompt"
+    assert shift.committed()  # the change is kept on the local branch for a look...
+    assert not gh.calls and not shift.prs  # ...but nothing is pushed or opened
+    assert git("branch", "--list", f"rig/{shift.id}", cwd=remote) == ""
+    summary = json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))
+    assert summary["error"] == "RuntimeError: bad prompt" and summary["prs"] == []

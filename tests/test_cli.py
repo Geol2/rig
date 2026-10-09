@@ -112,6 +112,23 @@ def test_check_malformed_yaml_exits_with_error(tmp_path, monkeypatch):
     assert "unclosed" in msg or "line 2" in msg
 
 
+def test_run_crash_exits_1_without_traceback(tmp_path, monkeypatch, capsys):
+    async def crash(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    (tmp_path / "rig.yaml").write_text("name: t\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("rig.runner._run_lines", crash)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "--dry", "go"])
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert "✗ shift failed: RuntimeError: boom" in captured.out
+    assert "Traceback" not in captured.out + captured.err
+    shift_dir = next((tmp_path / ".rig" / "shifts").iterdir())
+    assert json.loads((shift_dir / "shift.json").read_text(encoding="utf-8"))["error"] == "RuntimeError: boom"
+
+
 def test_logs_shows_worktree_branch(tmp_path, monkeypatch, capsys):
     _shift(tmp_path, "20261008-100000", {"mode": "lines", "ok": True, "task": "plain run", "branch": None})
     _shift(tmp_path, "20261008-110000", {"mode": "lines", "ok": True, "task": "worktree run", "branch": "rig/20261008-110000"})
