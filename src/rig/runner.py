@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -94,6 +95,35 @@ def new_shift(root: Path) -> Shift:
         return Shift(id=shift_id, dir=d)
 
 
+PROGRESS_LOG = "progress.log"
+RUNNING = "running.json"
+
+
+class _Progress:
+    """Copies progress lines to the shift folder, so `rig serve` can show a shift started from the CLI.
+
+    `running.json` (pid, rig, task) is there while the shift runs and removed when it ends.
+    """
+
+    def __init__(self, shift: Shift, rig: str, task: str, show: Event):
+        self.show = show
+        self.running = shift.dir / RUNNING
+        self.running.write_text(json.dumps({"pid": os.getpid(), "rig": rig, "task": task,
+                                            "started": datetime.now().isoformat(timespec="seconds")},
+                                           ensure_ascii=False), encoding="utf-8")
+        self.log = (shift.dir / PROGRESS_LOG).open("a", encoding="utf-8")
+
+    def event(self, line: str) -> None:
+        self.show(line)
+        if not self.log.closed:
+            self.log.write(line + "\n")
+            self.log.flush()
+
+    def close(self) -> None:
+        self.log.close()
+        self.running.unlink(missing_ok=True)
+
+
 async def run_shift(
     rig: Rig,
     task: str,
@@ -111,76 +141,81 @@ async def run_shift(
     workspace: Path | dict[str, Path] = dirs if rig.workspaces else dirs["."]
     values = rig.resolve_inputs(inputs or {})  # raises InputError before anything is created
     shift = new_shift(root)
-    shift.inputs = values
-    meter = meter or cost.Meter()
-    if meter.limit is None:
-        meter.limit = rig.max_cost_usd
-    shift.meter = meter
-    if hasattr(worker, "meter"):
-        worker.meter = meter
-    mode = "foreman" if rig.foreman else "lines"
-    on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")
-
-    env = None
-    if use_worktree:
-        # Raises GitError before any hand runs if a workspace isn't in a git repo.
-        sync = rig.publish if rig.publish.pr and rig.publish.sync else None
-        workspace, run_wt = _make_worktrees(shift, workspace, root, rig.run.workspace, on_event, sync)
-        env = run_wt.env  # so hands' `run git ...` works in the worktree too
-
-    def tools(names: list[str], label: str, extra: dict | None = None) -> Toolbox:
-        on_call = (lambda line: on_event(f"    · {label:<12} {line}")) if verbose else None
-        return Toolbox(workspace, names, extra=extra, run_policy=rig.run, env=env, on_call=on_call, search_policy=rig.search)
-
-    def record(key: str, res: HandResult) -> None:
-        shift.results[key] = res
-        (shift.dir / f"{key.replace('#', '-')}.md").write_text(res.output, encoding="utf-8")
-        if res.stop_reason == "refusal":
-            # Say which hand was declined and why, right in the progress output.
-            on_event(f"  ✗ {key}: {res.output}")
-
+    progress = _Progress(shift, rig.name, task, on_event)
+    on_event = progress.event
     try:
-        if rig.foreman:
-            await _run_foreman(rig, task, worker, shift, record, on_event, tools)
-        else:
-            await _run_lines(rig, task, worker, shift, record, on_event, tools)
-    except Exception as e:
-        # Keep what the shift got done; shift.json records the crash instead of a traceback.
-        shift.ok = False
-        shift.error = f"{type(e).__name__}: {e}"
-        on_event(f"✗ shift failed: {shift.error}")
-    except BaseException:
-        shift.ok = False
-        shift.error = "interrupted"
-        raise
+        shift.inputs = values
+        meter = meter or cost.Meter()
+        if meter.limit is None:
+            meter.limit = rig.max_cost_usd
+        shift.meter = meter
+        if hasattr(worker, "meter"):
+            worker.meter = meter
+        mode = "foreman" if rig.foreman else "lines"
+        on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")
+
+        env = None
+        if use_worktree:
+            # Raises GitError before any hand runs if a workspace isn't in a git repo.
+            sync = rig.publish if rig.publish.pr and rig.publish.sync else None
+            workspace, run_wt = _make_worktrees(shift, workspace, root, rig.run.workspace, on_event, sync)
+            env = run_wt.env  # so hands' `run git ...` works in the worktree too
+
+        def tools(names: list[str], label: str, extra: dict | None = None) -> Toolbox:
+            on_call = (lambda line: on_event(f"    · {label:<12} {line}")) if verbose else None
+            return Toolbox(workspace, names, extra=extra, run_policy=rig.run, env=env, on_call=on_call, search_policy=rig.search)
+
+        def record(key: str, res: HandResult) -> None:
+            shift.results[key] = res
+            (shift.dir / f"{key.replace('#', '-')}.md").write_text(res.output, encoding="utf-8")
+            if res.stop_reason == "refusal":
+                # Say which hand was declined and why, right in the progress output.
+                on_event(f"  ✗ {key}: {res.output}")
+
+        try:
+            if rig.foreman:
+                await _run_foreman(rig, task, worker, shift, record, on_event, tools)
+            else:
+                await _run_lines(rig, task, worker, shift, record, on_event, tools)
+        except Exception as e:
+            # Keep what the shift got done; shift.json records the crash instead of a traceback.
+            shift.ok = False
+            shift.error = f"{type(e).__name__}: {e}"
+            on_event(f"✗ shift failed: {shift.error}")
+        except BaseException:
+            shift.ok = False
+            shift.error = "interrupted"
+            raise
+        finally:
+            if shift.worktrees:
+                # Even if the shift crashed, keep whatever the hands wrote on the branch.
+                first = task.strip().splitlines()[0][:60] if task.strip() else "shift"
+                message = f"rig: {first}\n\nShift {shift.id} of rig '{rig.name}' ({'ok' if shift.ok else 'incomplete'})."
+                several = len(shift.worktrees) > 1
+                for wt in shift.worktrees:
+                    try:
+                        out = worktree.finish(wt, message)
+                    except Exception as e:
+                        # finish can still fail outside its git guard (diff/remove, missing dir);
+                        # report the worktree as kept so the other worktrees and shift.json still happen.
+                        out = worktree.Outcome(changed=True, commit=None, stat="", kept_at=wt.path,
+                                               error=f"{type(e).__name__}: {e}")
+                    shift.outcomes.append(out)
+                    _report_worktree(wt, out, on_event, label=f" {wt.repo.name}" if several else "")
+            summary = _write_summary(shift, rig, mode, task, meter)
+
+        # A crashed shift keeps its branch for a look, but doesn't go to GitHub.
+        if rig.publish.pr and shift.committed() and not shift.error:
+            await _publish(rig, task, shift, on_event)
+            summary = _write_summary(shift, rig, mode, task, meter)  # again, now with the PRs
+
+        on_event(cost.summary(summary["totals"]))
+        if meter.stop_reason:
+            on_event(f"✗ stopped: {meter.message()}")
+        on_event(f"logs → {shift.dir}")
+        return shift
     finally:
-        if shift.worktrees:
-            # Even if the shift crashed, keep whatever the hands wrote on the branch.
-            first = task.strip().splitlines()[0][:60] if task.strip() else "shift"
-            message = f"rig: {first}\n\nShift {shift.id} of rig '{rig.name}' ({'ok' if shift.ok else 'incomplete'})."
-            several = len(shift.worktrees) > 1
-            for wt in shift.worktrees:
-                try:
-                    out = worktree.finish(wt, message)
-                except Exception as e:
-                    # finish can still fail outside its git guard (diff/remove, missing dir);
-                    # report the worktree as kept so the other worktrees and shift.json still happen.
-                    out = worktree.Outcome(changed=True, commit=None, stat="", kept_at=wt.path,
-                                           error=f"{type(e).__name__}: {e}")
-                shift.outcomes.append(out)
-                _report_worktree(wt, out, on_event, label=f" {wt.repo.name}" if several else "")
-        summary = _write_summary(shift, rig, mode, task, meter)
-
-    # A crashed shift keeps its branch for a look, but doesn't go to GitHub.
-    if rig.publish.pr and shift.committed() and not shift.error:
-        await _publish(rig, task, shift, on_event)
-        summary = _write_summary(shift, rig, mode, task, meter)  # again, now with the PRs
-
-    on_event(cost.summary(summary["totals"]))
-    if meter.stop_reason:
-        on_event(f"✗ stopped: {meter.message()}")
-    on_event(f"logs → {shift.dir}")
-    return shift
+        progress.close()
 
 
 def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Meter) -> dict[str, Any]:

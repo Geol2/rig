@@ -70,7 +70,7 @@ def test_dry_shift_hands_off(tmp_path):
     assert set(shift.results) == {"a", "b", "c"}
     assert '<handoff from="a">' in shift.results["b"].output
     shift = next((tmp_path / ".rig" / "shifts").iterdir())
-    assert {p.name for p in shift.iterdir()} == {"a.md", "b.md", "c.md", "shift.json"}
+    assert {p.name for p in shift.iterdir()} == {"a.md", "b.md", "c.md", "shift.json", "progress.log"}
 
 
 def test_refusal_is_reported_in_progress(tmp_path):
