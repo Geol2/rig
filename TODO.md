@@ -42,16 +42,16 @@ Keep items small enough for one reviewed change. Add context under an item when 
   cost is unknown and `max_cost_usd` / `--max-cost` silently stops limiting (`cost.py`).
   `rig check` and the start of `rig run` (and `rig serve`) should warn, naming the hand and
   model, whenever a hand's model has no price, and say so louder when a limit is set.
+- [x] **Save each hand's transcript**: `HandResult.transcript` collects the full conversation
+  (tool calls and results) but is never written (`hand.py`). Write it next to the output as
+  `<key>.transcript.json` (SDK blocks via `model_dump()`), including for hands that errored
+  or were stopped, so failed hands can be examined afterwards. Mention it in the README.
 
 ## Backlog
 
 From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
 in priority order. Line numbers are from that review and may have moved.
 
-- [ ] **Save each hand's transcript**: `HandResult.transcript` collects the full conversation
-  (tool calls and results) but is never written (`hand.py`). Write it next to the output as
-  `<key>.transcript.json` (SDK blocks via `model_dump()`), including for hands that errored
-  or were stopped, so failed hands can be examined afterwards. Mention it in the README.
 - [ ] **Final result with a parallel last stage**: in lines mode, when the last stage has
   several hands, only the last one in YAML order becomes `shift.final` and gets printed
   (`runner.py` `_run_lines`). Print every final-stage hand's output under its name, and have
@@ -79,6 +79,11 @@ in priority order. Line numbers are from that review and may have moved.
   with `api_error`, losing its work. Turn on the API's tool-result clearing (context
   editing, `clear_tool_uses_20250919`) behind a `defaults` / per-hand option, on by default
   for the foreman. Check the exact request shape in the Claude API docs first.
+- [ ] **Lone surrogates can crash a shift**: a hand's output with a lone surrogate (e.g. from
+  an undecodable file name via `list_dir`) makes the `.md` write in `runner.py` `record` and
+  the `shift.json` / `running.json` writes raise `UnicodeEncodeError` (strict UTF-8 with
+  `ensure_ascii=False`). Write them with `errors="replace"` like the transcript files, and
+  test it.
 
 ## Needs a design first
 

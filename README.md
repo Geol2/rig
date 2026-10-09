@@ -29,6 +29,10 @@ Both are stored in `.rig/shifts/<id>/shift.json` and shown by `rig logs`. Prices
 `src/rig/cost.py`; models not listed there show "n/a". A shift that crashes still writes
 `shift.json`, with the exception in an `error` field.
 
+Each hand's output is saved as `<hand>.md` in the shift directory, and its full
+conversation (tool calls and results) as `<hand>.transcript.json` next to it, also for
+hands that errored or were stopped, so failed hands can be examined afterwards.
+
 To cap a shift, set `max_cost_usd: 5` in rig.yaml or pass `rig run --max-cost 5`. Each
 hand's done line shows the shift's running total (`· shift $1.20 of $5.00`); once the total
 reaches the limit, hands stop before their next request and later stages don't start.

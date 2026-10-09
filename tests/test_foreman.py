@@ -69,7 +69,9 @@ def test_foreman_delegates_in_parallel_and_logs(tmp_path):
     assert shift.ok
     assert shift.final.output == "coder did: write x | coder did: write y | reviewer did: check x and y"
     assert set(shift.results) == {"coder#1", "coder#2", "reviewer#1", "foreman"}
-    assert {p.name for p in shift.dir.iterdir()} == {"coder-1.md", "coder-2.md", "reviewer-1.md", "foreman.md", "shift.json", "progress.log"}
+    keys = ["coder-1", "coder-2", "reviewer-1", "foreman"]
+    assert {p.name for p in shift.dir.iterdir()} == {
+        *(f"{k}.md" for k in keys), *(f"{k}.transcript.json" for k in keys), "shift.json", "progress.log"}
     assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["mode"] == "foreman"
     # The foreman's system prompt lists its crew, and only its crew.
     assert "- coder: Code." in worker.foreman_role and "idle" not in worker.foreman_role

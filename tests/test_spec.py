@@ -70,7 +70,8 @@ def test_dry_shift_hands_off(tmp_path):
     assert set(shift.results) == {"a", "b", "c"}
     assert '<handoff from="a">' in shift.results["b"].output
     shift = next((tmp_path / ".rig" / "shifts").iterdir())
-    assert {p.name for p in shift.iterdir()} == {"a.md", "b.md", "c.md", "shift.json", "progress.log"}
+    assert {p.name for p in shift.iterdir()} == {"a.md", "b.md", "c.md", "shift.json", "progress.log",
+                                                 "a.transcript.json", "b.transcript.json", "c.transcript.json"}
 
 
 def test_refusal_is_reported_in_progress(tmp_path):
@@ -110,6 +111,8 @@ def test_crashing_hand_does_not_take_down_its_siblings(tmp_path):
     assert shift.results["a"].stop_reason == "error" and shift.results["a"].output == "[error: RuntimeError: boom]"
     assert shift.results["b"].ok and (shift.dir / "b.md").exists() and "c" not in shift.results
     assert "  ✗ a crashed: RuntimeError: boom" in events
+    # The crashed hand still gets a (empty) transcript next to its output.
+    assert json.loads((shift.dir / "a.transcript.json").read_text(encoding="utf-8")) == []
     assert any("upstream hands did not finish cleanly: ['a']" in e for e in events)
     hands = summary(shift)["hands"]
     assert hands["a"]["stop_reason"] == "error" and hands["b"]["stop_reason"] == "end_turn"
