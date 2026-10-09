@@ -30,6 +30,36 @@ def test_findings_of():
     assert report.findings_of(json.dumps({"other": 1})) is None
 
 
+def test_read_summary(tmp_path, monkeypatch):
+    assert report.read_summary(tmp_path) == ({}, None)  # missing is incomplete, not unreadable
+    (tmp_path / "shift.json").write_text('{"rig": "x", "ok": tr', encoding="utf-8")
+    summary, reason = report.read_summary(tmp_path)
+    assert summary == {} and isinstance(reason, str) and reason and "\n" not in reason
+    (tmp_path / "shift.json").write_text("[]", encoding="utf-8")
+    assert report.read_summary(tmp_path) == ({}, "not a JSON object")
+    (tmp_path / "shift.json").write_bytes(b"\xff\xfe")
+    assert report.read_summary(tmp_path)[1]
+    (tmp_path / "shift.json").write_text('{"ok": true}', encoding="utf-8")
+    assert report.read_summary(tmp_path) == ({"ok": True}, None)
+
+    def boom(text):
+        raise ValueError("word " * 40 + "\n\tend")
+
+    monkeypatch.setattr(report.json, "loads", boom)
+    reason = report.read_summary(tmp_path)[1]
+    assert len(reason) == 80 and reason.endswith("…") and "\n" not in reason and "  " not in reason
+
+
+def test_collect_with_broken_shift_json(tmp_path):
+    d = make_shift(tmp_path, {"a": "## A", "b": json.dumps({"findings": [finding("high", "a.py", 1)]})})
+    (d / "shift.json").write_text('{"rig": "x", "ok": tr', encoding="utf-8")
+    data = report.collect(d)
+    assert data["summary"] == {}
+    assert [h["key"] for h in data["hands"]] == ["a", "b"]
+    assert len(data["findings"]) == 1
+    assert "<html" in report.render(data).lower()
+
+
 def test_collect_merges_and_sorts_findings(tmp_path):
     d = make_shift(tmp_path, {
         "mapper": "## Map",

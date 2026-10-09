@@ -336,8 +336,14 @@ def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Met
         "max_cost_usd": meter.limit,
         "stopped": meter.stop_reason,
     }
-    (shift.dir / "shift.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8",
-                                          errors="replace")
+    # Write a temp file and swap it in: a crash or full disk mid-write must not leave half a JSON.
+    tmp = shift.dir / "shift.json.tmp"
+    try:
+        tmp.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8", errors="replace")
+        os.replace(tmp, shift.dir / "shift.json")
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return summary
 
 

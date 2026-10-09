@@ -28,9 +28,24 @@ def findings_of(output: str) -> list[dict[str, Any]] | None:
     return None
 
 
+def read_summary(shift_dir: Path) -> tuple[dict[str, Any], str | None]:
+    """A shift's shift.json and, if it exists but can't be used, why (the summary is then {})."""
+    path = shift_dir / "shift.json"
+    if not path.exists():
+        return {}, None  # a shift that never got to write one: not broken, just incomplete
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        reason = " ".join(str(exc).split())
+        return {}, reason if len(reason) <= 80 else reason[:79] + "…"
+    if not isinstance(data, dict):
+        return {}, "not a JSON object"
+    return data, None
+
+
 def collect(shift_dir: Path) -> dict[str, Any]:
     """Everything the page shows, read from a shift directory."""
-    summary = json.loads((shift_dir / "shift.json").read_text(encoding="utf-8")) if (shift_dir / "shift.json").exists() else {}
+    summary, _ = read_summary(shift_dir)
     keys = list(summary.get("hands", {}))
     # Hands logged without a shift.json entry (a crashed shift) still get shown.
     for f in sorted(shift_dir.glob("*.md")):

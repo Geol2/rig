@@ -138,12 +138,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   `sub/.git/config`, `.RIG/shifts/a.md`, `workspaces` 모드의 `backend/.git/config` 쓰기·편집이
   거부되고 파일이 생기지 않는지, `.github/workflows/ci.yml`이나 `.gitignore`는 여전히 쓸 수 있는지 테스트.
   Note: `Toolbox._writable` checks the resolved path relative to its root (the project root in `workspaces` mode), so a `--worktree` workspace under `.rig/worktrees/` still writes and a symlink into `.git` is refused; the check runs before `write_file` creates folders, and `_path` callers are unchanged (it now wraps `_locate`, which returns root and path).
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`shift.json`을 원자적으로 쓰고, 깨진 파일 하나가 목록 전체를 망가뜨리지 않게**: `runner.py`
+- [x] **`shift.json`을 원자적으로 쓰고, 깨진 파일 하나가 목록 전체를 망가뜨리지 않게**: `runner.py`
   `_write_summary`는 `write_text`로 바로 덮어써서(shift당 최대 두 번, publish 후 한 번 더) 쓰는 도중
   프로세스가 죽거나 디스크가 차면 반쯤 쓰인 JSON이 남습니다. 그러면 `cli.py` `_read_summary`(`rig logs`
   목록), `serve.py` `App.shifts`(history 전체가 오류)와 `App.shift_log`, `report.py` `collect`가 모두
@@ -153,6 +148,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   그 사실을 맨 앞에 출력). 완료 기준: `test_cli.py`와 `test_serve.py`에서 잘린 `shift.json`이 있는
   폴더가 섞여 있어도 `rig logs`, `rig logs <id>`, `App.shifts()`, `rig report`가 동작하는지, 그리고
   `_write_summary`가 임시 파일을 남기지 않는지 테스트.
+  Note: `_write_summary` writes `shift.json.tmp` then `os.replace`s it (removed on failure); `report.read_summary` (used by `rig logs`, `rig report`, `App.shifts`, `App.shift_log`) returns `{}` plus a reason for a broken file; `rig logs` shows `unreadable` and the detail view starts with "✗ cannot read shift.json (…); showing hand outputs only". The serve log viewer pill still shows 완료 for `ok: null` (serve.py, `s.ok === false ? 'incomplete' : 'done'`) — a separate fix.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **input 이름 검증과 치환되지 않는 `{{ … }}` 잡기**: `spec.py`의 `inputs` 키는 아무 문자열이나
   허용되지만 `INPUT_REF`는 `\w+`만 찾습니다. 그래서 `due-date` 같은 input을 role에서
   `{{ inputs.due-date }}`로 쓰면 치환도 안 되고 `_check_lines`의 미선언 input 검사에도 안 걸려, 모델이
