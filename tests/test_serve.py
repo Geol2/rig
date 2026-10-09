@@ -251,6 +251,24 @@ def test_history_reads_findings_count_from_shift_json(server):
     assert call(base + "/api/shifts")[1][0]["findings"] == 3  # only shift.json is read
 
 
+def test_history_survives_broken_shift_json(server):
+    app, base = server
+    good = app.shifts_dir / "20261009-120000"
+    good.mkdir(parents=True)
+    (good / "shift.json").write_text(json.dumps({"rig": "review", "ok": True, "findings": 1}), encoding="utf-8")
+    broken = app.shifts_dir / "20261009-130000"
+    broken.mkdir()
+    (broken / "shift.json").write_text('{"rig": "x", "ok": tr', encoding="utf-8")
+    (broken / "a.md").write_text(json.dumps({"findings": [{"title": "x"}]}), encoding="utf-8")
+
+    rows = call(base + "/api/shifts")[1]
+    assert [r["id"] for r in rows] == [broken.name, good.name]
+    assert rows[0]["ok"] is None and rows[0]["findings"] == 0
+    assert rows[1]["ok"] is True and rows[1]["findings"] == 1
+    assert call(f"{base}/shifts/{broken.name}/log")[1]["ok"] is None
+    assert app.shift_log(broken.name, 0)["ok"] is None
+
+
 def test_history_counts_findings_of_older_shift_json(server):
     app, base = server
     d = app.shifts_dir / "20261009-120000"

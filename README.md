@@ -36,9 +36,10 @@ Both are stored in `.rig/shifts/<id>/shift.json` and shown by `rig logs`. Prices
 `shift.json`, with the exception in an `error` field. `shift.json` also keeps the total
 number of findings (see [Reports](#reports)) as `findings`, which `rig serve`'s history shows.
 
-`rig logs` gives each shift a status: `running`, `error` (crashed or interrupted), `stopped`
-(cost limit or stopped by user), `incomplete` or `ok`. `rig logs <id>` prints the error or
-stop reason first, then the hands' outputs in the order they ran.
+`rig logs` gives each shift a status: `running`, `unreadable` (its `shift.json` is damaged),
+`error` (crashed or interrupted), `stopped` (cost limit or stopped by user), `incomplete` or
+`ok`. `rig logs <id>` prints the error or stop reason first, then the hands' outputs in the
+order they ran; for an unreadable `shift.json` it says why and shows the hand outputs only.
 
 Each hand's output is saved as `<hand>.md` in the shift directory, and its full
 conversation (tool calls and results) as `<hand>.transcript.json` next to it, also for

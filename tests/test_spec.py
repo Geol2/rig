@@ -346,6 +346,24 @@ def test_crashed_shift_still_writes_shift_json(tmp_path, monkeypatch):
     assert s["ok"] is False and s["error"] == "RuntimeError: bad prompt" and list(s["hands"]) == ["a"]
 
 
+def test_failed_shift_json_write_leaves_old_file_and_no_temp(tmp_path, monkeypatch):
+    from rig import cost, runner
+
+    rig = make()
+    shift = asyncio.run(run_shift(rig, "do it", EchoWorker(), root=tmp_path, on_event=lambda _: None))
+    before = {p.name for p in shift.dir.iterdir()}
+    old = (shift.dir / "shift.json").read_text(encoding="utf-8")
+
+    def fail(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runner.os, "replace", fail)
+    with pytest.raises(OSError, match="disk full"):
+        runner._write_summary(shift, rig, "lines", "other task", cost.Meter())
+    assert {p.name for p in shift.dir.iterdir()} == before
+    assert (shift.dir / "shift.json").read_text(encoding="utf-8") == old
+
+
 def test_interrupted_shift_writes_shift_json_and_propagates(tmp_path):
     rig = make(hands={"a": {"role": "A"}}, lines=[])
     with pytest.raises(KeyboardInterrupt):

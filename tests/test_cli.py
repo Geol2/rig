@@ -230,6 +230,62 @@ def test_logs_leftover_outputs_in_natural_order(tmp_path, monkeypatch, capsys):
     assert headings == ["── coder ──", "── coder-2 ──", "── coder-10 ──"]
 
 
+def _broken_shift(tmp_path, shift_id, text='{"rig": "x", "ok": tr'):
+    d = _shift(tmp_path, shift_id, None)
+    (d / "shift.json").write_text(text, encoding="utf-8")
+    return d
+
+
+def test_logs_list_survives_broken_shift_json(tmp_path, monkeypatch, capsys):
+    totals = {"input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 0, "cache_write_tokens": 0, "cost_usd": 1.5}
+    _shift(tmp_path, "20250101-000000", {"mode": "lines", "ok": True, "task": "fine", "totals": totals,
+                                         "branch": "rig/20250101-000000"})
+    _broken_shift(tmp_path, "20250102-000000")
+    _broken_shift(tmp_path, "20250103-000000", "[]")
+    _shift(tmp_path, "20250104-000000", None)
+    monkeypatch.chdir(tmp_path)
+
+    main(["logs"])
+    lines = capsys.readouterr().out.splitlines()
+    width = len("rig/20250101-000000")
+    assert lines[0] == f"20250101-000000  {'lines':<8}  {'ok':<10}  {'$1.50':>9}  {'rig/20250101-000000'}  fine"
+    assert lines[1] == f"20250102-000000  {'':<8}  {'unreadable':<10}  {'':>9}  {'':<{width}}  "
+    assert [line[27:37].strip() for line in lines] == ["ok", "unreadable", "unreadable", "incomplete"]
+
+
+def test_logs_detail_of_broken_shift_json(tmp_path, monkeypatch, capsys):
+    _broken_shift(tmp_path, "20250101-000000")
+    _broken_shift(tmp_path, "20250102-000000", "[]")
+    monkeypatch.chdir(tmp_path)
+
+    main(["logs", "20250101-000000"])
+    out = capsys.readouterr().out
+    assert out.startswith("✗ cannot read shift.json (")
+    first, rest = out.split("\n", 1)
+    assert first.endswith("; showing hand outputs only")
+    assert rest == "\n── a ──\nout\n\n"  # no cost line
+    main(["logs", "20250102-000000"])
+    assert capsys.readouterr().out.startswith("✗ cannot read shift.json (not a JSON object); showing hand outputs only\n\n")
+
+
+def test_logs_detail_of_broken_running_shift(tmp_path, monkeypatch, capsys):
+    d = _broken_shift(tmp_path, "20250101-000000")
+    (d / "running.json").write_text(json.dumps({"pid": os.getpid(), "task": "go"}), encoding="utf-8")
+    (d / "a.md").unlink()
+    monkeypatch.chdir(tmp_path)
+    main(["logs", "last"])
+    out = capsys.readouterr().out
+    assert out.startswith("✗ cannot read shift.json (")
+    assert out.endswith(f"; showing hand outputs only\nstill running (pid {os.getpid()}). Output so far:\n\n")
+
+
+def test_report_of_broken_shift_json(tmp_path, monkeypatch, capsys):
+    _broken_shift(tmp_path, "20250101-000000")
+    monkeypatch.chdir(tmp_path)
+    main(["report", "20250101-000000", "--no-open"])
+    assert capsys.readouterr().out.startswith("report → ")
+
+
 def test_check_malformed_yaml_exits_with_error(tmp_path, monkeypatch):
     (tmp_path / "rig.yaml").write_text("name: bad\nhands: [unclosed\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
