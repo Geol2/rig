@@ -102,6 +102,8 @@ class Defaults(BaseModel):
     max_turns: int = 20
     # Server-side refusal fallback ("default" routes by refusal category). null disables it.
     fallbacks: Literal["default"] | None = "default"
+    # Let the API clear old tool results once the prompt grows large (see hand.CLEAR_TOOL_RESULTS).
+    clear_tool_results: bool = False
 
 
 class InputSpec(BaseModel):
@@ -190,6 +192,8 @@ class Hand(BaseModel):
     effort: Effort | None = None
     max_tokens: int | None = None
     max_turns: int | None = None
+    # None uses defaults.clear_tool_results.
+    clear_tool_results: bool | None = None
     tools: list[str] = Field(default_factory=list)
     output: Output | None = None
 
@@ -215,6 +219,8 @@ class Foreman(Hand):
     """An orchestrator that delegates to hands at run time instead of following fixed lines."""
 
     role: str = DEFAULT_FOREMAN_ROLE
+    # The foreman's conversation grows with every delegate result, so clearing is on unless set false.
+    clear_tool_results: bool | None = True
     # Hands the foreman may delegate to; empty means all of them.
     crew: list[str] = Field(default_factory=list)
     # Hands that must run after the last delegation to any other hand before the
@@ -354,6 +360,8 @@ class Rig(BaseModel):
             max_turns=h.max_turns or d.max_turns,
             tools=h.tools,
             fallbacks=d.fallbacks,
+            # Not `or`: an explicit false must win over defaults true.
+            clear_tool_results=h.clear_tool_results if h.clear_tool_results is not None else d.clear_tool_results,
             output_schema=h.output.schema_ if h.output else None,
         )
 
@@ -367,6 +375,7 @@ class ResolvedHand(BaseModel):
     max_turns: int
     tools: list[str]
     fallbacks: Literal["default"] | None
+    clear_tool_results: bool = False
     output_schema: dict[str, Any] | None = None
 
 

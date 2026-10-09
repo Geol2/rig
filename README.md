@@ -57,6 +57,7 @@ defaults:
   max_tokens: 16000
   max_turns: 20
   fallbacks: default    # server-side refusal fallback; null disables
+  clear_tool_results: false  # clear old tool results in long conversations; on by default for the foreman
 
 hands:
   planner:
@@ -321,6 +322,12 @@ Delegated runs are logged as `<hand>-<n>.md` next to `foreman.md`.
 finish successfully after the last delegation to any other hand. If the foreman tries to
 finish before that, rig tells it what's missing and the loop continues. If the delegation
 limit runs out first, the shift ends but is marked incomplete.
+
+Long conversations, above all a foreman collecting delegate results, can outgrow the
+context window. With `clear_tool_results: true`, once a hand's prompt passes about 100k
+input tokens the API replaces older tool results with a placeholder and keeps the latest 5.
+Set it per hand or in `defaults`; it is on for the foreman unless its YAML sets
+`clear_tool_results: false`. The transcript file still keeps everything.
 
 ## Setup
 
