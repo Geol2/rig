@@ -46,6 +46,8 @@ reaches the limit, hands stop before their next request and later stages don't s
 Requests already in flight still finish, so a shift can end slightly over the limit.
 `rig check` and the start of each run warn when a hand's model has no price; such hands'
 spending isn't counted toward the cost limit.
+They also warn about hands that never run: in foreman mode, hands not on `foreman.crew`;
+in lines mode, hands on no line (they run alone in stage 1 and no hand gets their output).
 
 ## rig.yaml
 
@@ -377,6 +379,8 @@ publish:
   # base: main          # PR target; default: the branch checked out when the shift started
   # merge_method: squash  # squash | merge | rebase
 ```
+
+In foreman mode the approver must be on `foreman.crew`, or it never runs; `rig check` rejects that.
 
 A PR is merged only when **all** of these hold; otherwise it stays open with the reason in
 the output and in `shift.json` (`prs`):

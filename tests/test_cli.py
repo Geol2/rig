@@ -44,6 +44,30 @@ def test_check_warns_about_unpriced_model(tmp_path, monkeypatch, capsys):
     assert "⚠ cost limit $5.00 can't count hands a: no price for model 'claude-opus-9'" in out
 
 
+def test_check_warns_about_hands_off_crew(tmp_path, monkeypatch, capsys):
+    (tmp_path / "rig.yaml").write_text(
+        "name: ok\nhands:\n  a: {role: A}\n  b: {role: B}\nforeman: {crew: [a]}\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+    main(["check"])  # a warning, not an error
+    out = capsys.readouterr().out
+    assert "✓ ok: foreman + 1 hands" in out
+    assert "⚠ hands not on foreman.crew never run: b; add them to the crew or remove them" in out
+
+
+def test_check_hand_warning_before_price_warning(tmp_path, monkeypatch, capsys):
+    (tmp_path / "rig.yaml").write_text(
+        "name: ok\nhands:\n  a: {role: A, model: claude-opus-9}\n  b: {role: B}\n  c: {role: C}\nlines: ['a -> b']\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    main(["check"])
+    out = capsys.readouterr().out
+    assert "✓ ok: 3 hands, 1 lines" in out
+    hand = out.index("⚠ hands on no line run alone in stage 1 and no hand gets their output: c;")
+    assert hand < out.index("⚠ no price for model 'claude-opus-9'")
+
+
 @pytest.mark.parametrize(
     "content, detail",
     [
@@ -53,8 +77,11 @@ def test_check_warns_about_unpriced_model(tmp_path, monkeypatch, capsys):
         ("hands:\n  a: {role: A}\n", "name\n  Field required"),
         ("- just\n- a list\n", "valid dictionary"),
         ("name: bad\nhands:\n  a: {role: A, max_turns: 0}\n", "hands.a.max_turns\n  Input should be greater than or equal to 1"),
+        ("name: bad\nhands:\n  a: {role: A}\n  b: {role: B}\nforeman: {crew: [a]}\npublish: {approver: b}\n",
+         "publish.approver 'b' isn't on foreman.crew, so it never runs and can't approve; add it to the crew"),
     ],
-    ids=["unknown-hand", "no-hands", "unknown-tool", "missing-name", "not-a-mapping", "zero-max-turns"],
+    ids=["unknown-hand", "no-hands", "unknown-tool", "missing-name", "not-a-mapping", "zero-max-turns",
+         "approver-off-crew"],
 )
 def test_check_schema_invalid_rig_exits_with_error(tmp_path, monkeypatch, capsys, content, detail):
     (tmp_path / "rig.yaml").write_text(content, encoding="utf-8")

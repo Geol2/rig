@@ -67,7 +67,7 @@ def cmd_check(args: argparse.Namespace) -> None:
             return "required" if s.required else "optional"
 
         print(f"  inputs: {', '.join(f'{n} ({describe(s)})' for n, s in rig.inputs.items())}")
-    for line in price_warnings(rig.models(), rig.max_cost_usd):
+    for line in [*rig.hand_warnings(), *price_warnings(rig.models(), rig.max_cost_usd)]:
         print(line)
 
 

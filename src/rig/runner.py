@@ -194,7 +194,7 @@ async def run_shift(
             worker.meter = meter
         mode = "foreman" if rig.foreman else "lines"
         on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")
-        for line in cost.price_warnings(rig.models(), meter.limit):
+        for line in [*rig.hand_warnings(), *cost.price_warnings(rig.models(), meter.limit)]:
             on_event(line)
 
         env = None

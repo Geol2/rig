@@ -93,8 +93,9 @@ def test_foreman_mode_warns_only_for_foreman_and_crew(tmp_path):
                                         "b": {"role": "B", "model": "gpt-5"}}})
     assert rig.models() == {"foreman": "gpt-4", "a": "claude-opus-9"}
     warnings = [e for e in _shift_events(tmp_path, rig) if e.startswith("⚠")]
-    assert len(warnings) == 2
-    assert "(hands: foreman)" in warnings[0] and "(hands: a)" in warnings[1]
+    assert len(warnings) == 3
+    assert warnings[0].startswith("⚠ hands not on foreman.crew never run: b;")  # hand warnings come first
+    assert "(hands: foreman)" in warnings[1] and "(hands: a)" in warnings[2]
     assert not any("gpt-5" in w for w in warnings)
 
 
