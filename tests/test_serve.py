@@ -187,6 +187,25 @@ def test_shift_started_from_the_terminal_shows_as_running(server):
     assert not call(base + "/api/shifts")[1][0]["running"]
 
 
+def test_history_reads_findings_count_from_shift_json(server):
+    app, base = server
+    d = app.shifts_dir / "20261009-120000"
+    d.mkdir(parents=True)
+    (d / "shift.json").write_text(json.dumps({"rig": "review", "ok": True, "hands": {"a": {}}, "findings": 3}), encoding="utf-8")
+    (d / "a.md").write_text("no findings here", encoding="utf-8")
+    assert call(base + "/api/shifts")[1][0]["findings"] == 3  # only shift.json is read
+
+
+def test_history_counts_findings_of_older_shift_json(server):
+    app, base = server
+    d = app.shifts_dir / "20261009-120000"
+    d.mkdir(parents=True)
+    (d / "shift.json").write_text(json.dumps({"rig": "review", "ok": True, "hands": {"a": {}, "b": {}}}), encoding="utf-8")
+    (d / "a.md").write_text(json.dumps({"findings": [{"title": "x"}, {"title": "y"}]}), encoding="utf-8")
+    (d / "b.md").write_text("plain", encoding="utf-8")
+    assert call(base + "/api/shifts")[1][0]["findings"] == 2
+
+
 def test_running_json_of_a_dead_process_is_ignored(server):
     import subprocess
     import sys

@@ -118,6 +118,24 @@ def test_single_last_hand_is_final(tmp_path):
     assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["final"] == ["c"]
 
 
+def test_shift_json_counts_findings(tmp_path):
+    from rig.hand import HandResult
+
+    class Finding:
+        async def run(self, hand, prompt, toolbox, check=None):
+            if hand.name == "a":
+                return HandResult(hand.name, json.dumps({"findings": [{"title": "x"}, {"title": "y"}]}), "end_turn", 1)
+            return HandResult(hand.name, "plain text", "end_turn", 1)
+
+    shift = asyncio.run(run_shift(make(), "do it", Finding(), root=tmp_path, on_event=lambda _: None))
+    assert shift.ok and json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["findings"] == 2
+
+
+def test_shift_json_counts_no_findings(tmp_path):
+    shift = asyncio.run(run_shift(make(), "do it", EchoWorker(), root=tmp_path, on_event=lambda _: None))
+    assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["findings"] == 0
+
+
 def test_refusal_is_reported_in_progress(tmp_path):
     from rig.hand import HandResult, refusal_message
 
