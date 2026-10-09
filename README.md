@@ -144,7 +144,8 @@ and `search` from `.` cover both projects. The tool descriptions tell the hands 
   project; commands run there and their path arguments must stay inside it.
 - `--worktree` makes a worktree in each git repository the projects live in (projects in
   the same repository share one) and commits each repository's changes to a branch of the
-  same name, `rig/<shift-id>`. Every project must be in a git repository; rig checks that
+  same name, `rig/<shift-id>` (`-2`, `-3`, ... appended in a repository where that branch
+  already exists). Every project must be in a git repository; rig checks that
   before creating anything.
 - `rig serve` edits the list: add a row per project, name each one, and save.
 
@@ -309,6 +310,8 @@ Credentials come from `ANTHROPIC_API_KEY` or an `ant auth login` profile.
 `rig run --worktree "task"` keeps the hands' changes off your working tree:
 
 1. Creates branch `rig/<shift-id>` from `HEAD` and a git worktree for it under `.rig/worktrees/`.
+   If that branch already exists (e.g. another rig root on the same repo started a shift in
+   the same second), rig uses `rig/<shift-id>-2`, `-3`, ... instead.
 2. Runs the shift there (`workspace` is mapped to the same path inside the worktree).
 3. Commits whatever the hands changed to that branch and removes the worktree.
    No changes → the branch is deleted. If the commit fails, the worktree is kept.

@@ -84,14 +84,43 @@ def repo_of(workspace: Path) -> Path:
         raise GitError(f"--worktree needs the workspace to be in a git repository: {workspace}") from e
 
 
+MAX_BRANCH_TRIES = 100
+
+
+def _branch_exists(repo: Path, name: str) -> bool:
+    try:
+        git("show-ref", "--verify", "--quiet", f"refs/heads/{name}", cwd=repo)
+    except GitError:
+        return False
+    return True
+
+
 def create(workspace: Path, dest: Path, branch: str) -> Worktree:
+    """A new worktree at `dest` on a new branch named `branch`, or `branch-2`, ... if that's taken."""
     repo = repo_of(workspace)
     base = git("rev-parse", "HEAD", cwd=repo).strip()
     dirty = bool(git("status", "--porcelain", cwd=repo).strip())
     dest.parent.mkdir(parents=True, exist_ok=True)
     base_branch = git("rev-parse", "--abbrev-ref", "HEAD", cwd=repo).strip()
-    git("worktree", "add", "-b", branch, str(dest), base, cwd=repo)
-    return Worktree(repo=repo, path=dest.resolve(), branch=branch, base=base, dirty=dirty, base_branch=base_branch)
+    # Rig roots sharing a repo can start shifts with the same id; take branch, branch-2, branch-3, ...
+    # `git branch` claims each one atomically; if another root got it first, move on to the next.
+    for n in range(1, MAX_BRANCH_TRIES + 1):
+        name = branch if n == 1 else f"{branch}-{n}"
+        if _branch_exists(repo, name):
+            continue
+        try:
+            git("branch", name, base, cwd=repo)
+        except GitError:
+            if _branch_exists(repo, name):
+                continue
+            raise
+        try:
+            git("worktree", "add", str(dest), name, cwd=repo)
+        except GitError:
+            git("branch", "-D", name, cwd=repo)
+            raise
+        return Worktree(repo=repo, path=dest.resolve(), branch=name, base=base, dirty=dirty, base_branch=base_branch)
+    raise GitError(f"no free branch name for {branch} after {MAX_BRANCH_TRIES} tries")
 
 
 def discard(wt: Worktree) -> None:

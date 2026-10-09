@@ -110,6 +110,113 @@ def test_not_a_repo(tmp_path):
         shift_in(plain, WritingWorker(), tmp_path / "rigroot")
 
 
+def test_roots_sharing_a_repo_get_distinct_branches(repo, tmp_path, monkeypatch):
+    from datetime import datetime
+
+    import rig.runner
+
+    class FrozenClock:
+        @staticmethod
+        def now():
+            return datetime(2025, 1, 2, 3, 4, 5)
+
+    monkeypatch.setattr(rig.runner, "datetime", FrozenClock)
+    shifts = [shift_in(repo, WritingWorker({"app/main.py": f"print('{name}')\n"}), tmp_path / f"root{name}")
+              for name in "ABC"]
+
+    sid = shifts[0].id
+    assert sid == "20250102-030405" and all(s.id == sid for s in shifts)
+    expected = [f"rig/{sid}", f"rig/{sid}-2", f"rig/{sid}-3"]
+    assert [s.branch for s in shifts] == expected
+    for shift, branch, name in zip(shifts, expected, "ABC"):
+        assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["branch"] == branch
+        assert git("show", f"{branch}:app/main.py", cwd=repo) == f"print('{name}')\n"
+
+
+def test_branch_is_first_changed_repos_branch(tmp_path, monkeypatch):
+    from datetime import datetime
+
+    import rig.runner
+
+    class FrozenClock:
+        @staticmethod
+        def now():
+            return datetime(2025, 1, 2, 3, 4, 5)
+
+    monkeypatch.setattr(rig.runner, "datetime", FrozenClock)
+    repos = {}
+    for name in ("api", "web"):
+        path = tmp_path / name
+        path.mkdir()
+        (path / "README.md").write_text("v1\n", encoding="utf-8")
+        git("init", "-q", "-b", "main", cwd=path)
+        git("config", "user.email", "test@example.com", cwd=path)
+        git("config", "user.name", "test", cwd=path)
+        git("add", "-A", cwd=path)
+        git("commit", "-q", "-m", "init", cwd=path)
+        repos[name] = path
+    sid = "20250102-030405"
+    git("branch", f"rig/{sid}", cwd=repos["web"])
+
+    rig = Rig.model_validate({
+        "name": "t", "workspaces": {"backend": str(repos["api"]), "frontend": str(repos["web"])},
+        "hands": {"coder": {"role": "Code.", "tools": ["write_file"]}},
+    })
+    worker = WritingWorker({"frontend/b.js": "b\n"})  # only the second repo changes
+    shift = asyncio.run(run_shift(rig, "t", worker, root=tmp_path / "rigroot", on_event=lambda _: None, use_worktree=True))
+
+    assert shift.id == sid
+    assert [wt.branch for wt in shift.worktrees] == [f"rig/{sid}", f"rig/{sid}-2"]
+    assert shift.branch == f"rig/{sid}-2"
+    assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["branch"] == f"rig/{sid}-2"
+    assert git("show", f"rig/{sid}-2:b.js", cwd=repos["web"]) == "b\n"
+
+
+def test_create_skips_existing_branch(repo, tmp_path):
+    from rig import worktree
+
+    git("branch", "rig/x", cwd=repo)
+    wt = worktree.create(repo, tmp_path / "wt", "rig/x")
+    try:
+        assert wt.branch == "rig/x-2"
+    finally:
+        worktree.discard(wt)
+
+
+def test_create_moves_on_when_branch_taken_after_check(repo, tmp_path, monkeypatch):
+    from rig import worktree
+
+    real = worktree._branch_exists
+    raced = []
+
+    def racing_exists(repo_path, name):
+        # The first check sees rig/x free, then another root creates it before `git branch`.
+        if name == "rig/x" and not raced:
+            raced.append(name)
+            git("branch", "rig/x", cwd=repo_path)
+            return False
+        return real(repo_path, name)
+
+    monkeypatch.setattr(worktree, "_branch_exists", racing_exists)
+    wt = worktree.create(repo, tmp_path / "wt", "rig/x")
+    try:
+        assert raced and wt.branch == "rig/x-2"
+    finally:
+        worktree.discard(wt)
+
+
+def test_create_reraises_unrelated_failure(repo, tmp_path):
+    from rig import worktree
+
+    # The destination is an existing non-empty directory: not a branch clash, so no retrying.
+    dest = tmp_path / "taken"
+    dest.mkdir()
+    (dest / "f").write_text("x", encoding="utf-8")
+    with pytest.raises(GitError, match="worktree add"):
+        worktree.create(repo, dest, "rig/x")
+    assert branches(repo) == ["main"]
+
+
 def test_trusting_env_appends_to_existing_git_config():
     from pathlib import Path
 

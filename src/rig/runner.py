@@ -27,7 +27,8 @@ class Shift:
     results: dict[str, HandResult] = field(default_factory=dict)
     final: HandResult | None = None
     ok: bool = False
-    # One per git repository the shift works in (several with `workspaces`), same branch name in each.
+    # One per git repository the shift works in (several with `workspaces`), branch rig/<id> in each
+    # (or rig/<id>-2, ... in a repo where that's already taken).
     worktrees: list[worktree.Worktree] = field(default_factory=list)
     outcomes: list[worktree.Outcome] = field(default_factory=list)
     # Checked `rig run -i` values with defaults filled in.
@@ -50,8 +51,11 @@ class Shift:
 
     @property
     def branch(self) -> str | None:
-        """The branch holding the shift's changes (same name in every repo), if any repo changed."""
-        return self.worktrees[0].branch if any(o.changed for o in self.outcomes) else None
+        """The branch holding the shift's changes in the first repo that changed, if any.
+
+        Usually rig/<id> everywhere, but a repo where that was taken gets rig/<id>-2, ...
+        """
+        return next((wt.branch for wt, o in zip(self.worktrees, self.outcomes) if o.changed), None)
 
     def committed(self) -> list[tuple[worktree.Worktree, worktree.Outcome]]:
         """Worktrees whose changes were committed to the branch."""
