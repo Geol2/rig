@@ -26,18 +26,18 @@ Keep items small enough for one reviewed change. Add context under an item when 
 - [x] **Stability fixes**: shift.json is written even when a shift crashes (with `error`); any tool
   exception becomes a tool error and a crashing hand no longer takes down its parallel siblings;
   shift IDs get a `-2`, `-3` suffix on same-second collisions; `rig serve` starts runs under a lock.
-  Not done: branch `rig/<id>` can still collide across two rig roots that share one git repo
-  (next item).
+  Branch collisions across rig roots: see below.
+- [x] **Unique worktree branch names across rig roots**: `rig/<shift-id>` is unique within
+  one rig root, but two rig roots that share a git repository can start shifts in the same
+  second and collide on the branch (`worktree.create` fails). If the branch already exists,
+  add a `-2`, `-3` suffix the way shift ids do. Test with two roots on one repo.
+  Note: with several repos, each repo may get a different suffix; `shift.branch` is the first changed repo's branch.
 
 ## Backlog
 
 From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
 in priority order. Line numbers are from that review and may have moved.
 
-- [ ] **Unique worktree branch names across rig roots**: `rig/<shift-id>` is unique within
-  one rig root, but two rig roots that share a git repository can start shifts in the same
-  second and collide on the branch (`worktree.create` fails). If the branch already exists,
-  add a `-2`, `-3` suffix the way shift ids do. Test with two roots on one repo.
 - [ ] **Keep secrets out of `run` subprocesses**: commands from the `run` tool inherit the
   whole environment, including `ANTHROPIC_API_KEY`, so `uv run pytest` or any project code
   can read it (`tools.py` `_run`, `worktree.py` `env`). Drop variables whose names look
