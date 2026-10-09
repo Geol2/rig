@@ -210,7 +210,9 @@ so far against the limit (taken from `max_cost_usd`, editable before each run) a
 
 Shifts started with `rig run` in a terminal show up too: every shift writes its progress
 lines to `progress.log` in its folder (and `running.json` while it runs), and the history
-list refreshes on its own. **Log** on a row shows that shift's progress, live while it runs.
+list refreshes on its own and a newly started shift opens in the log panel by itself (or
+press **Log** on any row). When it ends, the tab title says so, and **끝나면 알림 받기**
+turns on a desktop notification.
 Start `rig serve` in the folder you run rig from (the one holding `.rig/`).
 
 Reports opened from this page have a **Fix** button on each finding. It fills the task

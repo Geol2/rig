@@ -161,7 +161,7 @@ def test_progress_log_of_a_finished_run(server):
     shift_dir = app.shifts_dir / state["shift_id"]
     assert not (shift_dir / "running.json").exists()
     status, log = call(f"{base}/shifts/{state['shift_id']}/log")
-    assert status == 200 and not log["running"]
+    assert status == 200 and not log["running"] and log["ok"] is True
     assert log["lines"] == state["lines"][: log["total"]] and any("▶ a" in line for line in log["lines"])
     assert call(base + "/api/shifts")[1][0]["log"]
 
@@ -178,7 +178,7 @@ def test_shift_started_from_the_terminal_shows_as_running(server):
     row = call(base + "/api/shifts")[1][0]
     assert row["running"] and row["rig"] == "review" and row["task"] == "from cli" and row["log"]
     log = call(f"{base}/shifts/{d.name}/log")[1]
-    assert log["running"] and log["total"] == 2 and log["lines"][1] == "  ▶ a"  # the half-written line waits
+    assert log["running"] and log["ok"] is None and log["total"] == 2 and log["lines"][1] == "  ▶ a"  # the half-written line waits
     with (d / "progress.log").open("a", encoding="utf-8") as f:
         f.write("ne\n")
     assert call(f"{base}/shifts/{d.name}/log?since=2")[1]["lines"] == ["  ■ a  done"]
