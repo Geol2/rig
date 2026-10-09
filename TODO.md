@@ -174,12 +174,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   PR이 두 개 생기는 일을 막기 위함). `scripts/auto.sh`의 "두 번 연속 실패면 멈춤"은 그대로. 완료 기준: `tests/test_scripts.py`에
   가짜 shift 폴더로 "이어 받음 / 새로 시작(같은 task 아님, ok였음, 이미 두 번 이어 함)"을 확인하는 테스트.
   Note: `scripts/resume-target.py` decides (same task, not ok, resumed_from chain < 2, `load_resume` accepts); the CI-failed open PR case is split into its own Backlog item.
-
-## Backlog
-
-Requested by the owner ("중간에 그만두고 기억을 하고 계속되는 건 돼나"), first:
-
-- [ ] **CI 실패로 열린 PR을 같은 브랜치에서 고치기**: 직전 shift가 ok였어도 shift.json `prs`에 병합되지도
+- [x] **CI 실패로 열린 PR을 같은 브랜치에서 고치기**: 직전 shift가 ok였어도 shift.json `prs`에 병합되지도
   닫히지도 않은 PR이 있고 note가 `not merged: CI failed: …`이면, `scripts/next.sh`(`scripts/resume-target.py`)가
   그 shift를 이어 받아 "CI 실패(검사 이름) 고치기"를 지시하고, 그 브랜치에 push해서 같은 PR이 갱신되게 합니다
   (#46/#47처럼 같은 항목을 처음부터 다시 해 PR이 두 개 생기는 일 방지). 필요한 것: `runner.py` `load_resume`이
@@ -189,8 +184,9 @@ Requested by the owner ("중간에 그만두고 기억을 하고 계속되는 �
   재사용(새 PR 안 만듦)·같은 브랜치 push 테스트, `tests/test_scripts.py`에 CI 실패 PR이 열린 ok shift를 이어
   받는 테스트. ok가 아니어도 에러가 아니면 PR이 열리므로(`runner.py` `run_shift`의 `not shift.error` 조건),
   열린 PR이 있는 중단된 shift를 이어 받을 때도 새 PR 대신 기존 PR을 갱신해야 합니다.
+  Note: `runner.py` `ci_failed_pr`/`Resume.prs`, `publish.py` `publish(existing=…)` pushes to the PR's branch (no force) and waits for the new head before CI; `resume-target.py` prints the ↻ line itself.
 
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+## Backlog
 
 From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
 

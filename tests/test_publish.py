@@ -19,22 +19,32 @@ URL = "https://github.com/o/r/pull/7"
 class FakeGh:
     """Answers git push / gh calls; `checks` is a list of successive `gh pr checks` answers."""
 
-    def __init__(self, checks=None, fail=None, merges=None, mergeable=None):
+    def __init__(self, checks=None, fail=None, merges=None, mergeable=None, state="OPEN", head=None, out=None):
         self.calls = []
         self.checks = list(checks or [])
         self.fail = fail or set()
+        self.out = out or {}  # what a call in `fail` prints (default "<call>: boom")
         self.merges = list(merges or [])  # successive `gh pr merge` exit codes (default 0)
         self.mergeable = list(mergeable or [])  # successive `gh pr view --json mergeable` answers
+        self.state = state  # `gh pr view --json state` answer (None: the call fails)
+        self.sha = "abc123"  # `git rev-parse` answer
+        self.head = head  # `gh pr view --json headRefOid` answer (default: the pushed sha)
 
     def __call__(self, args, cwd, stdin=None):
         self.calls.append((args, stdin))
         key = " ".join(args[:3])
         if key in self.fail:
-            return 1, f"{key}: boom"
+            return 1, self.out.get(key, f"{key}: boom")
         if args[:3] == ["gh", "pr", "create"]:
             return 0, f"Creating pull request\n{URL}"
         if args[:3] == ["gh", "pr", "merge"] and self.merges and self.merges.pop(0):
             return 1, "Pull request is not mergeable"
+        if args[:2] == ["git", "rev-parse"]:
+            return 0, self.sha + "\n"
+        if args[:3] == ["gh", "pr", "view"] and "state" in args:
+            return (1, "HTTP 502") if self.state is None else (0, self.state + "\n")
+        if args[:3] == ["gh", "pr", "view"] and "headRefOid" in args:
+            return 0, (self.sha if self.head is None else self.head) + "\n"
         if args[:3] == ["gh", "pr", "view"]:
             return 0, self.mergeable.pop(0) if self.mergeable else "UNKNOWN"
         if args[:3] == ["gh", "pr", "checks"]:
@@ -46,14 +56,16 @@ class FakeGh:
         return [c for c in self.calls if c[0][: len(prefix)] == list(prefix)]
 
 
-def go(gh, *, can_merge=True, why_not="", review="looks good\nLGTM", cancelled=lambda: False, **policy):
+def go(gh, *, can_merge=True, why_not="", review="looks good\nLGTM", cancelled=lambda: False, existing=None,
+       where="", **policy):
     events = []
     t = [0.0]
     pr = publish.publish(
         repo=__import__("pathlib").Path("."), branch="rig/1", base="main", title="rig: t", body="body",
         review=review, can_merge=can_merge, why_not=why_not,
         policy=Publish(pr=True, approver="reviewer", **policy), on_event=events.append, run=gh,
-        sleep=lambda s: t.__setitem__(0, t[0] + s), clock=lambda: t[0], cancelled=cancelled,
+        sleep=lambda s: t.__setitem__(0, t[0] + s), clock=lambda: t[0], cancelled=cancelled, existing=existing,
+        where=where,
     )
     return pr, events
 
@@ -165,6 +177,71 @@ def test_failures_stop_early(step, note):
     assert note in pr.note and not pr.merged and any(e.startswith("  ✗") for e in events)
 
 
+OLD_URL = "https://github.com/o/r/pull/3"
+
+
+def old_pr():
+    return publish.PullRequest(repo=__import__("pathlib").Path("."), branch="rig/0", url=OLD_URL, number=3,
+                               note="not merged: CI failed: tests")
+
+
+def test_existing_pr_is_updated():
+    gh = FakeGh(checks=[PASS])
+    pr, events = go(gh, auto_merge=True, existing=old_pr())
+    assert not gh.ran("gh", "pr", "create") and not gh.ran("git", "push", "-u")
+    assert gh.ran("git", "push", "origin", "rig/1:refs/heads/rig/0")
+    assert (pr.branch, pr.url, pr.number) == ("rig/0", OLD_URL, 3)
+    assert f"  PR updated: {OLD_URL}" in events
+    assert gh.ran("gh", "pr", "review", OLD_URL) and gh.ran("gh", "pr", "checks", OLD_URL)
+    assert pr.merged and pr.note == ""
+    assert not any("hasn't shown" in e or "couldn't read" in e for e in events)
+
+
+@pytest.mark.parametrize("state", ["MERGED", "CLOSED"])
+def test_existing_pr_no_longer_open_opens_new_one(state):
+    gh = FakeGh(checks=[PASS], state=state)
+    pr, events = go(gh, existing=old_pr(), where=" in r")
+    assert f"  ! PR #3 is {state.lower()}; opening a new PR instead" in events
+    assert "  publishing rig/1 → main in r" in events
+    assert gh.ran("git", "push", "-u", "origin", "rig/1") and gh.ran("gh", "pr", "create")
+    assert (pr.branch, pr.url, pr.number) == ("rig/1", URL, 7)
+
+
+@pytest.mark.parametrize("state", [None, "", "DRAFT"])
+def test_existing_pr_with_unreadable_state_is_updated_anyway(state):
+    gh = FakeGh(checks=[PASS], state=state)
+    pr, events = go(gh, auto_merge=True, existing=old_pr())
+    assert "  ! couldn't read the state of PR #3; updating it anyway" in events
+    assert not gh.ran("gh", "pr", "create") and not gh.ran("git", "push", "-u")
+    assert gh.ran("git", "push", "origin", "rig/1:refs/heads/rig/0")
+    assert (pr.branch, pr.url, pr.number) == ("rig/0", OLD_URL, 3) and pr.merged
+
+
+REJECTED = "push to rig/0 rejected (branch changed on GitHub since the last shift); PR #3 not updated"
+
+
+@pytest.mark.parametrize("out, note", [
+    (" ! [rejected]        rig/1 -> rig/0 (fetch first)\nerror: failed to push some refs", REJECTED),
+    ("hint: Updates were refused because of a Non-Fast-Forward", REJECTED),
+    ("fatal: Authentication failed for 'https://github.com/o/r.git/'",
+     "push to rig/0 failed: fatal: Authentication failed for 'https://github.com/o/r.git/'; PR #3 not updated"),
+])
+def test_existing_pr_push_fails(out, note):
+    gh = FakeGh(checks=[PASS], fail={"git push origin"}, out={"git push origin": out})
+    pr, events = go(gh, auto_merge=True, existing=old_pr())
+    assert pr.note == note
+    assert f"  ✗ {note}" in events
+    assert not gh.ran("gh", "pr", "create") and not gh.ran("gh", "pr", "merge") and not pr.merged
+
+
+def test_existing_pr_head_not_shown_yet_checks_anyway():
+    gh = FakeGh(checks=[PASS], head="old")
+    pr, events = go(gh, auto_merge=True, existing=old_pr())
+    assert len(gh.ran("gh", "pr", "view", OLD_URL, "--json", "headRefOid")) == 5
+    assert "  ! GitHub hasn't shown the new commit on the PR yet; checking CI anyway" in events
+    assert pr.merged
+
+
 @pytest.mark.parametrize(
     "data, message",
     [
@@ -196,23 +273,28 @@ def repo(tmp_path):
 class Crew:
     """The coder edits a.py; the reviewer replies with `verdict`."""
 
-    def __init__(self, verdict):
+    def __init__(self, verdict, content="x = 2\n"):
         self.verdict = verdict
+        self.content = content
 
     async def run(self, hand, prompt, toolbox, check=None):
         if hand.name == "coder":
-            await toolbox.call("write_file", {"path": "a.py", "content": "x = 2\n"})
+            await toolbox.call("write_file", {"path": "a.py", "content": self.content})
             return HandResult(hand.name, "changed x", "end_turn", 1)
         return HandResult(hand.name, self.verdict, "end_turn", 1)
 
 
-def shift_with(repo, verdict, monkeypatch, tmp_path, hands=None, lines=("coder -> reviewer",)):
-    gh = FakeGh(checks=[[{"name": "tests", "bucket": "pass"}]])
+def shift_with(repo, verdict, monkeypatch, tmp_path, hands=None, lines=("coder -> reviewer",), checks=None,
+               gh=None, crew=None, resume=None):
+    gh = gh or FakeGh()
+    gh.checks = list(checks or [[{"name": "tests", "bucket": "pass"}]])
 
     def run(args, cwd, stdin=None):
         if args[0] == "git":  # the push really happens, to the bare remote
             proc = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
             gh.calls.append((args, stdin))
+            if args[:2] == ["git", "rev-parse"]:
+                gh.sha = proc.stdout.strip()  # what the fake PR's head shows
             return proc.returncode, proc.stdout + proc.stderr
         return gh(args, cwd, stdin)
 
@@ -225,7 +307,8 @@ def shift_with(repo, verdict, monkeypatch, tmp_path, hands=None, lines=("coder -
     })
     events = []
     # publish.pr turns on worktree mode by itself.
-    shift = asyncio.run(run_shift(rig, "bump x\ndetails", Crew(verdict), root=tmp_path / "rigroot", on_event=events.append))
+    shift = asyncio.run(run_shift(rig, "bump x\ndetails", crew or Crew(verdict), root=tmp_path / "rigroot",
+                                  on_event=events.append, resume=resume))
     return shift, gh, events
 
 
@@ -256,6 +339,35 @@ def test_end_to_end_reviewer_did_not_approve(repo, monkeypatch, tmp_path):
     (pr,) = shift.prs
     assert pr.url == URL and not pr.merged and "reviewer didn't approve" in pr.note
     assert not gh.ran("gh", "pr", "merge")
+
+
+def test_resume_fixes_ci_on_the_same_pr(repo, monkeypatch, tmp_path):
+    from rig.runner import load_resume
+
+    repo, remote = repo
+    gh = FakeGh()
+    first, _, _ = shift_with(repo, "LGTM", monkeypatch, tmp_path, checks=[[{"name": "tests", "bucket": "fail"}]], gh=gh)
+    old_branch = f"rig/{first.id}"
+    summary = json.loads((first.dir / "shift.json").read_text(encoding="utf-8"))
+    assert summary["ok"] and summary["prs"][0]["note"] == "not merged: CI failed: tests"
+
+    rig = Rig.model_validate({
+        "name": "t", "workspace": str(repo),
+        "hands": {"coder": {"role": "C", "tools": ["write_file"]}, "reviewer": {"role": "R"}},
+        "lines": ["coder -> reviewer"], "publish": {"pr": True, "approver": "reviewer", "auto_merge": True},
+    })
+    resume = load_resume(tmp_path / "rigroot", rig, "last")
+    assert resume.shift_id == first.id and resume.why == "CI failed on PR #7: tests"
+    second, _, events = shift_with(repo, "LGTM", monkeypatch, tmp_path, gh=gh, crew=Crew("LGTM", "x = 3\n"),
+                                   resume=resume)
+
+    assert git("show", f"{old_branch}:a.py", cwd=remote) == "x = 3\n"  # the fix went onto the old branch
+    assert len(gh.ran("gh", "pr", "create")) == 1  # over both shifts
+    assert gh.ran("git", "push", "origin", f"rig/{second.id}:refs/heads/{old_branch}")
+    assert f"  publishing rig/{second.id} → {old_branch} (PR #7)" in events
+    summary = json.loads((second.dir / "shift.json").read_text(encoding="utf-8"))
+    assert summary["resumed_from"] == first.id
+    assert summary["prs"][0]["branch"] == old_branch and summary["prs"][0]["merged"]
 
 
 def test_crashed_shift_is_not_published(repo, monkeypatch, tmp_path):

@@ -246,3 +246,61 @@ def test_refuses_kept_worktree(repo, tmp_path):
     summary["worktrees"][0]["kept_at"] = "/somewhere/kept"
     path.write_text(json.dumps(summary), encoding="utf-8")
     refuses(root, rig_for(repo), old, rf"^shift {old} kept its worktree at /somewhere/kept because the commit failed")
+
+
+PR_URL = "https://github.com/o/r/pull/7"
+
+
+def with_prs(root, shift_id, *prs):
+    """Rewrites the shift's summary as if publishing it had left `prs`."""
+    path = root / ".rig" / "shifts" / shift_id / "shift.json"
+    path.write_text(json.dumps({**summary_of(root, shift_id), "prs": list(prs)}), encoding="utf-8")
+
+
+def pr_entry(repo, shift_id, **changes):
+    return {"repo": str(repo.resolve()), "branch": f"rig/{shift_id}", "url": PR_URL, "number": 7,
+            "merged": False, "closed": False, "note": "not merged: CI failed: tests, lint", **changes}
+
+
+def ok_shift(repo, root):
+    return shift_in(rig_for(repo), Worker({"coder": {"app/x.py": "x\n"}}), root).id
+
+
+def test_ok_shift_with_ci_failed_pr_is_resumed(repo, tmp_path):
+    root = tmp_path / "rigroot"
+    old = ok_shift(repo, root)
+    with_prs(root, old, "junk", {"url": None}, pr_entry(repo, old))
+    resume = load_resume(root, rig_for(repo), "last")
+    assert resume.why == "CI failed on PR #7: tests, lint"
+    assert f"pull request {PR_URL} was opened, but CI failed on it (tests, lint)" in resume.context
+    assert "app/x.py" in resume.context and "same pull request" in resume.context
+    (pr,) = resume.prs.values()
+    assert (pr.branch, pr.url, pr.number) == (f"rig/{old}", PR_URL, 7)
+    assert list(resume.prs) == [repo.resolve()]
+
+    with_prs(root, old, pr_entry(repo, old, number=None))
+    assert load_resume(root, rig_for(repo), old).why == "CI failed on the PR: tests, lint"
+
+
+@pytest.mark.parametrize("changes", [
+    {"note": "auto_merge is off"},
+    {"merged": True},
+    {"closed": True},
+    {"note": "not merged after updating the branch: CI failed: tests"},
+])
+def test_ok_shift_refused_unless_its_pr_failed_ci(repo, tmp_path, changes):
+    root = tmp_path / "rigroot"
+    old = ok_shift(repo, root)
+    with_prs(root, old, pr_entry(repo, old, **changes))
+    refuses(root, rig_for(repo), "last", f"^shift {old} finished ok; nothing to resume$")
+
+
+def test_failed_shift_with_open_pr_updates_it(repo, tmp_path):
+    root = tmp_path / "rigroot"
+    old = interrupted_shift(repo, root)
+    with_prs(root, old, pr_entry(repo, old, note="not merged: the shift didn't finish cleanly"))
+    resume = load_resume(root, rig_for(repo), old)
+    assert resume.why == "interrupted"
+    assert resume.prs[repo.resolve()].url == PR_URL
+    assert f"Its pull request {PR_URL} is still open; what you commit updates it." in resume.context
+    assert "stopped before finishing" in resume.context
