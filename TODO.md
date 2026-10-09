@@ -172,7 +172,10 @@ Requested by the owner ("중간에 그만두고 기억을 하고 계속되는 �
   (`error`/`stopped`/`incomplete`) 브랜치에 커밋이 있고 그 뒤로 병합된 PR이 없으면 새로 시작하는 대신
   `rig run --resume <그 id>`로 실행하고, 터미널에 "↻ 중단된 작업 이어 하기: <id>"를 한국어로 출력합니다.
   같은 shift를 두 번 넘게 이어 하지 않도록(이어 한 shift도 또 실패하면 새로 시작) `resumed_from` 사슬을
-  확인하세요. `scripts/auto.sh`의 "두 번 연속 실패면 멈춤"은 그대로. 완료 기준: `tests/test_scripts.py`에
+  확인하세요. **CI 실패로 PR이 열린 채 남은 경우도 포함**: 직전 shift가 ok였어도 shift.json `prs`에 병합되지
+  않고 닫히지도 않은 PR이 있으면(이유가 `CI failed: …`), 같은 브랜치에서 이어 받아 "CI 실패(검사 이름) 고치기"를
+  지시하고, 그 브랜치에 push하면 같은 PR이 갱신되게 하세요(#46/#47처럼 같은 항목을 처음부터 다시 해서
+  PR이 두 개 생기는 일을 막기 위함). `scripts/auto.sh`의 "두 번 연속 실패면 멈춤"은 그대로. 완료 기준: `tests/test_scripts.py`에
   가짜 shift 폴더로 "이어 받음 / 새로 시작(같은 task 아님, ok였음, 이미 두 번 이어 함)"을 확인하는 테스트.
 
 From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
