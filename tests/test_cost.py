@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from rig.cost import CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, Price, cost, price, summary, usd
+from rig.cost import CACHE_READ_FACTOR, CACHE_WRITE_FACTOR, Meter, Price, cost, price, price_warnings, summary, usd
 from rig.hand import EchoWorker, HandResult
 from rig.runner import _totals, run_shift
 from rig.spec import Rig
@@ -36,6 +36,66 @@ def test_model_specific_cache_read_price():
 def test_price_unknown(model):
     assert price(model) is None
     assert cost(model, 1000, 1000) is None
+
+
+def test_price_warnings_all_priced():
+    assert price_warnings({"a": "claude-opus-5-5", "b": "claude-sonnet-4-5-20250929"}) == []
+    assert price_warnings({"a": "claude-opus-5-5"}, limit=5) == []
+
+
+def test_price_warnings_without_limit():
+    [line] = price_warnings({"a": "claude-opus-5-5", "b": "claude-opus-9"})
+    assert line == ("⚠ no price for model 'claude-opus-9' (hands: b): its cost shows as n/a; "
+                    "add it to PRICES in rig/cost.py")
+
+
+def test_price_warnings_with_limit_names_limit_and_hands():
+    [line] = price_warnings({"a": "claude-opus-9", "b": "claude-opus-5-5", "c": "claude-opus-9"}, limit=5)
+    assert line.startswith("⚠ cost limit $5.00 can't count hands a, c: no price for model 'claude-opus-9'")
+    assert "not limited" in line
+
+
+def test_price_warnings_one_line_per_model():
+    lines = price_warnings({"a": "gpt-4", "b": "claude-opus-9", "c": "gpt-4"})
+    assert len(lines) == 2
+    assert "'gpt-4' (hands: a, c)" in lines[0] and "'claude-opus-9' (hands: b)" in lines[1]
+
+
+def _shift_events(tmp_path, rig, meter=None):
+    events = []
+    asyncio.run(run_shift(rig, "do it", EchoWorker(), root=tmp_path, on_event=events.append, meter=meter))
+    return events
+
+
+def test_shift_warns_about_unpriced_model(tmp_path):
+    rig = Rig.model_validate({"name": "t", "hands": {"a": {"role": "A", "model": "claude-opus-9"}}})
+    events = _shift_events(tmp_path, rig)
+    assert events[0].startswith("shift ")  # still first: `rig serve` reads the shift id from it
+    assert events[1].startswith("⚠ no price for model 'claude-opus-9' (hands: a)")
+
+
+def test_shift_warning_uses_effective_limit(tmp_path):
+    rig = Rig.model_validate({"name": "t", "max_cost_usd": 3,
+                              "hands": {"a": {"role": "A", "model": "claude-opus-9"}}})
+    assert _shift_events(tmp_path, rig)[1].startswith("⚠ cost limit $3.00 can't count hands a")
+    # --max-cost (or serve's limit) overrides the rig's.
+    assert _shift_events(tmp_path, rig, Meter(limit=1))[1].startswith("⚠ cost limit $1.00 can't count hands a")
+
+
+def test_shift_without_unpriced_models_has_no_warning(tmp_path):
+    rig = Rig.model_validate({"name": "t", "hands": {"a": {"role": "A"}}})
+    assert not any(e.startswith("⚠") for e in _shift_events(tmp_path, rig))
+
+
+def test_foreman_mode_warns_only_for_foreman_and_crew(tmp_path):
+    rig = Rig.model_validate({"name": "t", "foreman": {"role": "F", "model": "gpt-4", "crew": ["a"]},
+                              "hands": {"a": {"role": "A", "model": "claude-opus-9"},
+                                        "b": {"role": "B", "model": "gpt-5"}}})
+    assert rig.models() == {"foreman": "gpt-4", "a": "claude-opus-9"}
+    warnings = [e for e in _shift_events(tmp_path, rig) if e.startswith("⚠")]
+    assert len(warnings) == 2
+    assert "(hands: foreman)" in warnings[0] and "(hands: a)" in warnings[1]
+    assert not any("gpt-5" in w for w in warnings)
 
 
 def test_cost_with_cache():

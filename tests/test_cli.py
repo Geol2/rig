@@ -27,7 +27,21 @@ def test_check_valid_rig(tmp_path, monkeypatch, capsys):
     )
     monkeypatch.chdir(tmp_path)
     main(["check"])
-    assert "✓ ok: 2 hands, 1 lines" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "✓ ok: 2 hands, 1 lines" in out
+    assert "⚠" not in out  # the default model is priced
+
+
+def test_check_warns_about_unpriced_model(tmp_path, monkeypatch, capsys):
+    (tmp_path / "rig.yaml").write_text(
+        "name: ok\nmax_cost_usd: 5\nhands:\n  a: {role: A, model: claude-opus-9}\n  b: {role: B}\nlines: ['a -> b']\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    main(["check"])  # a warning, not an error
+    out = capsys.readouterr().out
+    assert "✓ ok: 2 hands, 1 lines" in out
+    assert "⚠ cost limit $5.00 can't count hands a: no price for model 'claude-opus-9'" in out
 
 
 @pytest.mark.parametrize(

@@ -49,6 +49,25 @@ def price(model: str) -> Price | None:
     return PRICES.get(model) or PRICES.get(_DATED.sub("", model))
 
 
+def price_warnings(models: dict[str, str], limit: float | None = None) -> list[str]:
+    """One warning per model in {hand: model} with no known price; louder when a cost limit is set,
+    since those hands' spending isn't counted toward it."""
+    unpriced: dict[str, list[str]] = {}
+    for hand, model in models.items():
+        if price(model) is None:
+            unpriced.setdefault(model, []).append(hand)
+    lines = []
+    for model, hands in unpriced.items():
+        names = ", ".join(hands)
+        if limit is None:
+            lines.append(f"⚠ no price for model {model!r} (hands: {names}): its cost shows as n/a; "
+                         "add it to PRICES in rig/cost.py")
+        else:
+            lines.append(f"⚠ cost limit {usd(limit)} can't count hands {names}: no price for model {model!r}, "
+                         "so their spending is not limited; add it to PRICES in rig/cost.py")
+    return lines
+
+
 def cost(model: str, input_tokens: int, output_tokens: int, cache_read_tokens: int = 0, cache_write_tokens: int = 0) -> float | None:
     """Estimated USD; input_tokens is the uncached part only. None if the model's price is unknown."""
     p = price(model)

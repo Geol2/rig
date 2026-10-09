@@ -14,7 +14,7 @@ from pydantic import ValidationError
 
 from rig import __version__
 from rig.cost import summary as cost_summary
-from rig.cost import Meter, usd
+from rig.cost import Meter, price_warnings, usd
 from rig.graph import layers
 from rig.spec import InputError, Rig, load
 
@@ -67,6 +67,8 @@ def cmd_check(args: argparse.Namespace) -> None:
             return "required" if s.required else "optional"
 
         print(f"  inputs: {', '.join(f'{n} ({describe(s)})' for n, s in rig.inputs.items())}")
+    for line in price_warnings(rig.models(), rig.max_cost_usd):
+        print(line)
 
 
 def _parse_inputs(pairs: list[str]) -> dict[str, str]:
