@@ -171,6 +171,14 @@ def test_shift_id_is_known_while_running(server, monkeypatch):
         time.sleep(0.02)
 
 
+def test_lone_surrogate_in_live_log_still_answers(server):
+    app, base = server
+    app.run = Run(file="review.rig.yaml", task="task \udcff", dry=True)
+    app.run.log("  ✗ a: bad \udcff name")
+    status, state = call(base + "/api/run?since=0")  # call decodes the body as strict UTF-8
+    assert status == 200 and state["task"] == "task ?" and state["lines"] == ["  ✗ a: bad ? name"]
+
+
 def test_guards(server):
     _, base = server
     # Other Host names (DNS rebinding) and POSTs without the X-Rig header (other sites) are refused.

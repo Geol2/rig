@@ -86,17 +86,14 @@ Keep items small enough for one reviewed change. Add context under an item when 
   editing, `clear_tool_uses_20250919`) behind a `defaults` / per-hand option, on by default
   for the foreman. Check the exact request shape in the Claude API docs first.
   Note: `clear_tool_results` (defaults / per hand; foreman on by default) sends `clear_tool_uses_20250919` (trigger 100k input tokens, keep 5, clear_at_least 20k) with the `context-management-2025-06-27` beta; the transcript keeps everything.
-
-## Backlog
-
-From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
-in priority order. Line numbers are from that review and may have moved.
-
-- [ ] **Lone surrogates can crash a shift**: a hand's output with a lone surrogate (e.g. from
+- [x] **Lone surrogates can crash a shift**: a hand's output with a lone surrogate (e.g. from
   an undecodable file name via `list_dir`) makes the `.md` write in `runner.py` `record` and
   the `shift.json` / `running.json` writes raise `UnicodeEncodeError` (strict UTF-8 with
   `ensure_ascii=False`). Write them with `errors="replace"` like the transcript files, and
   test it.
+  Note: the `.md`, shift.json, running.json and progress.log writes, `rig serve` responses and the CLI's stdout now use `errors="replace"` (a surrogate becomes "?").
+
+## Backlog
 
 From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
 
