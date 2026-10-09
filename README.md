@@ -420,6 +420,16 @@ scripts/next.sh
 scripts/next.sh "fix the typo in README"
 ```
 
+`scripts/auto.sh` runs `scripts/next.sh` again and again: up to `RUNS` runs (default 5) or
+`BUDGET` dollars in total (default 10), and it stops early after two runs in a row without a
+merged PR, or when `.rig/stop` exists (`touch .rig/stop` from another terminal stops it after
+the current run). On a Mac, `caffeinate -i scripts/auto.sh` keeps it from sleeping.
+
+```bash
+scripts/auto.sh
+RUNS=10 BUDGET=20 caffeinate -i scripts/auto.sh
+```
+
 `scripts/sync-main.sh` never stops on git trouble: it cancels a merge, rebase or
 cherry-pick left half-done, stashes uncommitted changes and puts them back, fast-forwards
 when local main is behind, and replays unpushed local commits on top of the remote. If
