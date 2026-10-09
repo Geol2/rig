@@ -117,6 +117,74 @@ def test_resumed_shift_without_changes_drops_its_own_branch(repo, tmp_path):
     assert f"rig/{shift.id}" not in branches and f"rig/{old}" in branches
 
 
+def make_repo(path):
+    path.mkdir(parents=True)
+    (path / "README.md").write_text("v1\n", encoding="utf-8")
+    git("init", "-q", "-b", "main", cwd=path)
+    git("config", "user.email", "test@example.com", cwd=path)
+    git("config", "user.name", "test", cwd=path)
+    git("add", "-A", cwd=path)
+    git("commit", "-q", "-m", "init", cwd=path)
+    return path
+
+
+def two_repo_rig(tmp_path):
+    x, y = make_repo(tmp_path / "x"), make_repo(tmp_path / "y")
+    rig = Rig.model_validate({"name": "t", "workspaces": {"x": str(x), "y": str(y)},
+                              "hands": {"coder": {"role": "Code.", "tools": ["write_file"]}}})
+    return x, y, rig
+
+
+def interrupted_in(rig, root, files, resume=None):
+    """A shift of `rig` that wrote `files` and was then interrupted; returns its id."""
+    before = shift_ids(root) if (root / ".rig" / "shifts").is_dir() else set()
+    worker = Worker({"coder": files}, fail={"coder": KeyboardInterrupt()})
+    with pytest.raises(KeyboardInterrupt):
+        shift_in(rig, worker, root, resume=resume)
+    (new,) = shift_ids(root) - before
+    return new
+
+
+def test_chained_resume_keeps_repos_the_middle_shift_left_alone(tmp_path):
+    x, y, rig = two_repo_rig(tmp_path)
+    root = tmp_path / "rigroot"
+    a = interrupted_in(rig, root, {"x/a_x.py": "ax\n", "y/a_y.py": "ay\n"})
+    # x untouched: its branch is dropped
+    b = interrupted_in(rig, root, {"y/b_y.py": "by\n"}, resume=load_resume(root, rig, a))
+    assert f"rig/{b}" not in git("branch", "--format=%(refname:short)", cwd=x).split()
+    entries = summary_of(root, b)["worktrees"]
+    assert [w["from_branch"] for w in entries] == [f"rig/{a}", f"rig/{a}"]
+    assert [w["origin_base"] for w in entries] == [w["base"] for w in summary_of(root, a)["worktrees"]]
+
+    resume = load_resume(root, rig, b)
+    assert {repo.name: branch for repo, (branch, _, _) in resume.starts.items()} == {"x": f"rig/{a}", "y": f"rig/{b}"}
+    assert f"committed on rig/{a}, rig/{b}:" in resume.context or f"committed on rig/{b}, rig/{a}:" in resume.context
+    # The diff stat reaches back to where shift a started, not just to where b did.
+    assert "a_x.py" in resume.context and "a_y.py" in resume.context and "b_y.py" in resume.context
+
+    worker = Worker({"coder": {"x/c_x.py": "cx\n", "y/c_y.py": "cy\n"}})
+    shift = shift_in(rig, worker, root, resume=resume)
+    assert worker.prompts["coder"].startswith(f'<resumed from="{b}">')
+    by_repo = {wt.repo.name: wt for wt in shift.worktrees}
+    assert by_repo["x"].from_branch == f"rig/{a}" and by_repo["y"].from_branch == f"rig/{b}"
+    new_branch = f"rig/{shift.id}"
+    assert git("show", f"{new_branch}:a_x.py", cwd=x) == "ax\n"  # a's work on x isn't lost
+    assert git("show", f"{new_branch}:a_y.py", cwd=y) == "ay\n"
+    assert git("show", f"{new_branch}:b_y.py", cwd=y) == "by\n"
+
+
+def test_chained_resume_diff_stat_includes_the_first_shift(repo, tmp_path):
+    root = tmp_path / "rigroot"
+    rig = rig_for(repo)
+    first = interrupted_shift(repo, root)
+    worker = Worker({"coder": {"app/more.py": "m\n"}}, fail={"coder": KeyboardInterrupt()})
+    with pytest.raises(KeyboardInterrupt):
+        shift_in(rig, worker, root, resume=load_resume(root, rig, first))
+    (second,) = shift_ids(root) - {first}
+    context = load_resume(root, rig, second).context
+    assert "partial.py" in context and "more.py" in context
+
+
 def test_only_first_stage_hears_about_resume(repo, tmp_path):
     root = tmp_path / "rigroot"
     rig = lines_rig(repo)
@@ -215,6 +283,17 @@ def test_refuses_deleted_branch(repo, tmp_path):
     old = interrupted_shift(repo, root)
     git("branch", "-D", f"rig/{old}", cwd=repo)
     refuses(root, rig_for(repo), old, rf"^branch rig/{old} of shift {old} no longer exists \(merged or deleted\)$")
+
+
+def test_refuses_deleted_branch_of_a_repo_the_middle_shift_left_alone(tmp_path):
+    x, y, rig = two_repo_rig(tmp_path)
+    root = tmp_path / "rigroot"
+    a = interrupted_in(rig, root, {"x/a_x.py": "ax\n", "y/a_y.py": "ay\n"})
+    b = interrupted_in(rig, root, {"y/b_y.py": "by\n"}, resume=load_resume(root, rig, a))
+    git("branch", "-D", f"rig/{a}", cwd=x)  # y's rig/{a} stays
+    worktrees = git("worktree", "list", cwd=x)
+    refuses(root, rig, b, rf"^branch rig/{a} of shift {b} no longer exists \(merged or deleted\)$")
+    assert git("worktree", "list", cwd=x) == worktrees
 
 
 def test_refuses_other_rig(repo, tmp_path):

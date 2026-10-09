@@ -210,8 +210,9 @@ class Resume:
     shift_id: str
     task: str
     inputs: dict[str, str]
-    # Resolved repo path → (the old shift's branch, full sha of its tip): where the new branch starts.
-    starts: dict[Path, tuple[str, str]]
+    # Resolved repo path → (the old shift's branch, full sha of its tip, commit the resume chain started
+    # from): where the new branch starts.
+    starts: dict[Path, tuple[str, str, str]]
     why: str  # how the old shift ended, e.g. "interrupted"
     context: str  # the whole <resumed> block for the prompt of the hand(s) that pick the work up
 
@@ -232,6 +233,14 @@ def _why(summary: dict[str, Any]) -> str:
     if stopped:
         return "stopped by user"
     return "incomplete: a hand didn't finish cleanly"
+
+
+def _tip(repo: Path | str, branch: str) -> str:
+    """Full sha of `branch` in `repo`; "" if the branch (or the repo) is gone."""
+    try:
+        return worktree.git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", cwd=Path(repo)).strip()
+    except (worktree.GitError, OSError):
+        return ""
 
 
 def load_resume(root: Path, rig: Rig, which: str) -> Resume:
@@ -265,32 +274,36 @@ def load_resume(root: Path, rig: Rig, which: str) -> Resume:
         if w.get("kept_at"):
             raise ResumeError(f"shift {old} kept its worktree at {w['kept_at']} because the commit failed; "
                               "commit or remove it first")
-    committed = [w for w in entries if w.get("changed") and w.get("commit")]
-    if not committed:
+    # A repo the old shift didn't change still carries an earlier shift's work if it was itself resumed
+    # (from_branch): continue from that branch, or a chained resume would silently lose it.
+    usable: list[tuple[dict[str, Any], str]] = []  # (entry, branch to start from)
+    for w in entries:
+        if w.get("changed") and w.get("commit"):
+            usable.append((w, w["branch"]))
+        elif w.get("from_branch"):
+            usable.append((w, w["from_branch"]))  # a deleted from_branch is refused below, like a changed repo's
+    if not usable:
         hint = f"; try `rig run --resume {summary['resumed_from']}`" if summary.get("resumed_from") else ""
         raise ResumeError(f"shift {old} left no committed branch (no changes, or run without --worktree){hint}")
 
     repos = {worktree.repo_of(folder) for folder in rig.workspace_dirs(root).values()}
-    starts: dict[Path, tuple[str, str]] = {}
+    starts: dict[Path, tuple[str, str, str]] = {}
     stats: list[tuple[Path, str]] = []
-    for w in committed:
+    for w, branch in usable:
         repo = Path(w["repo"]).resolve()
         if repo not in repos:
             continue
-        branch = w["branch"]
-        try:
-            sha = worktree.git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", cwd=repo).strip()
-        except worktree.GitError:
-            sha = ""
+        sha = _tip(repo, branch)
         if not sha:
             raise ResumeError(f"branch {branch} of shift {old} no longer exists (merged or deleted)")
-        starts[repo] = (branch, sha)
-        stats.append((repo, worktree.git("diff", "--stat", f"{w['base']}..{branch}", cwd=repo).rstrip()))
+        origin = w.get("origin_base") or w["base"]  # older shift.json files have no origin_base
+        starts[repo] = (branch, sha, origin)
+        stats.append((repo, worktree.git("diff", "--stat", f"{origin}..{branch}", cwd=repo).rstrip()))
     if not starts:
         raise ResumeError(f"none of shift {old}'s branches are in this rig's repositories")
 
     why = _why(summary)
-    branches = ", ".join(dict.fromkeys(b for b, _ in starts.values()))
+    branches = ", ".join(dict.fromkeys(b for b, _, _ in starts.values()))
     changes = stats[0][1] if len(stats) == 1 else "\n".join(f"{repo.name}:\n{stat}" for repo, stat in stats)
     lines = [
         f'<resumed from="{old}">',
@@ -448,7 +461,9 @@ def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Met
         "branch": shift.branch,
         "worktrees": [
             {"repo": str(wt.repo), "branch": wt.branch, "base": wt.base, "commit": out.commit, "changed": out.changed,
-             "kept_at": str(out.kept_at) if out.kept_at else None}
+             "kept_at": str(out.kept_at) if out.kept_at else None,
+             # For `--resume` chains: the branch this one continued, and where the first shift started.
+             "from_branch": wt.from_branch or None, "origin_base": wt.origin_base or wt.base}
             for wt, out in zip(shift.worktrees, shift.outcomes)
         ],
         "hands": {
@@ -543,11 +558,12 @@ def _start(folder: Path, sync: Publish | None, on_event: Event) -> str | None:
 
 def _make_worktrees(
     shift: Shift, workspace: Path | dict[str, Path], root: Path, run_in: str | None, on_event: Event,
-    sync: Publish | None = None, starts: dict[Path, tuple[str, str]] | None = None,
+    sync: Publish | None = None, starts: dict[Path, tuple[str, str, str]] | None = None,
 ) -> tuple[Path | dict[str, Path], worktree.Worktree]:
     """A worktree per git repo the workspace(s) live in; returns the mapped workspace and `run`'s worktree.
 
-    A repo in `starts` (resolved repo → (old branch, sha), from `--resume`) starts at that sha, without syncing.
+    A repo in `starts` (resolved repo → (old branch, sha, origin base), from `--resume`) starts at that sha,
+    without syncing.
     """
     branch = f"rig/{shift.id}"
     dest = root / ".rig" / "worktrees" / shift.id
@@ -556,9 +572,9 @@ def _make_worktrees(
     def create(folder: Path, repo: Path | None, where: Path) -> worktree.Worktree:
         if repo not in starts:
             return worktree.create(folder, where, branch, _start(folder, sync, on_event))
-        old_branch, sha = starts[repo]
+        old_branch, sha, origin = starts[repo]
         wt = worktree.create(folder, where, branch, start=sha)
-        wt.from_branch = old_branch
+        wt.from_branch, wt.origin_base = old_branch, origin
         return wt
 
     if isinstance(workspace, Path):

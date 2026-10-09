@@ -384,7 +384,9 @@ reuses the old task and inputs (don't pass a task or `-i`). The hand that picks 
 foreman, or the first stage of `lines`) is told why the shift stopped, what is already on the
 branch and what the hands reported, and to finish only what's left. shift.json records
 `resumed_from`, and `rig logs <id>` shows it. If the resumed shift changes nothing, its own
-branch is removed as usual; the old branch still holds the work.
+branch is removed as usual; the old branch still holds the work. Resuming a resumed shift
+works too: with several `workspaces`, a repo the middle shift didn't change continues from the
+branch that shift itself started from, so earlier work isn't lost.
 
 ### Pull requests and auto-merge
 

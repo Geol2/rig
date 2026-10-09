@@ -149,12 +149,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   폴더가 섞여 있어도 `rig logs`, `rig logs <id>`, `App.shifts()`, `rig report`가 동작하는지, 그리고
   `_write_summary`가 임시 파일을 남기지 않는지 테스트.
   Note: `_write_summary` writes `shift.json.tmp` then `os.replace`s it (removed on failure); `report.read_summary` (used by `rig logs`, `rig report`, `App.shifts`, `App.shift_log`) returns `{}` plus a reason for a broken file; `rig logs` shows `unreadable` and the detail view starts with "✗ cannot read shift.json (…); showing hand outputs only". The serve log viewer pill still shows 완료 for `ok: null` (serve.py, `s.ok === false ? 'incomplete' : 'done'`) — a separate fix.
-
-## Backlog
-
-Requested by the owner ("중간에 그만두고 기억을 하고 계속되는 건 돼나"), first:
-
-- [ ] **중단된 shift 이어 하기: `rig run --resume <shift-id|last>`**: 지금은 shift가 중간에 멈추면
+- [x] **중단된 shift 이어 하기: `rig run --resume <shift-id|last>`**: 지금은 shift가 중간에 멈추면
   (Ctrl+C, 비용 상한, 에러) `runner.py` `run_shift`의 `finally`가 hand들이 쓴 내용을 `rig/<id>` 브랜치에
   커밋하고 shift.json에 `error`/`stopped`를 남기지만, 다음 실행은 그걸 쓰지 않고 base 브랜치에서 같은 일을
   처음부터 다시 합니다(비용 중복, 브랜치만 쌓임). `--resume`을 주면: 그 shift의 shift.json에서 task·inputs·
@@ -167,6 +162,12 @@ Requested by the owner ("중간에 그만두고 기억을 하고 계속되는 �
   이름은 지금처럼 `rig/<새 id>`, 시작점만 다름). README에 한 단락. 완료 기준: `tests/`에 Ctrl+C로 끊긴
   shift(가짜 worker로 KeyboardInterrupt)를 `--resume last`로 이어 받아 새 worktree가 이전 브랜치 커밋을
   포함하고, 프롬프트에 `<resumed>`가 들어가고, `resumed_from`이 기록되는 테스트; ok인 shift는 거부되는 테스트.
+  Note: `runner.load_resume` reads task, inputs and the committed branches from the old shift.json and `run_shift(resume=…)` starts each repo's new `rig/<new id>` branch from the old branch tip (implies `--worktree`, no remote sync). shift.json records `resumed_from`, and per worktree `from_branch` and `origin_base`, so a chained resume keeps repos the middle shift didn't change (it continues from their `from_branch`) and the `<resumed>` diff stat reaches back to the first shift's base. The `<resumed>` block (reason, hand reply excerpts, diff stat) goes to the foreman or the first lines stage only. Refused, creating nothing: unknown id or no shifts, still running, unreadable shift.json, finished ok, another rig, a kept worktree, no usable branch (with a hint to resume the `resumed_from` shift), a deleted branch, or branches outside the rig's repos.
+
+## Backlog
+
+Requested by the owner ("중간에 그만두고 기억을 하고 계속되는 건 돼나"), first:
+
 - [ ] **`scripts/next.sh`가 중단된 작업을 자동으로 이어 받기**: 위 항목이 끝난 뒤. `next.sh`가 task를
   정할 때(`scripts/next-task.sh` 다음), `.rig/shifts`의 가장 최근 shift가 **같은 task**이고 ok가 아니며
   (`error`/`stopped`/`incomplete`) 브랜치에 커밋이 있고 그 뒤로 병합된 PR이 없으면 새로 시작하는 대신
@@ -177,8 +178,6 @@ Requested by the owner ("중간에 그만두고 기억을 하고 계속되는 �
   지시하고, 그 브랜치에 push하면 같은 PR이 갱신되게 하세요(#46/#47처럼 같은 항목을 처음부터 다시 해서
   PR이 두 개 생기는 일을 막기 위함). `scripts/auto.sh`의 "두 번 연속 실패면 멈춤"은 그대로. 완료 기준: `tests/test_scripts.py`에
   가짜 shift 폴더로 "이어 받음 / 새로 시작(같은 task 아님, ok였음, 이미 두 번 이어 함)"을 확인하는 테스트.
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
 
 From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
 
