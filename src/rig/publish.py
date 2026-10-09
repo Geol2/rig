@@ -3,6 +3,10 @@
 Uses `git` and the GitHub CLI (`gh`, logged in with `gh auth login`) in the repository the
 branch was made in. Merging needs all of: the shift finished cleanly, the approver hand's
 last word is the approval word (e.g. LGTM), and every CI check on the PR passed.
+
+If the merge fails because the base branch moved on while CI ran, the PR branch is updated
+from the base and merged after CI passes again. If it conflicts with the base, the PR is
+closed with a comment (the branch stays), so no approved-but-unmergeable PR is left open.
 """
 
 from __future__ import annotations
@@ -36,11 +40,12 @@ class PullRequest:
     url: str | None = None
     number: int | None = None
     merged: bool = False
+    closed: bool = False  # closed unmerged because it conflicts with the base
     note: str = ""  # why it wasn't opened or merged
 
     def as_dict(self) -> dict:
         return {"repo": str(self.repo), "branch": self.branch, "url": self.url, "number": self.number,
-                "merged": self.merged, "note": self.note}
+                "merged": self.merged, "closed": self.closed, "note": self.note}
 
 
 def approved(output: str | None, word: str) -> bool:
@@ -101,7 +106,34 @@ def publish(
         pr.note = f"not merged: {verdict}"
         on_event(f"  PR left open ({verdict})")
         return pr
-    code, out = step("gh", "pr", "merge", pr.url, f"--{policy.merge_method}", "--delete-branch")
+    merge = ("gh", "pr", "merge", pr.url, f"--{policy.merge_method}", "--delete-branch")
+    code, out = step(*merge)
+    if code and _mergeable(pr.url, step, sleep) == "MERGEABLE":
+        # Usually the base branch moved on while CI ran: bring the PR branch up to date, let CI
+        # check the combination, and try once more.
+        on_event("  base branch moved on; updating the PR branch and waiting for CI again")
+        ucode, uout = step("gh", "pr", "update-branch", pr.url)
+        if ucode:
+            code, out = ucode, f"couldn't update the PR branch: {uout}"
+        else:
+            verdict = _wait_for_checks(pr.url, step, policy, sleep, clock, cancelled)
+            if verdict != "pass":
+                pr.note = f"not merged after updating the branch: {verdict}"
+                on_event(f"  PR left open ({verdict})")
+                return pr
+            code, out = step(*merge)
+    if code and _mergeable(pr.url, step, sleep) == "CONFLICTING":
+        base_name = policy.base or base
+        pr.note = f"not merged: conflicts with {base_name} (changed since the shift started); PR closed, branch {branch} kept"
+        comment = (f"Not merged: this branch conflicts with `{base_name}`, which changed while the shift ran. "
+                   f"Closing so it isn't left open; the branch `{branch}` is kept. Run the task again to "
+                   f"redo it on the new `{base_name}`, or reopen this PR and resolve the conflict.")
+        ccode, cout = step("gh", "pr", "close", pr.url, "--comment", comment)
+        pr.closed = not ccode
+        if ccode:
+            pr.note = f"not merged: conflicts with {base_name}; couldn't close the PR: {cout}"
+        on_event(f"  ✗ {pr.note}")
+        return pr
     if code:
         pr.note = f"merge failed: {out}"
         on_event(f"  ✗ {pr.note}")
@@ -109,6 +141,19 @@ def publish(
     pr.merged = True
     on_event(f"  PR merged ({policy.merge_method}): {pr.url}")
     return pr
+
+
+def _mergeable(url: str, step, sleep, tries: int = 5) -> str:
+    """GitHub's MERGEABLE / CONFLICTING for the PR ("UNKNOWN" while it's still computing)."""
+    state = "UNKNOWN"
+    for i in range(tries):
+        code, out = step("gh", "pr", "view", url, "--json", "mergeable", "--jq", ".mergeable")
+        state = out.strip() if not code else "UNKNOWN"
+        if state != "UNKNOWN":
+            break
+        if i < tries - 1:
+            sleep(2)
+    return state
 
 
 def _wait_for_checks(url: str, step, policy: Publish, sleep, clock, cancelled) -> str:

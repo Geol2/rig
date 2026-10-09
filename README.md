@@ -373,6 +373,12 @@ the output and in `shift.json` (`prs`):
    if none appear within `ci_grace` (2 minutes) it doesn't merge, unless
    `require_checks: false`.
 
+If the base branch moved on while CI ran and the merge is refused, rig updates the PR
+branch from the base (`gh pr update-branch`), waits for CI again and merges. If the PR
+conflicts with the base, rig closes it with a comment saying why (the branch is kept), so
+an approved PR that can't be merged isn't left open; run the task again to redo it on the
+new base.
+
 Before the shift, rig fetches the PR's base branch (`sync`, on by default) and starts from
 whichever is newer: the remote (so after an auto-merged PR the next shift needs no
 `git pull`) or your local branch (so a TODO item you committed but haven't pushed is
