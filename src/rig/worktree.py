@@ -95,13 +95,47 @@ def _branch_exists(repo: Path, name: str) -> bool:
     return True
 
 
-def create(workspace: Path, dest: Path, branch: str) -> Worktree:
-    """A new worktree at `dest` on a new branch named `branch`, or `branch-2`, ... if that's taken."""
+def current_branch(repo: Path) -> str:
+    """The branch checked out in `repo` ("HEAD" if detached)."""
+    return git("rev-parse", "--abbrev-ref", "HEAD", cwd=repo).strip()
+
+
+def _is_ancestor(a: str, b: str, repo: Path) -> bool:
+    try:
+        git("merge-base", "--is-ancestor", a, b, cwd=repo)
+        return True
+    except GitError:
+        return False
+
+
+def newest_start(repo: Path, remote: str, branch: str) -> tuple[str, str]:
+    """Fetch `remote`/`branch` and pick the commit a shift should start from, with a note.
+
+    Local behind the remote (e.g. rig merged a PR on GitHub since): start from the remote.
+    Local ahead (commits not pushed yet, like a new TODO item): start from local, so they're
+    in. Diverged, or the fetch failed: start from local and say so.
+    """
+    head = git("rev-parse", "HEAD", cwd=repo).strip()
+    try:
+        git("fetch", "-q", remote, branch, cwd=repo)
+        upstream = git("rev-parse", "FETCH_HEAD", cwd=repo).strip()
+    except GitError as e:
+        return head, f"! couldn't fetch {remote}/{branch}, starting from local {branch}: {str(e).splitlines()[0]}"
+    if upstream == head or _is_ancestor(upstream, head, repo):
+        return head, ""
+    if _is_ancestor(head, upstream, repo):
+        return upstream, f"local {branch} is behind {remote}; starting from {remote}/{branch} ({upstream[:7]})"
+    return head, f"! local {branch} and {remote}/{branch} have diverged; starting from local {branch}"
+
+
+def create(workspace: Path, dest: Path, branch: str, start: str | None = None) -> Worktree:
+    """A new worktree at `dest` on a new branch named `branch` (or `branch-2`, ... if taken),
+    from `start` (a commit) or else the repo's HEAD."""
     repo = repo_of(workspace)
-    base = git("rev-parse", "HEAD", cwd=repo).strip()
+    base = start or git("rev-parse", "HEAD", cwd=repo).strip()
     dirty = bool(git("status", "--porcelain", cwd=repo).strip())
     dest.parent.mkdir(parents=True, exist_ok=True)
-    base_branch = git("rev-parse", "--abbrev-ref", "HEAD", cwd=repo).strip()
+    base_branch = current_branch(repo)
     # Rig roots sharing a repo can start shifts with the same id; take branch, branch-2, branch-3, ...
     # `git branch` claims each one atomically; if another root got it first, move on to the next.
     for n in range(1, MAX_BRANCH_TRIES + 1):

@@ -12,7 +12,7 @@ from typing import Any, Callable
 from rig import cost, publish, worktree
 from rig.graph import layers, upstreams
 from rig.hand import HandResult, Worker
-from rig.spec import Rig
+from rig.spec import Publish, Rig
 from rig.tools import Toolbox, ToolError
 
 Event = Callable[[str], None]
@@ -124,7 +124,8 @@ async def run_shift(
     env = None
     if use_worktree:
         # Raises GitError before any hand runs if a workspace isn't in a git repo.
-        workspace, run_wt = _make_worktrees(shift, workspace, root, rig.run.workspace, on_event)
+        sync = rig.publish if rig.publish.pr and rig.publish.sync else None
+        workspace, run_wt = _make_worktrees(shift, workspace, root, rig.run.workspace, on_event, sync)
         env = run_wt.env  # so hands' `run git ...` works in the worktree too
 
     def tools(names: list[str], label: str, extra: dict | None = None) -> Toolbox:
@@ -257,14 +258,29 @@ async def _publish(rig: Rig, task: str, shift: Shift, on_event: Event) -> None:
         ))
 
 
+def _start(folder: Path, sync: Publish | None, on_event: Event) -> str | None:
+    """The commit to start from when syncing with the remote first; None means the repo's HEAD."""
+    if not sync:
+        return None
+    repo = worktree.repo_of(folder)
+    branch = sync.base or worktree.current_branch(repo)
+    if branch == "HEAD":
+        return None  # detached: nothing to sync with
+    start, note = worktree.newest_start(repo, sync.remote, branch)
+    if note:
+        on_event(f"  {note}")
+    return start
+
+
 def _make_worktrees(
-    shift: Shift, workspace: Path | dict[str, Path], root: Path, run_in: str | None, on_event: Event
+    shift: Shift, workspace: Path | dict[str, Path], root: Path, run_in: str | None, on_event: Event,
+    sync: Publish | None = None,
 ) -> tuple[Path | dict[str, Path], worktree.Worktree]:
     """A worktree per git repo the workspace(s) live in; returns the mapped workspace and `run`'s worktree."""
     branch = f"rig/{shift.id}"
     dest = root / ".rig" / "worktrees" / shift.id
     if isinstance(workspace, Path):
-        wt = worktree.create(workspace, dest, branch)
+        wt = worktree.create(workspace, dest, branch, _start(workspace, sync, on_event))
         shift.worktrees.append(wt)
         _announce(wt, on_event)
         return wt.map(workspace), wt
@@ -276,7 +292,7 @@ def _make_worktrees(
         for name, folder in workspace.items():
             repo = repos[name]
             if repo not in by_repo:  # projects in the same repo share its worktree
-                by_repo[repo] = worktree.create(folder, dest / name, branch)
+                by_repo[repo] = worktree.create(folder, dest / name, branch, _start(folder, sync, on_event))
                 shift.worktrees.append(by_repo[repo])
                 _announce(by_repo[repo], on_event, label=f" {repo.name}")
     except worktree.GitError:

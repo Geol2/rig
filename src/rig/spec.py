@@ -62,6 +62,9 @@ class Publish(BaseModel):
     pr: bool = False                 # push the branch and open a PR (turns on --worktree)
     base: str | None = None          # PR target; default: the branch checked out when the shift started
     remote: str = "origin"
+    # Fetch the remote first and start from whichever of local and remote is newer, so a
+    # shift after an auto-merged PR doesn't need a `git pull`.
+    sync: bool = True
     # The hand whose last reply is posted on the PR and must approve before a merge.
     approver: str | None = None
     approve_word: str = "LGTM"

@@ -223,3 +223,90 @@ def test_crashed_shift_is_not_published(repo, monkeypatch, tmp_path):
     assert git("branch", "--list", f"rig/{shift.id}", cwd=remote) == ""
     summary = json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))
     assert summary["error"] == "RuntimeError: bad prompt" and summary["prs"] == []
+
+
+# --- starting from the newest of local and remote (publish.sync) -------------------------------
+
+@pytest.fixture
+def synced(repo, tmp_path):
+    """The repo with main pushed, plus a second clone standing in for "GitHub moved on"."""
+    repo, remote = repo
+    git("push", "-q", "-u", "origin", "main", cwd=repo)
+    other = tmp_path / "other"
+    git("clone", "-q", str(remote), str(other), cwd=tmp_path)
+    git("config", "user.email", "o@example.com", cwd=other)
+    git("config", "user.name", "o", cwd=other)
+    return repo, remote, other
+
+
+def commit(path, name, text):
+    (path / name).write_text(text, encoding="utf-8")
+    git("add", "-A", cwd=path)
+    git("commit", "-q", "-m", f"add {name}", cwd=path)
+
+
+class Peek:
+    """Records which files the hand sees, changes nothing."""
+
+    def __init__(self):
+        self.seen = None
+
+    async def run(self, hand, prompt, toolbox, check=None):
+        self.seen = toolbox.run("list_dir", {"path": "."}).split()
+        return HandResult(hand.name, "nothing to do", "end_turn", 1)
+
+
+def run_peek(repo, tmp_path, **publish_opts):
+    rig = Rig.model_validate({
+        "name": "t", "workspace": str(repo), "hands": {"a": {"role": "A", "tools": ["list_dir"]}},
+        "publish": {"pr": True, **publish_opts},
+    })
+    events, worker = [], Peek()
+    asyncio.run(run_shift(rig, "x", worker, root=tmp_path / "rigroot", on_event=events.append))
+    return worker.seen, events
+
+
+def test_starts_from_remote_when_local_is_behind(synced, tmp_path):
+    repo, _, other = synced
+    commit(other, "merged.py", "from a merged PR\n")
+    git("push", "-q", "origin", "main", cwd=other)
+    seen, events = run_peek(repo, tmp_path)
+    assert "merged.py" in seen  # no `git pull` needed
+    assert any("local main is behind origin; starting from origin/main" in e for e in events)
+    assert not (repo / "merged.py").exists()  # the user's checkout is left alone
+
+
+def test_starts_from_local_when_it_has_unpushed_commits(synced, tmp_path):
+    repo, _, _ = synced
+    commit(repo, "todo_item.md", "- [ ] new item\n")  # committed, not pushed
+    seen, events = run_peek(repo, tmp_path)
+    assert "todo_item.md" in seen
+    assert not any("behind" in e or "diverged" in e for e in events)
+
+
+def test_diverged_starts_from_local_with_a_warning(synced, tmp_path):
+    repo, _, other = synced
+    commit(other, "theirs.py", "x\n")
+    git("push", "-q", "origin", "main", cwd=other)
+    commit(repo, "mine.py", "y\n")
+    seen, events = run_peek(repo, tmp_path)
+    assert "mine.py" in seen and "theirs.py" not in seen
+    assert any(e.startswith("  ! local main and origin/main have diverged") for e in events)
+
+
+def test_fetch_failure_starts_from_local(synced, tmp_path):
+    repo, _, other = synced
+    commit(other, "merged.py", "x\n")
+    git("push", "-q", "origin", "main", cwd=other)
+    git("remote", "set-url", "origin", str(tmp_path / "nowhere.git"), cwd=repo)
+    seen, events = run_peek(repo, tmp_path)
+    assert "merged.py" not in seen
+    assert any(e.startswith("  ! couldn't fetch origin/main, starting from local main") for e in events)
+
+
+def test_sync_off_starts_from_local(synced, tmp_path):
+    repo, _, other = synced
+    commit(other, "merged.py", "x\n")
+    git("push", "-q", "origin", "main", cwd=other)
+    seen, _ = run_peek(repo, tmp_path, sync=False)
+    assert "merged.py" not in seen
