@@ -13,6 +13,18 @@ from rig.spec import ResolvedHand
 from rig.tools import Toolbox, ToolError
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+CONTEXT_EDITING_BETA = "context-management-2025-06-27"
+
+# Server-side context editing: once the prompt passes the trigger, the API replaces old tool
+# results with a placeholder, keeping the latest 5. Clearing invalidates the prompt cache, so
+# clear_at_least makes each clear worth it. The client-side `messages` list stays append-only
+# and unchanged, so the transcript still holds everything.
+CLEAR_TOOL_RESULTS: dict[str, Any] = {"edits": [{
+    "type": "clear_tool_uses_20250919",
+    "trigger": {"type": "input_tokens", "value": 100_000},
+    "keep": {"type": "tool_uses", "value": 5},
+    "clear_at_least": {"type": "input_tokens", "value": 20_000},
+}]}
 
 
 @dataclass
@@ -124,9 +136,15 @@ class ClaudeWorker:
             params["output_config"]["format"] = {"type": "json_schema", "schema": hand.output_schema}
         if toolbox.definitions:
             params["tools"] = toolbox.definitions
+        betas: list[str] = []
         if hand.fallbacks:
-            params["betas"] = [FALLBACK_BETA]
+            betas.append(FALLBACK_BETA)
             params["fallbacks"] = hand.fallbacks
+        if hand.clear_tool_results:
+            betas.append(CONTEXT_EDITING_BETA)
+            params["context_management"] = CLEAR_TOOL_RESULTS
+        if betas:
+            params["betas"] = betas
 
         try:
             return await self._loop(hand, params, messages, result, toolbox, check)

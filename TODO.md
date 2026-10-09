@@ -80,17 +80,18 @@ Keep items small enough for one reviewed change. Add context under an item when 
 - [x] **Worker tests for the missing paths**: `tests/test_worker.py` doesn't cover
   `pause_turn` continuing the loop, a model without a price (cost `None`, meter `unpriced`),
   or `max_tokens` ending a hand. Add those.
+- [x] **Clear old tool results in long hands**: conversations only grow; a long hand (most of
+  all a foreman collecting delegate results) eventually exceeds the context window and ends
+  with `api_error`, losing its work. Turn on the API's tool-result clearing (context
+  editing, `clear_tool_uses_20250919`) behind a `defaults` / per-hand option, on by default
+  for the foreman. Check the exact request shape in the Claude API docs first.
+  Note: `clear_tool_results` (defaults / per hand; foreman on by default) sends `clear_tool_uses_20250919` (trigger 100k input tokens, keep 5, clear_at_least 20k) with the `context-management-2025-06-27` beta; the transcript keeps everything.
 
 ## Backlog
 
 From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
 in priority order. Line numbers are from that review and may have moved.
 
-- [ ] **Clear old tool results in long hands**: conversations only grow; a long hand (most of
-  all a foreman collecting delegate results) eventually exceeds the context window and ends
-  with `api_error`, losing its work. Turn on the API's tool-result clearing (context
-  editing, `clear_tool_uses_20250919`) behind a `defaults` / per-hand option, on by default
-  for the foreman. Check the exact request shape in the Claude API docs first.
 - [ ] **Lone surrogates can crash a shift**: a hand's output with a lone surrogate (e.g. from
   an undecodable file name via `list_dir`) makes the `.md` write in `runner.py` `record` and
   the `shift.json` / `running.json` writes raise `UnicodeEncodeError` (strict UTF-8 with

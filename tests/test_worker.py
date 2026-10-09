@@ -6,7 +6,7 @@ from types import SimpleNamespace as NS
 import pytest
 
 from rig import cost
-from rig.hand import FALLBACK_BETA, ClaudeWorker, _call
+from rig.hand import CLEAR_TOOL_RESULTS, CONTEXT_EDITING_BETA, FALLBACK_BETA, ClaudeWorker, _call
 from rig.spec import Rig
 from rig.tools import Toolbox
 
@@ -67,6 +67,36 @@ def test_tool_loop(tmp_path):
     results = client.calls[1]["messages"][-1]
     assert results["role"] == "user"
     assert [(r["tool_use_id"], r["is_error"]) for r in results["content"]] == [("t1", False), ("t2", True)]
+
+
+def test_default_hand_sends_no_context_management(tmp_path):
+    client = FakeClient([response("end_turn", block("text", text="done"))])
+    h = hand()
+    asyncio.run(ClaudeWorker(client).run(h, "go", Toolbox(tmp_path, h.tools)))
+    assert "context_management" not in client.calls[0]
+
+
+@pytest.mark.parametrize("fallbacks, betas", [("default", [FALLBACK_BETA, CONTEXT_EDITING_BETA]),
+                                              (None, [CONTEXT_EDITING_BETA])])
+def test_clear_tool_results_sends_context_management(tmp_path, fallbacks, betas):
+    rig = Rig.model_validate({"name": "t", "defaults": {"fallbacks": fallbacks},
+                              "hands": {"coder": {"role": "Code.", "clear_tool_results": True}}})
+    h = rig.resolve("coder")
+    client = FakeClient([response("end_turn", block("text", text="done"))])
+    asyncio.run(ClaudeWorker(client).run(h, "go", Toolbox(tmp_path, h.tools)))
+    first = client.calls[0]
+    assert first["betas"] == betas
+    assert first["context_management"] == CLEAR_TOOL_RESULTS
+    assert first["context_management"]["edits"][0]["type"] == "clear_tool_uses_20250919"
+
+
+def test_no_fallbacks_and_no_clearing_sends_no_betas(tmp_path):
+    rig = Rig.model_validate({"name": "t", "defaults": {"fallbacks": None}, "hands": {"coder": {"role": "Code."}}})
+    h = rig.resolve("coder")
+    client = FakeClient([response("end_turn", block("text", text="done"))])
+    asyncio.run(ClaudeWorker(client).run(h, "go", Toolbox(tmp_path, h.tools)))
+    first = client.calls[0]
+    assert "betas" not in first and "context_management" not in first and "fallbacks" not in first
 
 
 def test_refusal_stops(tmp_path):

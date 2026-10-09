@@ -43,6 +43,21 @@ def test_hand_overrides_defaults():
     assert rig.resolve("b").effort == "low"
 
 
+def test_clear_tool_results_on_for_foreman_only():
+    rig = make(lines=[], foreman={})
+    assert rig.resolve("foreman").clear_tool_results is True
+    assert rig.resolve("a").clear_tool_results is False
+    assert make(lines=[], foreman={"clear_tool_results": False}).resolve("foreman").clear_tool_results is False
+
+
+def test_clear_tool_results_from_defaults():
+    rig = make(defaults={"clear_tool_results": True},
+               hands={"a": {"role": "A", "clear_tool_results": False}, "b": {"role": "B"}, "c": {"role": "C"}})
+    assert rig.resolve("b").clear_tool_results is True
+    # An explicit false wins over defaults true.
+    assert rig.resolve("a").clear_tool_results is False
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
