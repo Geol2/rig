@@ -344,6 +344,31 @@ def test_run_prints_every_last_stage_hand(tmp_path, monkeypatch, capsys):
     assert out.index("── b ──") < out.index("── c ──")
 
 
+def test_run_resume_refuses_task_and_inputs(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # no rig.yaml: the message comes before anything else
+    for argv in (["run", "--resume", "last", "task"], ["run", "--resume", "last", "-i", "x=1"]):
+        with pytest.raises(SystemExit) as excinfo:
+            main(argv)
+        assert _exit_message(excinfo) == "rig: --resume reuses the old shift's task and inputs; don't pass a task or -i"
+
+
+def test_run_resume_of_ok_shift(tmp_path, monkeypatch):
+    (tmp_path / "rig.yaml").write_text("name: t\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    _shift(tmp_path, "20250101-000000", {"rig": "t", "mode": "lines", "ok": True, "task": "done"})
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "--resume", "last"])
+    assert _exit_message(excinfo) == "rig: shift 20250101-000000 finished ok; nothing to resume"
+    assert [d.name for d in (tmp_path / ".rig" / "shifts").iterdir()] == ["20250101-000000"]
+
+
+def test_logs_shows_resumed_from(tmp_path, monkeypatch, capsys):
+    _shift(tmp_path, "20250102-000000", {"mode": "lines", "ok": True, "task": "go", "resumed_from": "20250101-000000"})
+    monkeypatch.chdir(tmp_path)
+    main(["logs", "20250102-000000"])
+    assert capsys.readouterr().out.startswith("resumed from 20250101-000000\n")
+
+
 def test_logs_shows_worktree_branch(tmp_path, monkeypatch, capsys):
     _shift(tmp_path, "20261008-100000", {"mode": "lines", "ok": True, "task": "plain run", "branch": None})
     _shift(tmp_path, "20261008-110000", {"mode": "lines", "ok": True, "task": "worktree run", "branch": "rig/20261008-110000"})

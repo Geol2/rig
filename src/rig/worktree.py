@@ -62,6 +62,7 @@ class Worktree:
     base: str        # commit the branch started from
     dirty: bool      # main working tree had uncommitted changes (not carried over)
     base_branch: str = ""  # branch checked out in the main working tree ("HEAD" if detached)
+    from_branch: str = ""  # branch of the resumed shift whose tip `base` is (`rig run --resume`)
 
     def map(self, workspace: Path) -> Path:
         """The same location as `workspace`, inside the worktree."""
