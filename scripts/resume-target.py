@@ -1,9 +1,11 @@
 """Print the id of the shift scripts/next.sh should continue with `rig run --resume`, or nothing.
 
-The newest shift is continued when it ran the same task, didn't end ok, hasn't been resumed
-twice already (its `resumed_from` chain), and `load_resume` accepts it (branch with commits,
-not running, same rig). Otherwise nothing is printed and next.sh starts afresh; when a shift
-of the same task is passed over, stderr says why. Always exits 0.
+The newest shift is continued when it ran the same task, didn't end ok (or did, but left its PR
+open because CI failed, so the fix goes to that same PR), has no merged PR, hasn't been resumed
+twice already (its `resumed_from` chain), and `load_resume` accepts it (branch with commits, not
+running, same rig). Then stderr says "↻ …": which PR's failed checks are being fixed, or which
+shift is being continued. Otherwise nothing is printed on stdout and next.sh starts afresh; when
+a shift of the same task is passed over, stderr says why. Always exits 0.
 
     PYTHONPATH=src python scripts/resume-target.py self.rig.yaml "<task>"
 """
@@ -32,7 +34,7 @@ def _chain(shifts_dir: Path, summary: dict) -> int:
 def target(rig_file: str, task: str) -> str | None:
     from rig import spec
     from rig.report import read_summary
-    from rig.runner import ResumeError, load_resume
+    from rig.runner import CI_FAILED, ResumeError, ci_failed_pr, load_resume
     from rig.worktree import GitError
 
     root = Path(rig_file).resolve().parent
@@ -50,8 +52,12 @@ def target(rig_file: str, task: str) -> str | None:
         return None
     if str(summary.get("task") or "").strip() != task.strip():
         return None
+    # An ok shift is only continued to fix the CI checks that kept its PR from merging.
+    failed = None
     if summary.get("ok") and not summary.get("error") and not summary.get("stopped"):
-        return None
+        failed = ci_failed_pr(summary)
+        if not failed:
+            return None
     old = shift_dir.name
     prs = summary.get("prs")
     if isinstance(prs, list) and any(isinstance(pr, dict) and pr.get("merged") for pr in prs):
@@ -68,6 +74,12 @@ def target(rig_file: str, task: str) -> str | None:
                else "이어 할 수 없음")
         print(f"! 이어 하지 않고 새로 시작: {old} ({why})", file=sys.stderr)
         return None
+    if failed:
+        number = failed.get("number")
+        pr = f"PR #{number}" if isinstance(number, int) else "PR"
+        print(f"↻ CI 실패한 {pr} 고치기 (실패: {failed['note'][len(CI_FAILED):]})", file=sys.stderr)
+    else:
+        print(f"↻ 중단된 작업 이어 하기: {old}", file=sys.stderr)
     return old
 
 

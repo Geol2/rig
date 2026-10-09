@@ -7,6 +7,10 @@ last word is the approval word (e.g. LGTM), and every CI check on the PR passed.
 If the merge fails because the base branch moved on while CI ran, the PR branch is updated
 from the base and merged after CI passes again. If it conflicts with the base, the PR is
 closed with a comment (the branch stays), so no approved-but-unmergeable PR is left open.
+
+Given the still-open PR of a shift this one resumes (`existing`), the branch is pushed onto
+that PR's branch instead (no force), so the same PR is updated and CI checked again rather
+than a second PR opened.
 """
 
 from __future__ import annotations
@@ -62,7 +66,7 @@ def publish(
     repo: Path, branch: str, base: str, title: str, body: str, review: str | None, can_merge: bool,
     why_not: str, policy: Publish, on_event: Callable[[str], None], run: Runner | None = None,
     sleep: Callable[[float], None] = time.sleep, clock: Callable[[], float] = time.monotonic,
-    cancelled: Callable[[], bool] = lambda: False,
+    cancelled: Callable[[], bool] = lambda: False, existing: PullRequest | None = None, where: str = "",
 ) -> PullRequest:
     pr = PullRequest(repo=repo, branch=branch)
     run = run or run_cmd
@@ -70,22 +74,46 @@ def publish(
     def step(*args: str, stdin: str | None = None) -> tuple[int, str]:
         return run(list(args), repo, stdin)
 
+    existing = existing if existing and existing.url else None
+    if existing:
+        # A merged or closed PR gets a new PR as usual; if its state can't be read, it's updated anyway.
+        code, out = step("gh", "pr", "view", str(existing.url), "--json", "state", "--jq", ".state")
+        state = "" if code else out.strip()
+        if state in ("MERGED", "CLOSED"):
+            on_event(f"  ! PR {_label(existing)} is {state.lower()}; opening a new PR instead")
+            on_event(f"  publishing {branch} → {policy.base or base}{where}")
+            existing = None
+        elif state != "OPEN":
+            on_event(f"  ! couldn't read the state of PR {_label(existing)}; updating it anyway")
 
-    code, out = step("git", "push", "-u", policy.remote, branch)
-    if code:
-        pr.note = f"push failed: {out}"
-        on_event(f"  ✗ {pr.note}")
-        return pr
-    code, out = step("gh", "pr", "create", "--head", branch, "--base", policy.base or base, "--title", title,
-                     "--body-file", "-", stdin=body)
-    if code:
-        pr.note = f"couldn't open a PR: {out}"
-        on_event(f"  ✗ {pr.note}")
-        return pr
-    pr.url = out.splitlines()[-1].strip()
-    m = re.search(r"/pull/(\d+)", pr.url)
-    pr.number = int(m.group(1)) if m else None
-    on_event(f"  PR opened: {pr.url}")
+    if existing:
+        code, out = step("git", "push", policy.remote, f"{branch}:refs/heads/{existing.branch}")
+        pr.branch, pr.url, pr.number = existing.branch, existing.url, existing.number
+        if code:
+            if re.search(r"\[rejected\]|non-fast-forward|fetch first", out, re.IGNORECASE):
+                pr.note = (f"push to {existing.branch} rejected (branch changed on GitHub since the last shift); "
+                           f"PR {_label(existing)} not updated")
+            else:
+                pr.note = f"push to {existing.branch} failed: {out}; PR {_label(existing)} not updated"
+            on_event(f"  ✗ {pr.note}")
+            return pr
+        on_event(f"  PR updated: {pr.url}")
+    else:
+        code, out = step("git", "push", "-u", policy.remote, branch)
+        if code:
+            pr.note = f"push failed: {out}"
+            on_event(f"  ✗ {pr.note}")
+            return pr
+        code, out = step("gh", "pr", "create", "--head", branch, "--base", policy.base or base, "--title", title,
+                         "--body-file", "-", stdin=body)
+        if code:
+            pr.note = f"couldn't open a PR: {out}"
+            on_event(f"  ✗ {pr.note}")
+            return pr
+        pr.url = out.splitlines()[-1].strip()
+        m = re.search(r"/pull/(\d+)", pr.url)
+        pr.number = int(m.group(1)) if m else None
+        on_event(f"  PR opened: {pr.url}")
     if review:
         # A comment, not an approval: GitHub doesn't let an account approve its own PR.
         code, out = step("gh", "pr", "review", pr.url, "--comment", "--body-file", "-", stdin=review)
@@ -100,6 +128,9 @@ def publish(
         on_event(f"  PR left open ({why_not})")
         return pr
 
+    if existing and not _shows_head(pr.url, branch, step, sleep):
+        # Otherwise the checks read next could still be the old commit's failed run.
+        on_event("  ! GitHub hasn't shown the new commit on the PR yet; checking CI anyway")
     on_event(f"  waiting for CI on the PR (up to {policy.ci_timeout}s)")
     verdict = _wait_for_checks(pr.url, step, policy, sleep, clock, cancelled)
     if verdict != "pass":
@@ -124,9 +155,9 @@ def publish(
             code, out = step(*merge)
     if code and _mergeable(pr.url, step, sleep) == "CONFLICTING":
         base_name = policy.base or base
-        pr.note = f"not merged: conflicts with {base_name} (changed since the shift started); PR closed, branch {branch} kept"
+        pr.note = f"not merged: conflicts with {base_name} (changed since the shift started); PR closed, branch {pr.branch} kept"
         comment = (f"Not merged: this branch conflicts with `{base_name}`, which changed while the shift ran. "
-                   f"Closing so it isn't left open; the branch `{branch}` is kept. Run the task again to "
+                   f"Closing so it isn't left open; the branch `{pr.branch}` is kept. Run the task again to "
                    f"redo it on the new `{base_name}`, or reopen this PR and resolve the conflict.")
         ccode, cout = step("gh", "pr", "close", pr.url, "--comment", comment)
         pr.closed = not ccode
@@ -141,6 +172,25 @@ def publish(
     pr.merged = True
     on_event(f"  PR merged ({policy.merge_method}): {pr.url}")
     return pr
+
+
+def _label(pr: PullRequest) -> str:
+    return f"#{pr.number}" if pr.number else (pr.url or "")
+
+
+def _shows_head(url: str, branch: str, step, sleep, tries: int = 5) -> bool:
+    """Whether GitHub has the pushed tip of `branch` as the PR's head commit yet."""
+    code, out = step("git", "rev-parse", branch)
+    sha = out.strip() if not code else ""
+    if not sha:
+        return False
+    for i in range(tries):
+        code, out = step("gh", "pr", "view", url, "--json", "headRefOid", "--jq", ".headRefOid")
+        if not code and out.strip() == sha:
+            return True
+        if i < tries - 1:
+            sleep(2)
+    return False
 
 
 def _mergeable(url: str, step, sleep, tries: int = 5) -> str:

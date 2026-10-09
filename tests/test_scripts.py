@@ -255,13 +255,13 @@ def resume_target(repo, task=TASK):
 
 def test_resume_target_picks_up_a_stopped_shift(rig_repo):
     stopped_shift(rig_repo, "20260101-000000")
-    assert resume_target(rig_repo, f"  {TASK}\n") == ("20260101-000000\n", "")
+    assert resume_target(rig_repo, f"  {TASK}\n") == ("20260101-000000\n", "↻ 중단된 작업 이어 하기: 20260101-000000\n")
 
 
 def test_resume_target_picks_up_a_shift_resumed_once(rig_repo):
     stopped_shift(rig_repo, "20260101-000000")
     stopped_shift(rig_repo, "20260101-000001", resumed_from="20260101-000000")
-    assert resume_target(rig_repo) == ("20260101-000001\n", "")
+    assert resume_target(rig_repo) == ("20260101-000001\n", "↻ 중단된 작업 이어 하기: 20260101-000001\n")
 
 
 def test_resume_target_starts_afresh_for_another_task(rig_repo):
@@ -276,7 +276,34 @@ def test_resume_target_starts_afresh_after_an_ok_shift(rig_repo):
 
 def test_resume_target_picks_up_an_ok_shift_that_hit_its_budget(rig_repo):
     stopped_shift(rig_repo, "20260101-000000", ok=True, error=None, stopped="budget")
-    assert resume_target(rig_repo) == ("20260101-000000\n", "")
+    assert resume_target(rig_repo) == ("20260101-000000\n", "↻ 중단된 작업 이어 하기: 20260101-000000\n")
+
+
+def open_pr(repo, shift_id, note):
+    return {"repo": str(repo), "branch": f"rig/{shift_id}", "url": "https://github.com/o/r/pull/7", "number": 7,
+            "merged": False, "closed": False, "note": note}
+
+
+def test_resume_target_picks_up_an_ok_shift_whose_pr_failed_ci(rig_repo):
+    stopped_shift(rig_repo, "20260101-000000", ok=True, error=None,
+                  prs=[open_pr(rig_repo, "20260101-000000", "not merged: CI failed: tests")])
+    assert resume_target(rig_repo) == ("20260101-000000\n", "↻ CI 실패한 PR #7 고치기 (실패: tests)\n")
+
+
+@pytest.mark.parametrize("note", ["not merged: reviewer didn't approve (no LGTM)",
+                                  "not merged after updating the branch: CI failed: tests"])
+def test_resume_target_starts_afresh_after_an_ok_shift_whose_pr_is_open_for_another_reason(rig_repo, note):
+    stopped_shift(rig_repo, "20260101-000000", ok=True, error=None, prs=[open_pr(rig_repo, "20260101-000000", note)])
+    assert resume_target(rig_repo) == ("", "")
+
+
+def test_resume_target_ci_fix_counts_towards_the_chain_limit(rig_repo):
+    stopped_shift(rig_repo, "20260101-000000")
+    stopped_shift(rig_repo, "20260101-000001", resumed_from="20260101-000000")
+    stopped_shift(rig_repo, "20260101-000002", resumed_from="20260101-000001", ok=True, error=None,
+                  prs=[open_pr(rig_repo, "20260101-000002", "not merged: CI failed: tests")])
+    out, err = resume_target(rig_repo)
+    assert out == "" and "! 이어 하지 않고 새로 시작: 20260101-000002 (이미 두 번 이어 했음)" in err
 
 
 def test_resume_target_starts_afresh_after_a_merged_pr(rig_repo):
@@ -360,7 +387,7 @@ def resume_target_call(calls):
 
 def test_next_sh_resumes_the_stopped_shift(tmp_path):
     out, calls = next_sh(tmp_path, "20260101-000000")
-    assert out.index(f"▶ {TASK}") < out.index("↻ 중단된 작업 이어 하기: 20260101-000000")
+    assert f"▶ {TASK}" in out and "↻" not in out  # resume-target.py itself says "↻ …"
     assert resume_target_call(calls)[-3:] == ["scripts/resume-target.py", "self.rig.yaml", TASK]
     assert calls[-1][-4:] == ["--max-cost", "3", "--resume", "20260101-000000"]
     assert not any(TASK in arg for arg in calls[-1])

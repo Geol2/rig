@@ -214,9 +214,26 @@ class Resume:
     starts: dict[Path, tuple[str, str]]
     why: str  # how the old shift ended, e.g. "interrupted"
     context: str  # the whole <resumed> block for the prompt of the hand(s) that pick the work up
+    # Resolved repo path → the old shift's still-open PR there; the new branch is pushed onto its
+    # branch so that PR is updated instead of a second one opened.
+    prs: dict[Path, publish.PullRequest] = field(default_factory=dict)
 
 
 EXCERPT_CHARS = 1500
+CI_FAILED = "not merged: CI failed: "  # the note publish leaves on a PR whose checks failed
+
+
+def _open_prs(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """The shift's PR entries that were opened and are neither merged nor closed."""
+    prs = summary.get("prs")
+    return [pr for pr in prs if isinstance(pr, dict) and pr.get("url") and not pr.get("merged")
+            and not pr.get("closed")] if isinstance(prs, list) else []
+
+
+def ci_failed_pr(summary: dict[str, Any]) -> dict[str, Any] | None:
+    """The shift's first PR left open because its CI checks failed (not after updating the branch), if any."""
+    return next((pr for pr in _open_prs(summary)
+                 if isinstance(pr.get("note"), str) and pr["note"].startswith(CI_FAILED)), None)
 
 
 def _why(summary: dict[str, Any]) -> str:
@@ -231,6 +248,11 @@ def _why(summary: dict[str, Any]) -> str:
         return "cost limit reached"
     if stopped:
         return "stopped by user"
+    ci = ci_failed_pr(summary)
+    if ci:
+        number = ci.get("number")
+        on = f"PR #{number}" if isinstance(number, int) else "the PR"
+        return f"CI failed on {on}: {ci['note'][len(CI_FAILED):]}"
     return "incomplete: a hand didn't finish cleanly"
 
 
@@ -255,7 +277,10 @@ def load_resume(root: Path, rig: Rig, which: str) -> Resume:
         reason = "missing"  # read_summary treats that as merely incomplete, but there's nothing to go on
     if reason is not None:
         raise ResumeError(f"cannot read {old}/shift.json ({reason}); nothing to resume from")
-    if summary.get("ok") and not summary.get("error") and not summary.get("stopped"):
+    # A shift that finished ok is only continued to fix the CI checks that kept its PR from merging.
+    fix_ci = bool(summary.get("ok") and not summary.get("error") and not summary.get("stopped"))
+    failed = ci_failed_pr(summary)
+    if fix_ci and not failed:
         raise ResumeError(f"shift {old} finished ok; nothing to resume")
     if summary.get("rig") != rig.name:
         raise ResumeError(f"shift {old} was run by rig '{summary.get('rig')}', not '{rig.name}' "
@@ -289,15 +314,37 @@ def load_resume(root: Path, rig: Rig, which: str) -> Resume:
     if not starts:
         raise ResumeError(f"none of shift {old}'s branches are in this rig's repositories")
 
+    prs: dict[Path, publish.PullRequest] = {}
+    for pr in _open_prs(summary):
+        repo = Path(str(pr.get("repo"))).resolve()
+        if repo in starts and repo not in prs and isinstance(pr.get("branch"), str):
+            number = pr.get("number")
+            prs[repo] = publish.PullRequest(repo=repo, branch=pr["branch"], url=str(pr["url"]),
+                                            number=number if isinstance(number, int) else None,
+                                            note=str(pr.get("note") or ""))
+
     why = _why(summary)
     branches = ", ".join(dict.fromkeys(b for b, _ in starts.values()))
     changes = stats[0][1] if len(stats) == 1 else "\n".join(f"{repo.name}:\n{stat}" for repo, stat in stats)
-    lines = [
-        f'<resumed from="{old}">',
-        f"This task was started before, in shift {old}, which stopped before finishing ({_neutralize(why)}).",
-        f"Its changes are already in your workspace, committed on {branches}:",
-        _neutralize(changes),
-    ]
+    if fix_ci and failed:
+        checks = failed["note"][len(CI_FAILED):]
+        lines = [
+            f'<resumed from="{old}">',
+            f"This task was done in shift {old} and pull request {_neutralize(str(failed['url']))} was opened, "
+            f"but CI failed on it ({_neutralize(checks)}).",
+            f"Its changes are already in your workspace, committed on {branches}:",
+            _neutralize(changes),
+        ]
+    else:
+        lines = [
+            f'<resumed from="{old}">',
+            f"This task was started before, in shift {old}, which stopped before finishing ({_neutralize(why)}).",
+            f"Its changes are already in your workspace, committed on {branches}:",
+            _neutralize(changes),
+        ]
+        for still_open in prs.values():
+            lines.append(f"Its pull request {_neutralize(str(still_open.url))} is still open; "
+                         "what you commit updates it.")
     excerpts = []
     for key in summary.get("hands") or {}:
         path = shift_dir / f"{key.replace('#', '-')}.md"
@@ -308,11 +355,15 @@ def load_resume(root: Path, rig: Rig, which: str) -> Resume:
         excerpts.append(f'<previous from="{key}">\n{_neutralize(cut)}\n</previous>')
     if excerpts:
         lines += ["What its hands reported (start of each reply):", *excerpts]
-    lines += ["Don't redo what is already done. Check the current state, then finish only what is left.",
-              "</resumed>"]
+    if fix_ci and failed:
+        lines.append("Don't redo the task. Fix what makes those checks fail: reproduce the failures locally by "
+                     "running the tests and linters, then fix them. Your commits go to the same pull request.")
+    else:
+        lines.append("Don't redo what is already done. Check the current state, then finish only what is left.")
+    lines.append("</resumed>")
     inputs = {str(k): str(v) for k, v in (summary.get("inputs") or {}).items()}
     return Resume(shift_id=old, task=summary.get("task") or "", inputs=inputs, starts=starts, why=why,
-                  context="\n".join(lines))
+                  context="\n".join(lines), prs=prs)
 
 
 async def run_shift(
@@ -412,7 +463,7 @@ async def run_shift(
 
         # A crashed shift keeps its branch for a look, but doesn't go to GitHub.
         if rig.publish.pr and shift.committed() and not shift.error:
-            await _publish(rig, task, shift, on_event)
+            await _publish(rig, task, shift, on_event, reuse=resume.prs if resume else {})
             summary = _write_summary(shift, rig, mode, task, meter)  # again, now with the PRs
 
         on_event(cost.summary(summary["totals"]))
@@ -494,8 +545,12 @@ def _latest(results: dict[str, HandResult], hand: str | None) -> HandResult | No
     return found[-1] if found else None
 
 
-async def _publish(rig: Rig, task: str, shift: Shift, on_event: Event) -> None:
+async def _publish(
+    rig: Rig, task: str, shift: Shift, on_event: Event, reuse: dict[Path, publish.PullRequest] | None = None,
+) -> None:
+    """Open (or, for a repo in `reuse`, update the resumed shift's open) PR for each committed branch."""
     policy = rig.publish
+    reuse = reuse or {}
     review = _latest(shift.results, policy.approver)
     if not shift.ok:
         why_not = "the shift didn't finish cleanly"
@@ -519,11 +574,18 @@ async def _publish(rig: Rig, task: str, shift: Shift, on_event: Event) -> None:
             on_event(f"  ✗ no PR: {note}")
             shift.prs.append(publish.PullRequest(repo=wt.repo, branch=wt.branch, note=note))
             continue
-        on_event(f"  publishing {wt.branch} → {base}" + (f" in {wt.repo.name}" if len(shift.worktrees) > 1 else ""))
+        existing = reuse.get(wt.repo.resolve())
+        if existing:
+            label = f"#{existing.number}" if existing.number else str(existing.url)
+            target = f"{existing.branch} (PR {label})"
+        else:
+            target = base
+        where = f" in {wt.repo.name}" if len(shift.worktrees) > 1 else ""
+        on_event(f"  publishing {wt.branch} → {target}{where}")
         shift.prs.append(await asyncio.to_thread(
             publish.publish, wt.repo, wt.branch, base, f"rig: {first}", body,
             review.output if review else None, not why_not, why_not, policy, on_event,
-            cancelled=lambda: shift.meter.stop_reason is not None,
+            cancelled=lambda: shift.meter.stop_reason is not None, existing=existing, where=where,
         ))
 
 

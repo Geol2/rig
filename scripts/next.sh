@@ -45,10 +45,10 @@ fi
 
 # 3. Run. rig makes a branch, opens the PR, and merges it when the review and CI pass.
 echo "▶ $(head -n 1 <<<"$task")"
-# A stopped shift of the same task is continued instead (`--resume` takes no task).
+# A stopped shift of the same task, or one whose PR CI failed, is continued instead (`--resume`
+# takes no task). resume-target.py says "↻ …" on stderr, which goes straight to the terminal.
 resume="$(uv run -q --no-sync python scripts/resume-target.py self.rig.yaml "$task" || true)"
 if [[ -n "$resume" ]]; then
-  echo "↻ 중단된 작업 이어 하기: $resume"
   exec uv run -q --no-sync python -m rig -f self.rig.yaml run --max-cost "${MAX_COST:-3}" --resume "$resume"
 fi
 exec uv run -q --no-sync python -m rig -f self.rig.yaml run --max-cost "${MAX_COST:-3}" "$task"

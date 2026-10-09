@@ -386,6 +386,13 @@ branch and what the hands reported, and to finish only what's left. shift.json r
 `resumed_from`, and `rig logs <id>` shows it. If the resumed shift changes nothing, its own
 branch is removed as usual; the old branch still holds the work.
 
+A shift that finished ok but left its PR open because CI failed can be resumed too: the hand
+is told which checks failed and to fix them. With `publish`, any resumed shift whose PR is
+still open updates that PR instead of opening another: the new commit is pushed to the PR's
+branch, so CI runs again before merging. rig never force-pushes; if that branch changed on
+GitHub, it says so and leaves the PR alone. If the PR was closed or merged by hand, a new PR
+is opened.
+
 ### Pull requests and auto-merge
 
 `publish` hands the branch to GitHub when the shift ends, using `git push` and the GitHub
@@ -452,8 +459,10 @@ Backlog is empty), so the run, its PR title and the web page's history say what 
 `MAX_COST` or `PORT` to change the defaults. If the newest shift ran the same task and was
 interrupted, failed or hit its cost limit with commits left on its branch, it is picked up (only
 when none of its PRs was merged already) with
-`rig run --resume <id>` instead ("↻ 중단된 작업 이어 하기: <id>"); once a resumed shift has failed
-again twice in a row, it starts afresh (`scripts/resume-target.py` decides).
+`rig run --resume <id>` instead ("↻ 중단된 작업 이어 하기: <id>"). So is a shift that finished
+but whose PR stayed open because CI failed; the fix goes to that same PR ("↻ CI 실패한 PR #<n>
+고치기 (실패: …)"). After two resumes in a row, it starts afresh (`scripts/resume-target.py`
+decides).
 
 ```bash
 scripts/next.sh
