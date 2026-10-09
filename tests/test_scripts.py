@@ -178,3 +178,34 @@ def test_auto_stops_on_the_stop_file(tmp_path):
 def test_auto_stops_when_no_shift_was_made(tmp_path):
     code, out, calls = auto(tmp_path, ["none"])
     assert code == 1 and calls == 1 and "실행 기록이 생기지 않았습니다" in out
+
+
+NEXT_TASK = Path(__file__).parent.parent / "scripts" / "next-task.sh"
+
+
+def next_task(tmp_path, todo):
+    (tmp_path / "TODO.md").write_text(todo, encoding="utf-8")
+    out = subprocess.run(["bash", str(NEXT_TASK), str(tmp_path / "TODO.md")], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    return out.stdout
+
+
+def test_next_task_names_the_first_backlog_item(tmp_path):
+    out = next_task(tmp_path, (
+        "# TODO\n\n## Done\n\n- [x] **Old one**: done.\n\n## Backlog\n\n"
+        "- [x] **Ticked**: skip.\n"
+        "- [ ] **`rig logs` shows *status* correctly**: the list prints...\n"
+        "- [ ] **Second**: later.\n\n## Needs a design first\n\n- [ ] **Not this**: x\n"))
+    first = out.splitlines()[0]
+    assert first == "TODO 항목 처리: `rig logs` shows *status* correctly"
+    assert '"`rig logs` shows *status* correctly" 항목 하나만' in out
+
+
+def test_next_task_with_an_empty_backlog_asks_the_planner(tmp_path):
+    out = next_task(tmp_path, "## Backlog\n\n- [x] **Done**: x\n\n## Needs a design first\n\n- [ ] **Not this**: x\n")
+    assert out.splitlines()[0] == "TODO 새 항목 기획 후 첫 항목 처리" and "planner" in out
+
+
+def test_next_task_without_a_todo_file(tmp_path):
+    out = subprocess.run(["bash", str(NEXT_TASK), str(tmp_path / "missing.md")], capture_output=True, text=True)
+    assert out.returncode == 0 and out.stdout.startswith("TODO 새 항목 기획")

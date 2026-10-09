@@ -419,7 +419,9 @@ The worktree starts from `HEAD`, so commit TODO.md changes before running.
 
 `scripts/next.sh` does the whole routine in one command (macOS/Linux): update main with
 `scripts/sync-main.sh`, start `rig serve` in the background if it isn't up (to watch the run under "Log"), then
-run the next TODO item with a $3 cost limit. Pass a task to run something else; set
+run the next TODO item with a $3 cost limit. The task names that item
+(`scripts/next-task.sh`: "TODO 항목 처리: <title>", or a request for new items when the
+Backlog is empty), so the run, its PR title and the web page's history say what it's doing. Pass a task to run something else; set
 `MAX_COST` or `PORT` to change the defaults.
 
 ```bash
