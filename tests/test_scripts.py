@@ -118,3 +118,63 @@ def test_other_branch_and_no_remote_are_skipped(repos, tmp_path):
     git(local, "checkout", "-q", "main")
     git(local, "remote", "set-url", "origin", str(tmp_path / "gone.git"))
     assert "받아오지 못했습니다" in sync(local)
+
+
+AUTO = Path(__file__).parent.parent / "scripts" / "auto.sh"
+
+# Stands in for scripts/next.sh: writes one shift.json per call from the next line of plan.txt
+# ("<cost> <merged> <ok>"), or nothing at all for "none".
+FAKE_NEXT = """#!/usr/bin/env bash
+n=$(( $(cat calls 2>/dev/null || echo 0) + 1 )); echo $n > calls
+line=$(sed -n "${n}p" plan.txt)
+[[ "$line" == none ]] && exit 1
+read -r cost merged ok <<<"$line"
+d=.rig/shifts/2026010$n-000000; mkdir -p $d
+printf '{"ok": %s, "totals": {"cost_usd": %s}, "prs": [{"merged": %s}]}' "$ok" "$cost" "$merged" > $d/shift.json
+[[ -f stop_after ]] && [[ $n -ge $(cat stop_after) ]] && touch .rig/stop
+exit 0
+"""
+
+
+def auto(tmp_path, plan, stop_after=None, **env):
+    (tmp_path / "scripts").mkdir(exist_ok=True)
+    shutil.copy(AUTO, tmp_path / "scripts" / "auto.sh")
+    fake = tmp_path / "fake_next.sh"
+    fake.write_text(FAKE_NEXT, encoding="utf-8")
+    fake.chmod(0o755)
+    (tmp_path / "plan.txt").write_text("\n".join(plan) + "\n", encoding="utf-8")
+    if stop_after:
+        (tmp_path / "stop_after").write_text(str(stop_after), encoding="utf-8")
+    out = subprocess.run(["bash", "scripts/auto.sh"], cwd=tmp_path, capture_output=True, text=True,
+                         env={**os.environ, "NEXT": str(fake), "PAUSE": "0", **env})
+    calls = int((tmp_path / "calls").read_text()) if (tmp_path / "calls").exists() else 0
+    return out.returncode, out.stdout + out.stderr, calls
+
+
+def test_auto_runs_up_to_the_count(tmp_path):
+    code, out, calls = auto(tmp_path, ["0.5 true true"] * 5, RUNS="3")
+    assert code == 0 and calls == 3
+    assert "끝: 3번 실행, 총 $1.5" in out
+
+
+def test_auto_stops_at_the_budget(tmp_path):
+    code, out, calls = auto(tmp_path, ["2 true true"] * 5, BUDGET="3")
+    assert calls == 2 and "예산 $3을 다 써서 멈춥니다" in out
+
+
+def test_auto_stops_after_two_runs_without_a_merge(tmp_path):
+    code, out, calls = auto(tmp_path, ["0.1 false false", "0.1 true true", "0.1 false false", "0.1 false true", "0.1 true true"])
+    assert calls == 4 and "두 번 연속 병합된 PR이 없어서" in out
+
+
+def test_auto_stops_on_the_stop_file(tmp_path):
+    (tmp_path / ".rig").mkdir()
+    (tmp_path / ".rig" / "stop").touch()  # left over from before: removed at the start
+    code, out, calls = auto(tmp_path, ["0.1 true true"] * 5, stop_after=2)
+    assert calls == 2 and ".rig/stop 파일이 있어서 멈춥니다" in out
+    assert not (tmp_path / ".rig" / "stop").exists()
+
+
+def test_auto_stops_when_no_shift_was_made(tmp_path):
+    code, out, calls = auto(tmp_path, ["none"])
+    assert code == 1 and calls == 1 and "실행 기록이 생기지 않았습니다" in out
