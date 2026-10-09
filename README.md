@@ -385,6 +385,16 @@ uv run rig -f self.rig.yaml run --worktree "Do the next item in TODO.md"
 
 The worktree starts from `HEAD`, so commit TODO.md changes before running.
 
+`scripts/next.sh` does the whole routine in one command (macOS/Linux): `git pull` on main,
+start `rig serve` in the background if it isn't up (to watch the run under "Log"), then
+run the next TODO item with a $3 cost limit. Pass a task to run something else; set
+`MAX_COST` or `PORT` to change the defaults.
+
+```bash
+scripts/next.sh
+scripts/next.sh "fix the typo in README"
+```
+
 ## Roadmap
 
 - **crews**: reusable groups of hands
