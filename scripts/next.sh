@@ -17,16 +17,10 @@ if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   exit 1
 fi
 
-# 1. Update this checkout, so the rig code that runs is the newest. Shifts start from the newest
-#    of local and remote main anyway (publish.sync); this is for rig itself.
-branch="$(git rev-parse --abbrev-ref HEAD)"
-if [[ "$branch" != "main" ]]; then
-  echo "! main이 아닌 $branch 브랜치라서 git pull은 건너뜁니다."
-elif ! git pull --ff-only -q origin main; then
-  echo "! git pull에 실패했습니다 (로컬 변경과 충돌?). 지금 코드 그대로 실행합니다."
-else
-  echo "✓ main 최신으로 받음 ($(git rev-parse --short HEAD))"
-fi
+# 1. Update this checkout, so the rig code that runs is the newest (clears leftover merges and
+#    works around conflicts; see sync-main.sh). Shifts start from the newest of local and
+#    remote main anyway (publish.sync); this is for rig itself.
+scripts/sync-main.sh
 # Dependencies from the lockfile, wheels only (no build scripts run); rig itself runs from src/.
 # Relative on purpose: hands' commands inherit it, and in a worktree it means that worktree's src/.
 uv sync -q --locked --no-build --no-install-project

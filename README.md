@@ -391,8 +391,8 @@ uv run rig -f self.rig.yaml run --worktree "Do the next item in TODO.md"
 
 The worktree starts from `HEAD`, so commit TODO.md changes before running.
 
-`scripts/next.sh` does the whole routine in one command (macOS/Linux): `git pull` on main,
-start `rig serve` in the background if it isn't up (to watch the run under "Log"), then
+`scripts/next.sh` does the whole routine in one command (macOS/Linux): update main with
+`scripts/sync-main.sh`, start `rig serve` in the background if it isn't up (to watch the run under "Log"), then
 run the next TODO item with a $3 cost limit. Pass a task to run something else; set
 `MAX_COST` or `PORT` to change the defaults.
 
@@ -400,6 +400,13 @@ run the next TODO item with a $3 cost limit. Pass a task to run something else; 
 scripts/next.sh
 scripts/next.sh "fix the typo in README"
 ```
+
+`scripts/sync-main.sh` never stops on git trouble: it cancels a merge, rebase or
+cherry-pick left half-done, stashes uncommitted changes and puts them back, fast-forwards
+when local main is behind, and replays unpushed local commits on top of the remote. If
+those commits conflict, they're kept on a `backup/main-<time>` branch and main is set to
+the remote's; if the stashed changes conflict, they stay in `git stash list`. Either way it
+says what it did and how to get the kept work back.
 
 ## Roadmap
 
