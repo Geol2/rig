@@ -69,16 +69,17 @@ Keep items small enough for one reviewed change. Add context under an item when 
   past shift's outputs on each request to count findings (`serve.py` `shifts`). Store the
   findings count in shift.json when a shift ends and read only shift.json in the list.
   Note: older shift.json files without `findings` fall back to counting from the outputs.
+- [x] **Structured progress events**: `rig serve` gets the shift id by matching the text of
+  the first progress line with a regex (`serve.py` `Run.log`), which breaks if the wording
+  changes. Have `run_shift` also report structured events (at least shift started with its
+  id), and use that in serve instead of the regex. Keep the CLI output the same.
+  Note: `run_shift(on_status=...)` gets `ShiftEvent`s ("started" before the first line, "finished" with ok/error/stopped, not on Ctrl-C); serve takes the shift id from "started".
 
 ## Backlog
 
 From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
 in priority order. Line numbers are from that review and may have moved.
 
-- [ ] **Structured progress events**: `rig serve` gets the shift id by matching the text of
-  the first progress line with a regex (`serve.py` `Run.log`), which breaks if the wording
-  changes. Have `run_shift` also report structured events (at least shift started with its
-  id), and use that in serve instead of the regex. Keep the CLI output the same.
 - [ ] **CI on Python 3.11 too, and ruff**: `requires-python = ">=3.11"` but CI only runs 3.13.
   Add 3.11 to the test matrix, add ruff (lint) with a small config in pyproject.toml, fix
   what it reports, and run it in CI.

@@ -22,6 +22,23 @@ Event = Callable[[str], None]
 ToolFactory = Callable[..., Toolbox]
 
 
+@dataclass(frozen=True)
+class ShiftEvent:
+    """A machine-readable change in a shift's state, alongside the progress lines meant for people.
+
+    "finished" comes once at the end, including after a crash, but not on Ctrl-C/cancel.
+    """
+
+    kind: str  # started | finished
+    shift_id: str
+    dir: Path
+    # finished: ok, error, stopped (as in shift.json)
+    data: dict[str, Any] = field(default_factory=dict)
+
+
+StatusHandler = Callable[[ShiftEvent], None]
+
+
 @dataclass
 class Shift:
     id: str
@@ -152,6 +169,7 @@ async def run_shift(
     verbose: bool = True,
     inputs: dict[str, str] | None = None,
     meter: cost.Meter | None = None,
+    on_status: StatusHandler | None = None,
 ) -> Shift:
     use_worktree = use_worktree or rig.publish.pr  # a PR needs the branch a worktree shift makes
     dirs = rig.workspace_dirs(root)
@@ -159,8 +177,11 @@ async def run_shift(
     workspace: Path | dict[str, Path] = dirs if rig.workspaces else dirs["."]
     values = rig.resolve_inputs(inputs or {})  # raises InputError before anything is created
     shift = new_shift(root)
+    if on_status:
+        on_status(ShiftEvent("started", shift.id, shift.dir))  # before any progress line
     progress = _Progress(shift, rig.name, task, on_event)
     on_event = progress.event
+    finished = False  # "finished" goes out once, whichever way the shift ends
     try:
         shift.inputs = values
         meter = meter or cost.Meter()
@@ -170,7 +191,7 @@ async def run_shift(
         if hasattr(worker, "meter"):
             worker.meter = meter
         mode = "foreman" if rig.foreman else "lines"
-        on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")  # first line: `rig serve` reads the id from it
+        on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")
         for line in cost.price_warnings(rig.models(), meter.limit):
             on_event(line)
 
@@ -235,7 +256,19 @@ async def run_shift(
         if meter.stop_reason:
             on_event(f"✗ stopped: {meter.message()}")
         on_event(f"logs → {shift.dir}")
+        if on_status:
+            finished = True
+            on_status(ShiftEvent("finished", shift.id, shift.dir,
+                                 {"ok": shift.ok, "error": shift.error, "stopped": meter.stop_reason}))
         return shift
+    except Exception as e:
+        # A crash outside the hands (a worktree, publishing, shift.json) still ends the shift for listeners.
+        if on_status and not finished:
+            finished = True
+            on_status(ShiftEvent("finished", shift.id, shift.dir,
+                                 {"ok": False, "error": f"{type(e).__name__}: {e}",
+                                  "stopped": meter.stop_reason if meter is not None else None}))
+        raise
     finally:
         progress.close()
 
