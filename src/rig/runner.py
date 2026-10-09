@@ -152,7 +152,9 @@ async def run_shift(
         if hasattr(worker, "meter"):
             worker.meter = meter
         mode = "foreman" if rig.foreman else "lines"
-        on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")
+        on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")  # first line: `rig serve` reads the id from it
+        for line in cost.price_warnings(rig.models(), meter.limit):
+            on_event(line)
 
         env = None
         if use_worktree:

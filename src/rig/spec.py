@@ -254,6 +254,11 @@ class Rig(BaseModel):
             return self.foreman.crew
         return list(self.hands)
 
+    def models(self) -> dict[str, str]:
+        """{hand: model} for the hands that can run: the foreman and its crew, or every hand on the lines."""
+        names = ["foreman", *self.crew] if self.foreman else list(self.hands)
+        return {n: self.resolve(n).model for n in names}
+
     @property
     def edges(self) -> list[tuple[str, str]]:
         edges: list[tuple[str, str]] = []
