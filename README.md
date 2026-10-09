@@ -393,7 +393,10 @@ this: the reviewer ends with a line that is just `LGTM` only when nothing must c
 
 [`self.rig.yaml`](self.rig.yaml) is a foreman rig that works on rig itself: it takes an
 item from [`TODO.md`](TODO.md), has the coder implement it with tests, requires the
-reviewer to sign off, and ticks the item. Run it in worktree mode so the result is a
+reviewer to sign off, and ticks the item. When the Backlog runs out (or the task asks for
+ideas), the **planner** reads the code and docs and adds 3 to 5 new items first; when an
+item changes the `rig serve` / `rig report` pages or CLI wording, the **designer** writes a
+short spec for the coder and checks the result. Run it in worktree mode so the result is a
 branch you review and merge:
 
 ```bash
