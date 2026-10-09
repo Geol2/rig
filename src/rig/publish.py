@@ -90,7 +90,7 @@ def publish(
         code, out = step("git", "push", policy.remote, f"{branch}:refs/heads/{existing.branch}")
         pr.branch, pr.url, pr.number = existing.branch, existing.url, existing.number
         if code:
-            if re.search(r"rejected|non-fast-forward|fetch first", out, re.IGNORECASE):
+            if re.search(r"\[rejected\]|non-fast-forward|fetch first", out, re.IGNORECASE):
                 pr.note = (f"push to {existing.branch} rejected (branch changed on GitHub since the last shift); "
                            f"PR {_label(existing)} not updated")
             else:

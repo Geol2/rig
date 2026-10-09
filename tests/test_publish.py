@@ -225,6 +225,9 @@ REJECTED = "push to rig/0 rejected (branch changed on GitHub since the last shif
     ("hint: Updates were refused because of a Non-Fast-Forward", REJECTED),
     ("fatal: Authentication failed for 'https://github.com/o/r.git/'",
      "push to rig/0 failed: fatal: Authentication failed for 'https://github.com/o/r.git/'; PR #3 not updated"),
+    (" ! [remote rejected] rig/1 -> rig/0 (protected branch hook declined)\nerror: failed to push some refs",
+     "push to rig/0 failed:  ! [remote rejected] rig/1 -> rig/0 (protected branch hook declined)\n"
+     "error: failed to push some refs; PR #3 not updated"),
 ])
 def test_existing_pr_push_fails(out, note):
     gh = FakeGh(checks=[PASS], fail={"git push origin"}, out={"git push origin": out})
