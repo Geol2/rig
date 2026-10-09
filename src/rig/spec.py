@@ -98,8 +98,8 @@ class Defaults(BaseModel):
 
     model: str = "claude-opus-5-5"
     effort: Effort = "medium"
-    max_tokens: int = 16000
-    max_turns: int = 20
+    max_tokens: int = Field(default=16000, ge=1)
+    max_turns: int = Field(default=20, ge=1)
     # Server-side refusal fallback ("default" routes by refusal category). null disables it.
     fallbacks: Literal["default"] | None = "default"
     # Let the API clear old tool results once the prompt grows large (see hand.CLEAR_TOOL_RESULTS).
@@ -190,8 +190,8 @@ class Hand(BaseModel):
     role: str = Field(description="System prompt describing this hand's job.")
     model: str | None = None
     effort: Effort | None = None
-    max_tokens: int | None = None
-    max_turns: int | None = None
+    max_tokens: int | None = Field(default=None, ge=1)
+    max_turns: int | None = Field(default=None, ge=1)
     # None uses defaults.clear_tool_results.
     clear_tool_results: bool | None = None
     tools: list[str] = Field(default_factory=list)
@@ -226,7 +226,7 @@ class Foreman(Hand):
     # Hands that must run after the last delegation to any other hand before the
     # foreman may finish, e.g. [reviewer]. Enforced by the harness, not just the prompt.
     require: list[str] = Field(default_factory=list)
-    max_delegations: int = 12
+    max_delegations: int = Field(default=12, ge=1)
 
 
 class Rig(BaseModel):

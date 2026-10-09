@@ -92,18 +92,19 @@ Keep items small enough for one reviewed change. Add context under an item when 
   `ensure_ascii=False`). Write them with `errors="replace"` like the transcript files, and
   test it.
   Note: the `.md`, shift.json, running.json and progress.log writes, `rig serve` responses and the CLI's stdout now use `errors="replace"` (a surrogate becomes "?").
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **Bounds for max_turns, max_tokens and max_delegations**: `Defaults`, `Hand` and
+- [x] **Bounds for max_turns, max_tokens and max_delegations**: `Defaults`, `Hand` and
   `Foreman` in `spec.py` accept any int. `Rig.resolve` uses `h.max_turns or d.max_turns`, so
   `max_turns: 0` on a hand silently falls back to the default. A negative value makes the
   hand stop at once with `[stopped after -1 turns]` (`hand.py` loop), a negative
   `max_tokens` fails at the API only after the shift has started, and `max_delegations: 0`
   gives a foreman that can't delegate. Add `ge=1` to these fields so `rig check` rejects
   them, and test that each one fails validation.
+  Note: `defaults.max_tokens`/`max_turns`, each hand's (and the foreman's) `max_tokens`/`max_turns`, and `foreman.max_delegations` now need `ge=1`; `rig check` rejects 0 or negative values with the field path.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **Duplicate keys and non-UTF-8 files in rig.yaml**: `spec.load` uses `yaml.safe_load`,
   which keeps only the last of two same-named keys, so a second `coder:` under `hands`
   silently replaces the first. A rig.yaml saved in another encoding (e.g. cp949 from a Korean

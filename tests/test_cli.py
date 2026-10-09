@@ -52,8 +52,9 @@ def test_check_warns_about_unpriced_model(tmp_path, monkeypatch, capsys):
         ("name: bad\nhands:\n  a: {role: A, tools: [rm_rf]}\n", "unknown tools"),
         ("hands:\n  a: {role: A}\n", "name\n  Field required"),
         ("- just\n- a list\n", "valid dictionary"),
+        ("name: bad\nhands:\n  a: {role: A, max_turns: 0}\n", "hands.a.max_turns\n  Input should be greater than or equal to 1"),
     ],
-    ids=["unknown-hand", "no-hands", "unknown-tool", "missing-name", "not-a-mapping"],
+    ids=["unknown-hand", "no-hands", "unknown-tool", "missing-name", "not-a-mapping", "zero-max-turns"],
 )
 def test_check_schema_invalid_rig_exits_with_error(tmp_path, monkeypatch, capsys, content, detail):
     (tmp_path / "rig.yaml").write_text(content, encoding="utf-8")
