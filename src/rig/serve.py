@@ -25,7 +25,7 @@ from pydantic import ValidationError
 from rig import report
 from rig.cost import Meter, usd
 from rig.graph import layers
-from rig.runner import PROGRESS_LOG, RUNNING
+from rig.runner import PROGRESS_LOG, RUNNING, ShiftEvent
 from rig.spec import InputError, load
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
@@ -45,9 +45,11 @@ class Run:
     def log(self, line: str) -> None:
         with self.lock:
             self.lines.append(line)
-            m = re.match(r"shift (\S+) ·", line)
-            if m and not self.shift_id:
-                self.shift_id = m.group(1)
+
+    def status_event(self, ev: ShiftEvent) -> None:
+        with self.lock:
+            if ev.kind == "started":
+                self.shift_id = ev.shift_id
 
 
 class App:
@@ -183,7 +185,7 @@ class App:
             worker = EchoWorker() if run.dry else ClaudeWorker()
             shift = asyncio.run(run_shift(
                 rig, run.task, worker, root=path.parent, on_event=run.log, use_worktree=use_worktree,
-                inputs={k: v for k, v in inputs.items() if v != ""}, meter=run.meter,
+                inputs={k: v for k, v in inputs.items() if v != ""}, meter=run.meter, on_status=run.status_event,
             ))
             run.shift_id = shift.id
             for wt, _ in shift.committed():

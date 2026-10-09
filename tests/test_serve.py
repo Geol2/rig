@@ -9,7 +9,8 @@ from http.server import ThreadingHTTPServer
 
 import pytest
 
-from rig.serve import App, make_handler
+from rig.runner import ShiftEvent
+from rig.serve import App, Run, make_handler
 
 RIG = """\
 name: review
@@ -137,6 +138,37 @@ def test_crashed_shift_shows_as_failed(server, monkeypatch):
         time.sleep(0.02)
     assert app.run.status == "failed"
     assert "✗ shift failed: RuntimeError: boom" in app.run.lines
+
+
+def test_shift_id_comes_from_the_status_event_not_the_log_text(tmp_path):
+    run = Run(file="f", task="t", dry=True)
+    run.log("shift fake-id · rig 'x' · lines")
+    assert run.shift_id is None
+    run.status_event(ShiftEvent("started", "abc", tmp_path))
+    assert run.shift_id == "abc" and run.lines == ["shift fake-id · rig 'x' · lines"]
+
+
+def test_shift_id_is_known_while_running(server, monkeypatch):
+    app, _ = server
+    release = threading.Event()
+
+    async def wait(*args, **kwargs):
+        release.wait(5)
+
+    monkeypatch.setattr("rig.runner._run_lines", wait)
+    run = app.start("review.rig.yaml", "x", {"module": "m"}, dry=True, use_worktree=False)
+    try:
+        for _ in range(100):
+            if run.shift_id:
+                break
+            time.sleep(0.02)
+        assert run.status == "running" and (app.shifts_dir / run.shift_id).is_dir()
+    finally:
+        release.set()
+    for _ in range(100):
+        if run.status != "running":
+            break
+        time.sleep(0.02)
 
 
 def test_guards(server):

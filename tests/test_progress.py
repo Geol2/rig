@@ -3,9 +3,10 @@ import asyncio
 import pytest
 
 from rig.hand import HandResult
-from rig.runner import run_shift
+from rig.runner import ShiftEvent, run_shift
 from rig.spec import Rig, RunPolicy
 from rig.tools import Toolbox, ToolError, describe
+from rig.worktree import GitError
 
 
 @pytest.mark.parametrize(
@@ -53,6 +54,41 @@ def test_shift_prints_tool_lines_labelled_by_hand(tmp_path):
     events = []
     asyncio.run(run_shift(_rig(), "t", ToolUsingWorker(), root=tmp_path, on_event=events.append))
     assert any(e.startswith("    · a") and "list_dir" in e for e in events)
+
+
+def test_status_events_bracket_the_progress_lines(tmp_path):
+    seen = []
+    shift = asyncio.run(run_shift(_rig(), "t", ToolUsingWorker(), root=tmp_path, on_event=seen.append,
+                                  on_status=seen.append))
+    first, last = seen[0], seen[-1]
+    assert isinstance(first, ShiftEvent) and first.kind == "started"
+    assert first.shift_id == shift.id and first.dir == shift.dir
+    assert isinstance(seen[1], str) and seen[1].startswith(f"shift {shift.id} · ")
+    assert isinstance(last, ShiftEvent) and last.kind == "finished" and last.shift_id == shift.id
+    assert last.data == {"ok": True, "error": None, "stopped": None}
+    assert [e for e in seen if isinstance(e, ShiftEvent)] == [first, last]
+
+
+def test_crashed_shift_still_sends_finished(tmp_path, monkeypatch):
+    async def crash(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("rig.runner._run_lines", crash)
+    status = []
+    asyncio.run(run_shift(_rig(), "t", ToolUsingWorker(), root=tmp_path, on_event=lambda _: None,
+                          on_status=status.append))
+    assert [e.kind for e in status] == ["started", "finished"]
+    assert status[-1].data["ok"] is False and status[-1].data["error"] == "RuntimeError: boom"
+
+
+def test_worktree_outside_git_still_sends_finished(tmp_path):
+    status = []
+    with pytest.raises(GitError, match="git repository"):
+        asyncio.run(run_shift(_rig(), "t", ToolUsingWorker(), root=tmp_path, on_event=lambda _: None,
+                              use_worktree=True, on_status=status.append))
+    assert [e.kind for e in status] == ["started", "finished"]
+    assert status[-1].data["ok"] is False and status[-1].data["stopped"] is None
+    assert status[-1].data["error"].startswith("GitError: ") and "git repository" in status[-1].data["error"]
 
 
 def test_quiet_hides_tool_lines(tmp_path):
