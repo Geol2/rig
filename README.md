@@ -449,7 +449,11 @@ The worktree starts from `HEAD`, so commit TODO.md changes before running.
 run the next TODO item with a $3 cost limit. The task names that item
 (`scripts/next-task.sh`: "TODO 항목 처리: <title>", or a request for new items when the
 Backlog is empty), so the run, its PR title and the web page's history say what it's doing. Pass a task to run something else; set
-`MAX_COST` or `PORT` to change the defaults.
+`MAX_COST` or `PORT` to change the defaults. If the newest shift ran the same task and was
+interrupted, failed or hit its cost limit with commits left on its branch, it is picked up (only
+when none of its PRs was merged already) with
+`rig run --resume <id>` instead ("↻ 중단된 작업 이어 하기: <id>"); once a resumed shift has failed
+again twice in a row, it starts afresh (`scripts/resume-target.py` decides).
 
 ```bash
 scripts/next.sh

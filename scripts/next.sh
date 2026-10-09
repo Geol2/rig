@@ -5,6 +5,7 @@
 #   scripts/next.sh "fix the typo in README"
 #   MAX_COST=5 scripts/next.sh         # cost limit in USD (default 3)
 #   PORT=8001 scripts/next.sh          # rig serve port (default 8000)
+#   같은 task의 최근 shift가 중단됐으면 이어 받음(최대 두 번; scripts/resume-target.py)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -44,4 +45,10 @@ fi
 
 # 3. Run. rig makes a branch, opens the PR, and merges it when the review and CI pass.
 echo "▶ $(head -n 1 <<<"$task")"
+# A stopped shift of the same task is continued instead (`--resume` takes no task).
+resume="$(uv run -q --no-sync python scripts/resume-target.py self.rig.yaml "$task" || true)"
+if [[ -n "$resume" ]]; then
+  echo "↻ 중단된 작업 이어 하기: $resume"
+  exec uv run -q --no-sync python -m rig -f self.rig.yaml run --max-cost "${MAX_COST:-3}" --resume "$resume"
+fi
 exec uv run -q --no-sync python -m rig -f self.rig.yaml run --max-cost "${MAX_COST:-3}" "$task"
