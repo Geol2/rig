@@ -231,7 +231,7 @@ class App:
         for d in sorted(self.shifts_dir.iterdir(), reverse=True):
             if not d.is_dir():
                 continue
-            s = json.loads((d / "shift.json").read_text(encoding="utf-8")) if (d / "shift.json").exists() else {}
+            s = report.read_summary(d)[0]  # an unreadable shift.json reads as {}, not an error for all history
             info = live(d)  # started here or by `rig run` in a terminal
             task = (s.get("task") or (info or {}).get("task") or "").strip().splitlines()
             findings = s.get("findings")
@@ -262,8 +262,8 @@ class App:
             lines.pop()  # half-written; it comes with the next poll
         running = bool(live(d))
         ok = None
-        if not running and (d / "shift.json").exists():
-            ok = json.loads((d / "shift.json").read_text(encoding="utf-8")).get("ok")
+        if not running:
+            ok = report.read_summary(d)[0].get("ok")
         return {"lines": lines[since:], "total": len(lines), "running": running, "ok": ok}
 
     def report_html(self, shift_id: str) -> str:

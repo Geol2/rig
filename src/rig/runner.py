@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -336,8 +337,17 @@ def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Met
         "max_cost_usd": meter.limit,
         "stopped": meter.stop_reason,
     }
-    (shift.dir / "shift.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8",
-                                          errors="replace")
+    # Write a temp file next to it and swap it in, so a crash or a full disk never leaves half a shift.json.
+    # The temp name ends in .tmp, not .md, so `rig logs` and reports never take it for a hand's output.
+    fd, tmp = tempfile.mkstemp(dir=shift.dir, prefix=".shift.json.", suffix=".tmp")
+    try:
+        with open(fd, "w", encoding="utf-8", errors="replace") as f:
+            f.write(json.dumps(summary, ensure_ascii=False, indent=2))
+        os.chmod(tmp, 0o644)  # mkstemp makes it owner-only; keep shift.json as readable as the .md files
+        os.replace(tmp, shift.dir / "shift.json")
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
     return summary
 
 

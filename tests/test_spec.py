@@ -284,6 +284,25 @@ def test_shift_json_counts_no_findings(tmp_path):
     assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["findings"] == 0
 
 
+def test_shift_json_is_swapped_in_without_leftovers(tmp_path, monkeypatch):
+    from rig import runner
+    from rig.cost import Meter
+
+    shift = asyncio.run(run_shift(make(), "do it", EchoWorker(), root=tmp_path, on_event=lambda _: None))
+    names = {p.name for p in shift.dir.iterdir()}
+    assert "shift.json" in names and not [n for n in names if n.endswith(".tmp") or n.startswith(".shift.json.")]
+    before = (shift.dir / "shift.json").read_bytes()
+
+    def boom(src, dst):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(runner.os, "replace", boom)
+    with pytest.raises(OSError, match="disk full"):
+        runner._write_summary(shift, make(), "lines", "changed task", Meter(None))
+    assert {p.name for p in shift.dir.iterdir()} == names  # the temp file is gone
+    assert (shift.dir / "shift.json").read_bytes() == before
+
+
 def test_refusal_is_reported_in_progress(tmp_path):
     from rig.hand import HandResult, refusal_message
 

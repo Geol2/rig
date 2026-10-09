@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import re
 import sys
 from importlib import resources
@@ -120,14 +119,11 @@ def cmd_run(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _read_summary(shift_dir: Path) -> dict:
-    path = shift_dir / "shift.json"
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-
-
-def _status(summary: dict, running: bool) -> str:
+def _status(summary: dict, running: bool, unreadable: bool = False) -> str:
     if running:
         return "running"
+    if unreadable:
+        return "unreadable"
     if summary.get("error"):  # a crash or "interrupted" says more than the stop that may have led to it
         return "error"
     if summary.get("stopped"):
@@ -160,6 +156,7 @@ def _outputs(shift: Path, summary: dict) -> list[tuple[str, Path]]:
 
 
 def cmd_logs(args: argparse.Namespace) -> None:
+    from rig.report import read_summary
     from rig.runner import live
 
     shifts_dir = Path(args.file).resolve().parent / ".rig" / "shifts"
@@ -167,12 +164,13 @@ def cmd_logs(args: argparse.Namespace) -> None:
     if not shifts:
         sys.exit("rig: no shifts yet")
     if args.shift is None:
-        summaries = [_read_summary(s) for s in shifts]
+        # An unreadable shift.json reads as {}, so its row keeps only the id and status.
+        read = [read_summary(s) for s in shifts]
         # The branch column only appears when some shift ran with --worktree and left changes.
-        branch_width = max((len(m.get("branch") or "") for m in summaries), default=0)
-        for s, summary in zip(shifts, summaries):
+        branch_width = max((len(m.get("branch") or "") for m, _ in read), default=0)
+        for s, (summary, problem) in zip(shifts, read):
             info = live(s)
-            status = _status(summary, bool(info))
+            status = _status(summary, bool(info), problem is not None)
             # Shifts from before cost tracking have no totals; a running shift has no shift.json numbers yet.
             price = usd(summary["totals"].get("cost_usd")) if "totals" in summary and not info else ""
             mode = "" if info else summary.get("mode", "")
@@ -183,8 +181,10 @@ def cmd_logs(args: argparse.Namespace) -> None:
     shift = shifts[-1] if args.shift == "last" else shifts_dir / args.shift
     if not shift.is_dir():
         sys.exit(f"rig: no shift {args.shift}")
-    summary = _read_summary(shift)
+    summary, problem = read_summary(shift)
     head = []
+    if problem:
+        head.append(f"✗ shift.json unreadable: {problem}")
     if summary.get("error"):
         head.append(f"✗ shift failed: {summary['error']}")
     if summary.get("stopped"):
@@ -210,6 +210,9 @@ def cmd_report(args: argparse.Namespace) -> None:
     shift = shifts[-1] if args.shift == "last" else shifts_dir / args.shift
     if not shift.is_dir():
         sys.exit(f"rig: no shift {args.shift}")
+    problem = report.read_summary(shift)[1]
+    if problem:
+        print(f"rig: warning: shift.json unreadable ({problem}); report shows hand output only", file=sys.stderr)
     path = report.write(shift)
     print(f"report → {path}")
     if not args.no_open:

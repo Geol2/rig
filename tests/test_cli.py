@@ -181,6 +181,54 @@ def test_logs_status_column(tmp_path, monkeypatch, capsys):
     assert "killed" not in lines[7]  # running.json's task only stands in while the shift runs
 
 
+def _broken(tmp_path, shift_id, raw: bytes, **kw):
+    d = _shift(tmp_path, shift_id, None, **kw)
+    (d / "shift.json").write_bytes(raw)
+    return d
+
+
+def test_logs_lists_unreadable_shift_json(tmp_path, monkeypatch, capsys):
+    totals = {"input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 0, "cache_write_tokens": 0, "cost_usd": 1.5}
+    _shift(tmp_path, "20250101-000000", {"mode": "lines", "ok": True, "task": "fine", "branch": "rig/x",
+                                         "totals": totals})
+    _broken(tmp_path, "20250102-000000", b'{"rig": "x", "ok": tr')
+    _broken(tmp_path, "20250103-000000", b"[]")
+    _broken(tmp_path, "20250104-000000", b"\xff\xfe{")
+    _broken(tmp_path, "20250105-000000", b"{", running={"pid": os.getpid(), "task": "live"})
+    monkeypatch.chdir(tmp_path)
+
+    main(["logs"])
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert captured.err == ""
+    assert lines[0] == f"20250101-000000  {'lines':<8}  {'ok':<10}  {'$1.50':>9}  rig/x  fine"
+    for line in lines[1:4]:
+        assert line == f"{line[:15]}  {'':<8}  {'unreadable':<10}  {'':>9}  {'':<5}  "
+    assert lines[4] == f"20250105-000000  {'':<8}  {'running':<10}  {'':>9}  {'':<5}  live"  # running wins
+
+
+def test_logs_detail_of_unreadable_shift_json(tmp_path, monkeypatch, capsys):
+    _broken(tmp_path, "20250101-000000", b'{"rig": "x", "ok": tr')
+    _broken(tmp_path, "20250102-000000", b"null", mds=())
+    _broken(tmp_path, "20250103-000000", b"\xff\xfe{")
+    _broken(tmp_path, "20250104-000000", b"{", running={"pid": os.getpid(), "task": "live"})
+    monkeypatch.chdir(tmp_path)
+
+    main(["logs", "20250101-000000"])
+    out = capsys.readouterr().out
+    first, rest = out.split("\n", 1)
+    assert first.startswith("✗ shift.json unreadable: Expecting") and str(tmp_path) not in first
+    assert rest == "\n── a ──\nout\n\n"
+    main(["logs", "20250102-000000"])
+    assert capsys.readouterr().out == "✗ shift.json unreadable: not a JSON object\n\n"
+    main(["logs", "20250103-000000"])
+    assert capsys.readouterr().out.startswith("✗ shift.json unreadable: 'utf-8' codec can't decode")
+    main(["logs", "20250104-000000"])
+    assert capsys.readouterr().out == (f"✗ shift.json unreadable: Expecting property name enclosed in double quotes: "
+                                       f"line 1 column 2 (char 1)\nstill running (pid {os.getpid()}). Output so far:\n\n"
+                                       "── a ──\nout\n\n")
+
+
 def test_logs_shows_error_and_stop_first(tmp_path, monkeypatch, capsys):
     totals = {"input_tokens": 10, "output_tokens": 5, "cache_read_tokens": 0, "cache_write_tokens": 0, "cost_usd": 5.12}
     _shift(tmp_path, "20250101-000000", {"ok": False, "error": "interrupted", "stopped": "budget", "max_cost_usd": 5,

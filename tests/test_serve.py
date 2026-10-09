@@ -261,6 +261,29 @@ def test_history_counts_findings_of_older_shift_json(server):
     assert call(base + "/api/shifts")[1][0]["findings"] == 2
 
 
+def test_unreadable_shift_json_keeps_history_working(tmp_path):
+    app = App(tmp_path)
+    good = app.shifts_dir / "20261009-110000"
+    broken = app.shifts_dir / "20261009-120000"
+    for d in (good, broken):
+        d.mkdir(parents=True)
+        (d / "a.md").write_text(json.dumps({"findings": [{"title": "x"}]}), encoding="utf-8")
+        (d / "progress.log").write_text("done\n", encoding="utf-8")
+    (good / "shift.json").write_text(json.dumps({"rig": "review", "ok": True, "task": "t", "findings": 1}),
+                                     encoding="utf-8")
+    (broken / "shift.json").write_text('{"rig": "review", "ok": tr', encoding="utf-8")
+    (app.shifts_dir / "20261009-130000").mkdir()
+    (app.shifts_dir / "20261009-130000" / "shift.json").write_bytes(b"\xff\xfe{")
+
+    rows = {r["id"]: r for r in app.shifts()}
+    assert set(rows) == {good.name, broken.name, "20261009-130000"}
+    assert rows[good.name]["ok"] is True and rows[good.name]["findings"] == 1
+    assert rows[broken.name]["ok"] is None and rows[broken.name]["rig"] == "" and rows[broken.name]["cost"] == ""
+    log = app.shift_log(broken.name, 0)
+    assert log["ok"] is None and log["lines"] == ["done"] and not log["running"]
+    assert app.shift_log(good.name, 0)["ok"] is True
+
+
 def test_running_json_of_a_dead_process_is_ignored(server):
     import subprocess
     import sys

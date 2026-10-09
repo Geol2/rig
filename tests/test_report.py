@@ -113,6 +113,47 @@ def test_cli_report_writes_latest(tmp_path, monkeypatch, capsys):
     assert "report →" in capsys.readouterr().out
 
 
+def test_unreadable_shift_json_shows_hand_output_only(tmp_path, monkeypatch, capsys):
+    d = make_shift(tmp_path, {"bugs": json.dumps({"findings": [finding("high", "a.py", 1)]}), "summary": "Done."})
+    (d / "shift.json").write_text('{"rig": "x", "ok": tr', encoding="utf-8")
+    data = report.collect(d)
+    assert data["summary"] == {} and data["summary_problem"].startswith("Expecting")
+    assert [h["key"] for h in data["hands"]] == ["bugs", "summary"] and len(data["findings"]) == 1
+    assert report.read_summary(make_shift(tmp_path, {"a": "x"}, shift_id="20261008-190000"))[1] is None
+
+    monkeypatch.chdir(tmp_path)
+    main(["report", d.name, "--no-open"])
+    captured = capsys.readouterr()
+    assert (d / "report.html").exists() and "report →" in captured.out
+    assert captured.err == f"rig: warning: shift.json unreadable ({data['summary_problem']}); report shows hand output only\n"
+
+
+def test_read_summary_cases(tmp_path):
+    d = tmp_path / "s"
+    d.mkdir()
+    assert report.read_summary(d) == ({}, None)  # running or crashed: no message
+    for raw, problem in [(b"[]", "not a JSON object"), (b"3", "not a JSON object"), (b"\xff\xfe{", "'utf-8' codec")]:
+        (d / "shift.json").write_bytes(raw)
+        summary, got = report.read_summary(d)
+        assert summary == {} and got.startswith(problem) and "\n" not in got
+    (d / "shift.json").write_text('{"ok": true}', encoding="utf-8")
+    assert report.read_summary(d) == ({"ok": True}, None)
+
+
+def test_read_summary_of_a_directory_has_no_path(tmp_path, monkeypatch, capsys):
+    d = make_shift(tmp_path, {"a": "out"})
+    (d / "shift.json").unlink()
+    (d / "shift.json").mkdir()
+    summary, problem = report.read_summary(d)
+    assert summary == {} and problem
+    assert str(d) not in problem and str(d / "shift.json") not in problem and "shift.json" not in problem
+
+    monkeypatch.chdir(tmp_path)
+    main(["logs", d.name])
+    first = capsys.readouterr().out.split("\n", 1)[0]
+    assert first.startswith("✗ shift.json unreadable: ") and str(tmp_path) not in first
+
+
 def test_cli_report_errors(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit, match="no shifts yet"):
