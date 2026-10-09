@@ -61,10 +61,10 @@ for ((i = 1; i <= runs; i++)); do
   spent="$(py -c "print(round($spent + $cost, 2))")"
   if [[ "$merged" == 1 ]]; then
     misses=0
-    echo "✓ $i번째 실행: PR 병합됨 (\$$cost)"
+    echo "✓ ${i}번째 실행: PR 병합됨 (\$$cost)"
   else
     misses=$((misses + 1))
-    echo "! $i번째 실행: 병합된 PR 없음 ($state, \$$cost)"
+    echo "! ${i}번째 실행: 병합된 PR 없음 ($state, \$$cost)"
   fi
 
   if [[ -f "$stop" ]]; then
@@ -77,7 +77,7 @@ for ((i = 1; i <= runs; i++)); do
     break
   fi
   if py -c "import sys; sys.exit(0 if $spent >= $budget else 1)"; then
-    echo "■ 예산 \$$budget을 다 써서 멈춥니다."
+    echo "■ 예산 \$${budget}을 다 써서 멈춥니다."
     break
   fi
   if [[ "$i" -lt "$runs" ]]; then

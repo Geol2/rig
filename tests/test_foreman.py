@@ -40,7 +40,8 @@ class ScriptedWorker:
                     break
                 self.objections.append(objection)
         else:
-            output = f"{hand.name} did: {prompt.split('<instructions from=\"foreman\">')[1].split('</')[0].strip()}"
+            marker = '<instructions from="foreman">'
+            output = f"{hand.name} did: {prompt.split(marker)[1].split('</')[0].strip()}"
         return HandResult(name=hand.name, output=output, stop_reason="end_turn", turns=1)
 
 

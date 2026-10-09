@@ -74,15 +74,15 @@ Keep items small enough for one reviewed change. Add context under an item when 
   changes. Have `run_shift` also report structured events (at least shift started with its
   id), and use that in serve instead of the regex. Keep the CLI output the same.
   Note: `run_shift(on_status=...)` gets `ShiftEvent`s ("started" before the first line, "finished" with ok/error/stopped, not on Ctrl-C); serve takes the shift id from "started".
+- [x] **CI on Python 3.11 too**: `requires-python = ">=3.11"` but CI only ran 3.13. The test
+  matrix now runs 3.11 and 3.13 on Ubuntu and Windows.
+  Note: `tests/test_foreman.py` had a backslash inside an f-string expression (a SyntaxError before 3.12); no other 3.12+ constructs were found. Ruff was split out (see "Needs a design first") because it needs `uv lock` and running ruff, which hands can't do.
 
 ## Backlog
 
 From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
 in priority order. Line numbers are from that review and may have moved.
 
-- [ ] **CI on Python 3.11 too, and ruff**: `requires-python = ">=3.11"` but CI only runs 3.13.
-  Add 3.11 to the test matrix, add ruff (lint) with a small config in pyproject.toml, fix
-  what it reports, and run it in CI.
 - [ ] **Worker tests for the missing paths**: `tests/test_worker.py` doesn't cover
   `pause_turn` continuing the loop, a model without a price (cost `None`, meter `unpriced`),
   or `max_tokens` ending a hand. Add those.
@@ -140,6 +140,11 @@ items once its design is decided.
   `importlib.resources`.
 - **Language policy**: the `rig serve` page and refusal messages are Korean; README and CLI
   are English. Decide which is used where (or make it a setting).
+- **ruff (needs a person first)**: hands can only run `uv run pytest` and git (`run.allow`),
+  so they can't update uv.lock or run ruff. Someone runs `uv add --dev ruff`, adds a small
+  `[tool.ruff]` config (target-version py311), runs `uv run ruff check --fix` and fixes the
+  rest, then adds a `uv run --locked --no-sync ruff check` step to CI; or adds `uv run ruff`
+  to `run.allow` and turns this back into a backlog item.
 - **Type checking**: add mypy (or pyright) once ruff is in, and fix what it finds.
 - **Compaction for very long runs**: summarize earlier turns when clearing tool results
   isn't enough (server-side compaction or rig's own summary).
