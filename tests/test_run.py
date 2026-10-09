@@ -1,12 +1,16 @@
+import ast
+import os
+
 import pytest
 from pydantic import ValidationError
 
 from rig.spec import Rig, RunPolicy
-from rig.tools import Toolbox, ToolError
+from rig.tools import Toolbox, ToolError, run_env
 
 
-def box(tmp_path, *allow, timeout=30, max_output=20000):
-    return Toolbox(tmp_path, ["run"], run_policy=RunPolicy(allow=list(allow), timeout=timeout, max_output=max_output))
+def box(tmp_path, *allow, timeout=30, max_output=20000, env_passthrough=(), env=None):
+    policy = RunPolicy(allow=list(allow), timeout=timeout, max_output=max_output, env_passthrough=list(env_passthrough))
+    return Toolbox(tmp_path, ["run"], run_policy=policy, env=env)
 
 
 def test_runs_allowed_command_in_workspace(tmp_path):
@@ -90,6 +94,48 @@ def test_missing_executable(tmp_path):
 def test_definition_lists_allowed_commands(tmp_path):
     (d,) = box(tmp_path, "uv run pytest", "git diff").definitions
     assert d["name"] == "run" and "- uv run pytest\n- git diff" in d["description"]
+
+
+SECRETS = {"ANTHROPIC_API_KEY": "sk-secret", "GITHUB_TOKEN": "gh-secret", "AWS_SECRET": "aws-secret", "DB_PASSWORD_X": "db-secret"}
+
+
+def child_env(b, *names):
+    """The variables a `run` child process sees, of `names`."""
+    out = b.run("run", {"command": f"python -c \"import os; print(sorted(k for k in os.environ if k.upper() in {list(names)!r}))\""})
+    assert out.startswith("[exit code 0]"), out
+    return ast.literal_eval(out.splitlines()[1])
+
+
+def test_run_hides_secret_env_vars(tmp_path, monkeypatch):
+    for k, v in SECRETS.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("RIG_TEST_PLAIN", "visible")
+    assert child_env(box(tmp_path, "python -c"), *SECRETS, "RIG_TEST_PLAIN") == ["RIG_TEST_PLAIN"]
+
+
+def test_env_passthrough_keeps_named_vars(tmp_path, monkeypatch):
+    for k, v in SECRETS.items():
+        monkeypatch.setenv(k, v)
+    b = box(tmp_path, "python -c", env_passthrough=["github_token"])
+    assert child_env(b, *SECRETS) == ["GITHUB_TOKEN"]
+
+
+def test_explicit_env_is_filtered_too(tmp_path):
+    # The worktree case: rig passes its own env, with git config overrides.
+    env = {**os.environ, **SECRETS, "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": "x"}
+    names = [*SECRETS, "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]
+    assert child_env(box(tmp_path, "python -c", env=env), *names) == ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"]
+
+
+def test_run_env_is_case_insensitive():
+    base = {"anthropic_api_key": "1", "My_Token": "2", "Path": "3", "SystemRoot": "4", "db_password": "5", "Keyboard": "6"}
+    assert run_env(base, []) == {"Path": "3", "SystemRoot": "4", "Keyboard": "6"}
+    assert run_env(base, ["MY_TOKEN"]) == {"My_Token": "2", "Path": "3", "SystemRoot": "4", "Keyboard": "6"}
+
+
+def test_env_passthrough_rejects_empty_names():
+    with pytest.raises(ValidationError, match="env_passthrough"):
+        RunPolicy(allow=["python"], env_passthrough=[" "])
 
 
 def test_run_tool_requires_allow_list():
