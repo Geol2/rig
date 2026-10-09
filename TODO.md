@@ -152,6 +152,31 @@ Keep items small enough for one reviewed change. Add context under an item when 
 
 ## Backlog
 
+Requested by the owner ("중간에 그만두고 기억을 하고 계속되는 건 돼나"), first:
+
+- [ ] **중단된 shift 이어 하기: `rig run --resume <shift-id|last>`**: 지금은 shift가 중간에 멈추면
+  (Ctrl+C, 비용 상한, 에러) `runner.py` `run_shift`의 `finally`가 hand들이 쓴 내용을 `rig/<id>` 브랜치에
+  커밋하고 shift.json에 `error`/`stopped`를 남기지만, 다음 실행은 그걸 쓰지 않고 base 브랜치에서 같은 일을
+  처음부터 다시 합니다(비용 중복, 브랜치만 쌓임). `--resume`을 주면: 그 shift의 shift.json에서 task·inputs·
+  브랜치(`worktrees[].branch`, 커밋이 있었던 것)를 읽고, base 대신 **그 브랜치 끝에서** 새 worktree를 만들어
+  새 shift로 실행합니다(새 shift id, shift.json에 `resumed_from: <id>`). 이어 하는 hand(foreman 모드면
+  foreman, lines 모드면 첫 stage)의 프롬프트 앞에 `<resumed>` 블록으로 "이전 실행이 중단됨(이유), 이전 shift의
+  hand별 결과 요약(각 `<hand>.md` 앞부분), 브랜치에 이미 있는 변경(`git diff --stat base..branch`)"을 넣고
+  "이미 된 부분은 다시 하지 말고 남은 부분만 마무리"라고 지시합니다. 끝난(ok) shift나 브랜치가 없는 shift를
+  주면 이유를 말하고 종료. `worktree.py`에 기존 브랜치에서 worktree를 만드는 경로가 필요합니다(새 브랜치
+  이름은 지금처럼 `rig/<새 id>`, 시작점만 다름). README에 한 단락. 완료 기준: `tests/`에 Ctrl+C로 끊긴
+  shift(가짜 worker로 KeyboardInterrupt)를 `--resume last`로 이어 받아 새 worktree가 이전 브랜치 커밋을
+  포함하고, 프롬프트에 `<resumed>`가 들어가고, `resumed_from`이 기록되는 테스트; ok인 shift는 거부되는 테스트.
+- [ ] **`scripts/next.sh`가 중단된 작업을 자동으로 이어 받기**: 위 항목이 끝난 뒤. `next.sh`가 task를
+  정할 때(`scripts/next-task.sh` 다음), `.rig/shifts`의 가장 최근 shift가 **같은 task**이고 ok가 아니며
+  (`error`/`stopped`/`incomplete`) 브랜치에 커밋이 있고 그 뒤로 병합된 PR이 없으면 새로 시작하는 대신
+  `rig run --resume <그 id>`로 실행하고, 터미널에 "↻ 중단된 작업 이어 하기: <id>"를 한국어로 출력합니다.
+  같은 shift를 두 번 넘게 이어 하지 않도록(이어 한 shift도 또 실패하면 새로 시작) `resumed_from` 사슬을
+  확인하세요. `scripts/auto.sh`의 "두 번 연속 실패면 멈춤"은 그대로. 완료 기준: `tests/test_scripts.py`에
+  가짜 shift 폴더로 "이어 받음 / 새로 시작(같은 task 아님, ok였음, 이미 두 번 이어 함)"을 확인하는 테스트.
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
 
 - [ ] **input 이름 검증과 치환되지 않는 `{{ … }}` 잡기**: `spec.py`의 `inputs` 키는 아무 문자열이나
@@ -192,5 +217,3 @@ items once its design is decided.
 - **Per-hand budgets and fallback settings**: `max_cost_usd` per hand; `fallbacks` per hand.
 - **MCP servers and web tools** for hands.
 - **crews**: reusable groups of hands.
-- **Resume a failed shift**: rerun from the hand that failed, reusing finished hands'
-  outputs from the shift directory.
