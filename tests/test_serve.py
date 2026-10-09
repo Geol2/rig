@@ -291,3 +291,19 @@ def test_running_json_of_a_dead_process_is_ignored(server):
     (d / "running.json").write_text(json.dumps({"pid": p.pid, "rig": "review", "task": "killed"}), encoding="utf-8")
     assert not call(base + "/api/shifts")[1][0]["running"]
     assert not call(f"{base}/shifts/{d.name}/log")[1]["running"]
+
+
+def test_shift_prs_in_history_and_log(server):
+    app, base = server
+    d = app.shifts_dir / "20261009-130000"
+    d.mkdir(parents=True)
+    (d / "progress.log").write_text("done\n", encoding="utf-8")
+    prs = [{"url": "https://github.com/o/r/pull/55", "number": 55, "merged": False, "closed": True},
+           {"url": "https://github.com/o/r/pull/56", "number": 56, "merged": True},
+           {"url": "https://github.com/o/r/pull/57", "number": 57}, {"note": "push failed"}]
+    (d / "shift.json").write_text(json.dumps({"rig": "review", "task": "t", "ok": True, "prs": prs}), encoding="utf-8")
+    want = [{"number": 55, "url": "https://github.com/o/r/pull/55", "state": "closed"},
+            {"number": 56, "url": "https://github.com/o/r/pull/56", "state": "merged"},
+            {"number": 57, "url": "https://github.com/o/r/pull/57", "state": "open"}]
+    assert call(base + "/api/shifts")[1][0]["prs"] == want
+    assert call(f"{base}/shifts/{d.name}/log")[1]["prs"] == want

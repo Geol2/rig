@@ -76,6 +76,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   Note: `run_shift(on_status=...)` gets `ShiftEvent`s ("started" before the first line, "finished" with ok/error/stopped, not on Ctrl-C); serve takes the shift id from "started".
 - [x] **CI on Python 3.11 too**: `requires-python = ">=3.11"` but CI only ran 3.13. The test
   matrix now runs 3.11 and 3.13 on Ubuntu and Windows.
+  Note: later cut back to 3.13 only, at the owner's request (requires-python stays >=3.11).
   Note: `tests/test_foreman.py` had a backslash inside an f-string expression (a SyntaxError before 3.12); no other 3.12+ constructs were found. Ruff was split out (see "Needs a design first") because it needs `uv lock` and running ruff, which hands can't do.
 - [x] **Worker tests for the missing paths**: `tests/test_worker.py` doesn't cover
   `pause_turn` continuing the loop, a model without a price (cost `None`, meter `unpriced`),
