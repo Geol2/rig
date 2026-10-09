@@ -8,8 +8,8 @@ import pytest
 from pydantic import ValidationError
 
 from rig.cli import main
-from rig.cost import Meter
-from rig.hand import ClaudeWorker, HandResult
+from rig.cost import Meter, price_warnings
+from rig.hand import ClaudeWorker, EchoWorker, HandResult
 from rig.runner import run_shift
 from rig.serve import App
 from rig.spec import Rig
@@ -93,6 +93,50 @@ def test_spec_and_cli_reject_non_positive_limits(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit, match="--max-cost must be more than 0"):
         main(["run", "--dry", "--max-cost", "0", "go"])
+
+
+def test_price_warnings():
+    assert price_warnings({"a": "claude-opus-5-5", "b": "claude-sonnet-4-5-20250929"}, None) == []
+    assert price_warnings({"a": "claude-opus-5-5", "coder": "foo"}, None) == [
+        "⚠ coder: model 'foo' has no known price; its cost shows as n/a"]
+    assert price_warnings({"coder": "foo"}, 3) == [
+        "⚠ WARNING coder: model 'foo' has no known price, so the cost limit $3.00 can't count it; "
+        "this shift may cost more than the limit"]
+
+
+def test_rig_models():
+    lines = Rig.model_validate({"name": "t", "defaults": {"model": "m0"},
+                                "hands": {"a": {"role": "A", "model": "m1"}, "b": {"role": "B"}}, "lines": ["a -> b"]})
+    assert lines.models() == {"a": "m1", "b": "m0"}
+    foreman = Rig.model_validate({"name": "t", "foreman": {"crew": ["b"], "model": "mf"},
+                                  "hands": {"a": {"role": "A"}, "b": {"role": "B", "model": "mb"}}})
+    assert list(foreman.models().items()) == [("foreman", "mf"), ("b", "mb")]
+
+
+def test_check_warns_about_unpriced_models(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "rig.yaml").write_text("name: t\nhands:\n  a: {role: A}\n  b: {role: B, model: foo}\n", encoding="utf-8")
+    main(["check"])
+    out = capsys.readouterr().out
+    assert "⚠ b: model 'foo' has no known price" in out and "⚠ a" not in out
+    (tmp_path / "rig.yaml").write_text("name: t\nmax_cost_usd: 2\nhands:\n  b: {role: B, model: foo}\n", encoding="utf-8")
+    main(["check"])
+    assert "⚠ WARNING b: model 'foo' has no known price, so the cost limit $2.00 can't count it" in capsys.readouterr().out
+    (tmp_path / "rig.yaml").write_text("name: t\nmax_cost_usd: 2\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    main(["check"])
+    assert "⚠" not in capsys.readouterr().out
+
+
+def test_shift_warns_about_unpriced_models(tmp_path):
+    rig = Rig.model_validate({"name": "t", "max_cost_usd": 100, "hands": {"a": {"role": "A", "model": "foo"}}})
+    events = []
+    asyncio.run(run_shift(rig, "go", CostlyWorker(), root=tmp_path, on_event=events.append, meter=Meter(0.5)))
+    assert events[0].startswith("shift ")
+    assert events[1] == ("⚠ WARNING a: model 'foo' has no known price, so the cost limit $0.50 can't count it; "
+                         "this shift may cost more than the limit")
+    events.clear()
+    asyncio.run(run_shift(rig, "go", EchoWorker(), root=tmp_path, on_event=events.append))
+    assert not any("⚠" in e for e in events)
 
 
 class WaitingWorker:

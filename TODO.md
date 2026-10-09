@@ -38,16 +38,16 @@ Keep items small enough for one reviewed change. Add context under an item when 
   secret by default (`*_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, `ANTHROPIC_*`), with a
   `run.env_passthrough` list in rig.yaml for names a project really needs. Document it; test
   that a child process can't see the key.
+- [x] **Warn when the cost limit can't work**: with a model missing from `cost.PRICES`, its
+  cost is unknown and `max_cost_usd` / `--max-cost` silently stops limiting (`cost.py`).
+  `rig check` and the start of `rig run` (and `rig serve`) should warn, naming the hand and
+  model, whenever a hand's model has no price, and say so louder when a limit is set.
 
 ## Backlog
 
 From the review in shift `20261009-071333` ("해당 프로젝트의 구조나 더 개선할 방향을 찾아줘"),
 in priority order. Line numbers are from that review and may have moved.
 
-- [ ] **Warn when the cost limit can't work**: with a model missing from `cost.PRICES`, its
-  cost is unknown and `max_cost_usd` / `--max-cost` silently stops limiting (`cost.py`).
-  `rig check` and the start of `rig run` (and `rig serve`) should warn, naming the hand and
-  model, whenever a hand's model has no price, and say so louder when a limit is set.
 - [ ] **Save each hand's transcript**: `HandResult.transcript` collects the full conversation
   (tool calls and results) but is never written (`hand.py`). Write it next to the output as
   `<key>.transcript.json` (SDK blocks via `model_dump()`), including for hands that errored

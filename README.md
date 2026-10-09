@@ -33,6 +33,9 @@ To cap a shift, set `max_cost_usd: 5` in rig.yaml or pass `rig run --max-cost 5`
 hand's done line shows the shift's running total (`· shift $1.20 of $5.00`); once the total
 reaches the limit, hands stop before their next request and later stages don't start.
 Requests already in flight still finish, so a shift can end slightly over the limit.
+A model that isn't in the price table has no known cost, so the limit can't count it:
+`rig check` and the start of `rig run` (and `rig serve` runs) warn about every hand on
+such a model, louder when a limit is set.
 
 ## rig.yaml
 

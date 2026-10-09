@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from rig import cost, publish, worktree
 from rig.graph import layers, upstreams
-from rig.hand import HandResult, Worker
+from rig.hand import EchoWorker, HandResult, Worker
 from rig.spec import Publish, Rig
 from rig.tools import Toolbox, ToolError
 
@@ -120,6 +120,9 @@ async def run_shift(
         worker.meter = meter
     mode = "foreman" if rig.foreman else "lines"
     on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")
+    if not isinstance(worker, EchoWorker):  # a dry run costs nothing
+        for line in cost.price_warnings(rig.models(), meter.limit):
+            on_event(line)
 
     env = None
     if use_worktree:
