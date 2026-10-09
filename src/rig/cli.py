@@ -177,8 +177,9 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     if hasattr(sys.stdout, "reconfigure"):
-        # Line-buffered so progress shows up live even when piped (e.g. through grep or tee).
-        sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)
+        # Line-buffered so progress shows up live even when piped (e.g. through grep or tee);
+        # errors="replace" so a lone surrogate in a hand's output prints as "?" instead of raising.
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     p = argparse.ArgumentParser(prog="rig", description="Define a multi-agent harness, then run it.")
     p.add_argument("--version", action="version", version=f"rig {__version__}")
     p.add_argument("-f", "--file", default=DEFAULT_FILE, help="rig definition (default: rig.yaml)")

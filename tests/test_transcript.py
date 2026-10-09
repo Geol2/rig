@@ -115,3 +115,24 @@ def test_lone_surrogate_in_transcript_does_not_break_the_shift(tmp_path):
     assert shift.ok and (shift.dir / "coder.md").read_text(encoding="utf-8") == "ok"
     data = transcript(shift, "coder")
     assert data[0]["role"] == "user" and data[0]["content"].startswith("bad ")
+
+
+def test_lone_surrogate_in_output_and_task_does_not_break_the_shift(tmp_path):
+    class Surrogate:
+        async def run(self, hand, prompt, toolbox, check=None):
+            return HandResult(hand.name, "bad \udcff name", "end_turn", 1)
+
+    shift = asyncio.run(run_shift(make(), "go \udcff", Surrogate(), root=tmp_path, on_event=lambda _: None))
+    assert shift.ok and (shift.dir / "coder.md").read_text(encoding="utf-8") == "bad ? name"
+    assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["task"] == "go ?"
+    assert not (shift.dir / "running.json").exists()
+
+
+def test_lone_surrogate_in_refusal_reaches_progress_log(tmp_path):
+    class Refusing:
+        async def run(self, hand, prompt, toolbox, check=None):
+            return HandResult(hand.name, "no \udcff way", "refusal", 1)
+
+    shift = asyncio.run(run_shift(make(), "go", Refusing(), root=tmp_path, on_event=lambda _: None))
+    assert shift.error is None and (shift.dir / "coder.md").read_text(encoding="utf-8") == "no ? way"
+    assert "  ✗ coder: no ? way\n" in (shift.dir / "progress.log").read_text(encoding="utf-8")

@@ -143,10 +143,12 @@ class _Progress:
     def __init__(self, shift: Shift, rig: str, task: str, show: Event):
         self.show = show
         self.running = shift.dir / RUNNING
+        # errors="replace" here and for the .md / shift.json writes: a lone surrogate in the task
+        # (from argv) or a hand's output becomes "?" instead of crashing the shift.
         self.running.write_text(json.dumps({"pid": os.getpid(), "rig": rig, "task": task,
                                             "started": datetime.now().isoformat(timespec="seconds")},
-                                           ensure_ascii=False), encoding="utf-8")
-        self.log = (shift.dir / PROGRESS_LOG).open("a", encoding="utf-8")
+                                           ensure_ascii=False), encoding="utf-8", errors="replace")
+        self.log = (shift.dir / PROGRESS_LOG).open("a", encoding="utf-8", errors="replace")
 
     def event(self, line: str) -> None:
         self.show(line)
@@ -209,7 +211,7 @@ async def run_shift(
         def record(key: str, res: HandResult) -> None:
             shift.results[key] = res
             stem = key.replace('#', '-')
-            (shift.dir / f"{stem}.md").write_text(res.output, encoding="utf-8")
+            (shift.dir / f"{stem}.md").write_text(res.output, encoding="utf-8", errors="replace")
             _write_transcript(shift.dir / f"{stem}.transcript.json", res)
             if res.stop_reason == "refusal":
                 # Say which hand was declined and why, right in the progress output.
@@ -302,7 +304,8 @@ def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Met
         "max_cost_usd": meter.limit,
         "stopped": meter.stop_reason,
     }
-    (shift.dir / "shift.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    (shift.dir / "shift.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8",
+                                          errors="replace")
     return summary
 
 

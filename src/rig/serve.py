@@ -338,7 +338,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             return host in LOCAL_HOSTS
 
         def _send(self, code: int, body: str | bytes, ctype: str = "application/json; charset=utf-8") -> None:
-            data = body.encode("utf-8") if isinstance(body, str) else body
+            # errors="replace": a lone surrogate in a log line or task becomes "?" instead of breaking the response.
+            data = body.encode("utf-8", errors="replace") if isinstance(body, str) else body
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
