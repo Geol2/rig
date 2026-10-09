@@ -141,6 +141,9 @@ class InputSpec(BaseModel):
 
 
 WORKSPACE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+# Hand names become file names in the shift folder and `name#n` foreman keys:
+# Unicode letters (Korean included), digits, `_` and `-` only.
+HAND_NAME = re.compile(r"[\w-]+")
 BOOLEANS = {"true": True, "yes": True, "1": True, "false": False, "no": False, "0": False}
 # `{{ inputs.name }}` in a role is replaced with the input's value.
 INPUT_REF = re.compile(r"\{\{\s*inputs\.(\w+)\s*\}\}")
@@ -271,6 +274,9 @@ class Rig(BaseModel):
     def _check_lines(self) -> Rig:
         if not self.hands:
             raise ValueError("a rig needs at least one hand")
+        bad = [n for n in self.hands if not HAND_NAME.fullmatch(n)]
+        if bad:
+            raise ValueError(f"hand names must be plain names (letters, digits, - _): {bad}")
         for n, h in [*self.hands.items(), ("foreman", self.foreman)]:
             unknown = {m for m in INPUT_REF.findall(h.role) if m not in self.inputs} if h else set()
             if unknown:

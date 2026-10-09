@@ -51,11 +51,41 @@ def test_hand_overrides_defaults():
         {"lines": ["a -> b", "b -> a"]},
         {"hands": {"a": {"role": "A", "tools": ["rm_rf"]}}, "lines": []},
         {"hands": {}, "lines": []},
+        {"hands": {"a/b": {"role": "A"}}, "lines": []},
+        {"hands": {"../x": {"role": "A"}}, "lines": []},
+        {"hands": {"a#1": {"role": "A"}}, "lines": []},
+        {"hands": {"code review": {"role": "A"}}, "lines": []},
+        {"hands": {"x.y": {"role": "A"}}, "lines": []},
+        {"hands": {"": {"role": "A"}}, "lines": []},
+        {"hands": {"a\n": {"role": "A"}}, "lines": []},
     ],
 )
 def test_invalid_rigs_rejected(overrides):
     with pytest.raises(ValidationError):
         make(**overrides)
+
+
+def test_bad_hand_names_reported_together():
+    with pytest.raises(ValidationError, match=r"hand names must be plain names \(letters, digits, - _\): "
+                                              r"\['code review', 'a/b'\]"):
+        make(hands={"ok": {"role": "O"}, "code review": {"role": "A"}, "a/b": {"role": "B"}}, lines=[])
+
+
+def test_bad_hand_name_reported_before_lines():
+    with pytest.raises(ValidationError, match=r"hand names must be plain names .*\['a->b'\]"):
+        make(hands={"a->b": {"role": "A"}, "c": {"role": "C"}}, lines=["a->b -> c"])
+
+
+def test_plain_hand_names_accepted():
+    names = ["coder-2", "my_hand", "리뷰어", "A1"]
+    rig = make(hands={n: {"role": "R"} for n in names}, lines=["coder-2 -> my_hand -> 리뷰어 -> A1"])
+    assert list(rig.hands) == names
+
+
+@pytest.mark.parametrize("path", [*sorted((Path(__file__).parents[1] / "src" / "rig").glob("template*.yaml")),
+                                  Path(__file__).parents[1] / "self.rig.yaml"], ids=lambda p: p.name)
+def test_shipped_rigs_load(path):
+    assert load(path).hands
 
 
 def test_cycle_error():

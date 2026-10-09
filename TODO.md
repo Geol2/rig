@@ -51,6 +51,14 @@ Keep items small enough for one reviewed change. Add context under an item when 
   (`runner.py` `_run_lines`). Print every final-stage hand's output under its name, and have
   `rig report` treat them all as the summary.
   Note: shift.json `final` lists the final hands' keys; a lines shift that stops early has none.
+- [x] **Validate hand names**: hand keys in rig.yaml can be anything, but they become file
+  names (`runner.py` `record` writes `shift.dir / f"{stem}.md"`), so a name like `a/b` or
+  `../x` writes outside the shift folder or raises only after the hand has run and been
+  paid for. A `#` breaks foreman result keys (`name#n`, split in `_latest`), and a space or
+  `->` can't be used in `lines`. In `spec.py` `Rig._check_lines`, reject hand names that
+  aren't plain names (letters, digits, `-`, `_`), and say which name is wrong and what is
+  allowed. Add the bad names to `test_invalid_rigs_rejected` and check that all templates
+  and `self.rig.yaml` still load.
 
 ## Backlog
 
@@ -85,6 +93,39 @@ in priority order. Line numbers are from that review and may have moved.
   the `shift.json` / `running.json` writes raise `UnicodeEncodeError` (strict UTF-8 with
   `ensure_ascii=False`). Write them with `errors="replace"` like the transcript files, and
   test it.
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
+- [ ] **Bounds for max_turns, max_tokens and max_delegations**: `Defaults`, `Hand` and
+  `Foreman` in `spec.py` accept any int. `Rig.resolve` uses `h.max_turns or d.max_turns`, so
+  `max_turns: 0` on a hand silently falls back to the default. A negative value makes the
+  hand stop at once with `[stopped after -1 turns]` (`hand.py` loop), a negative
+  `max_tokens` fails at the API only after the shift has started, and `max_delegations: 0`
+  gives a foreman that can't delegate. Add `ge=1` to these fields so `rig check` rejects
+  them, and test that each one fails validation.
+- [ ] **Duplicate keys and non-UTF-8 files in rig.yaml**: `spec.load` uses `yaml.safe_load`,
+  which keeps only the last of two same-named keys, so a second `coder:` under `hands`
+  silently replaces the first. A rig.yaml saved in another encoding (e.g. cp949 from a Korean
+  Windows editor) raises `UnicodeDecodeError`, which `cli._load_or_exit` doesn't catch, so
+  the user gets a traceback. Reject duplicate mapping keys with the key and its line number,
+  and have `_load_or_exit` say "save the file as UTF-8". The serve page should show these
+  errors too. Tests in `test_cli.py` for both cases.
+- [ ] **Catch hands that never run, and an approver that can't approve**: in foreman mode,
+  hands not in `foreman.crew` never run, and `publish.approver` only has to be one of
+  `hands` (`spec.py` `_check_lines`). An approver left off the crew never replies, so
+  `auto_merge` can never happen and nothing says why until a whole shift has been paid
+  for. In lines mode, a hand on no line runs by itself in stage 1 and no other hand gets
+  its output. Make an approver outside `rig.models()` a validation error. Have `rig check`
+  (and the start of `rig run`) warn about hands that aren't on the crew, or aren't on any
+  line when the rig has `lines`. Test the error and the warnings.
+- [ ] **`rig logs` shows status and order correctly**: the list prints `incomplete` for a shift
+  that is still running (no shift.json yet) and for one that crashed or hit the cost limit
+  alike (`cli.py` `cmd_logs`). `rig logs <id>` prints `*.md` in name order, so `coder-10`
+  comes before `coder-2` and the final hand isn't last. It also leaves out shift.json's
+  `error` and `stopped`. Show `running` (if `running.json` exists, as `serve.py` `_live`
+  checks), `error`, `stopped`, `incomplete` or `ok`. In the detail view, list hands in
+  shift.json `hands` order and print the error or stop reason first. Tests in
+  `test_cli.py`.
 
 ## Needs a design first
 
