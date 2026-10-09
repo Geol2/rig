@@ -3,6 +3,10 @@
 import os
 import sys
 
+import pytest
+
+from rig.worktree import git
+
 
 def _annotate(path: str, line: int, title: str, text: str) -> None:
     # The end of the failure (assertion and its values) is the useful part; workflow commands
@@ -31,3 +35,17 @@ def pytest_runtest_logreport(report):
 def pytest_collectreport(report):
     if report.failed and os.environ.get("GITHUB_ACTIONS"):
         _annotate(report.nodeid.split("::")[0] or "tests", 1, f"collecting {report.nodeid}", str(report.longrepr))
+
+
+@pytest.fixture
+def repo(tmp_path):
+    """A git repo on `main` with one commit (app/main.py), for worktree and resume tests."""
+    repo = tmp_path / "repo"
+    (repo / "app").mkdir(parents=True)
+    (repo / "app" / "main.py").write_text("print('v1')\n", encoding="utf-8")
+    git("init", "-q", "-b", "main", cwd=repo)
+    git("config", "user.email", "test@example.com", cwd=repo)
+    git("config", "user.name", "test", cwd=repo)
+    git("add", "-A", cwd=repo)
+    git("commit", "-q", "-m", "init", cwd=repo)
+    return repo

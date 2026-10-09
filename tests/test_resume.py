@@ -10,19 +10,6 @@ from rig.spec import Rig
 from rig.worktree import GitError, git
 
 
-@pytest.fixture
-def repo(tmp_path):
-    repo = tmp_path / "repo"
-    (repo / "app").mkdir(parents=True)
-    (repo / "app" / "main.py").write_text("print('v1')\n", encoding="utf-8")
-    git("init", "-q", "-b", "main", cwd=repo)
-    git("config", "user.email", "test@example.com", cwd=repo)
-    git("config", "user.name", "test", cwd=repo)
-    git("add", "-A", cwd=repo)
-    git("commit", "-q", "-m", "init", cwd=repo)
-    return repo
-
-
 class Worker:
     """Each hand writes its `files` through the toolbox, then raises `fail` or returns `output`;
     records every prompt and which files it found in its workspace."""
