@@ -155,6 +155,10 @@ class InputError(ValueError):
     pass
 
 
+class RigFileError(ValueError):
+    """rig.yaml can't be read as written: not UTF-8, or a repeated key."""
+
+
 class Output(BaseModel):
     """Constrains a hand's final reply to JSON matching `schema` (Claude structured outputs)."""
 
@@ -379,7 +383,92 @@ class ResolvedHand(BaseModel):
     output_schema: dict[str, Any] | None = None
 
 
+MERGE_TAG = "tag:yaml.org,2002:merge"
+
+
+class _StrictLoader(yaml.SafeLoader):
+    """SafeLoader that records where each mapping key was written, as node.key_marks parallel to node.value."""
+
+    def compose_mapping_node(self, anchor: str | None) -> yaml.MappingNode:
+        # Same as Composer.compose_mapping_node, plus key_marks: an aliased key composes to the anchored
+        # node, whose start_mark is the anchor's line, so take the mark from the key's own event instead.
+        start_event = self.get_event()
+        tag = start_event.tag
+        if tag is None or tag == "!":
+            tag = self.resolve(yaml.MappingNode, None, start_event.implicit)
+        node = yaml.MappingNode(tag, [], start_event.start_mark, None, flow_style=start_event.flow_style)
+        node.key_marks = []
+        if anchor is not None:
+            self.anchors[anchor] = node
+        while not self.check_event(yaml.MappingEndEvent):
+            node.key_marks.append(self.peek_event().start_mark)
+            item_key = self.compose_node(node, None)
+            item_value = self.compose_node(node, item_key)
+            node.value.append((item_key, item_value))
+        node.end_mark = self.get_event().end_mark
+        return node
+
+
+def _check_duplicates(loader: yaml.SafeLoader, node: yaml.Node, where: str, seen: set[int]) -> None:
+    """Raise RigFileError for the first mapping that repeats a key, before merges flatten anything."""
+    if id(node) in seen:  # aliases point at nodes already checked
+        return
+    seen.add(id(node))
+    if isinstance(node, yaml.SequenceNode):
+        for i, item in enumerate(node.value):
+            _check_duplicates(loader, item, f"{where}[{i}]", seen)
+    elif isinstance(node, yaml.MappingNode):
+        first: dict[Any, yaml.Mark] = {}
+        marks = getattr(node, "key_marks", None) or [key_node.start_mark for key_node, _ in node.value]
+        for (key_node, _), mark in zip(node.value, marks):
+            if key_node.tag == MERGE_TAG or not isinstance(key_node, yaml.ScalarNode):
+                continue
+            key = loader.construct_object(key_node)
+            try:
+                repeated = key in first
+            except TypeError:  # unhashable
+                continue
+            if repeated:  # by value, so an aliased key (the same node) counts too
+                inside = f" in {where}" if where else ""
+                raise RigFileError(
+                    f'duplicate key "{key}"{inside} at line {mark.line + 1} '
+                    f"(first at line {first[key].line + 1}); remove or rename one"
+                )
+            first[key] = mark
+        for key_node, value_node in node.value:
+            if key_node.tag == MERGE_TAG:
+                _check_duplicates(loader, value_node, where, seen)
+                continue
+            name = key_node.value if isinstance(key_node, yaml.ScalarNode) else "?"
+            _check_duplicates(loader, value_node, f"{where}.{name}" if where else str(name), seen)
+
+
+def parse_yaml(text: str) -> Any:
+    """yaml.safe_load, but a mapping that repeats a key raises RigFileError instead of keeping the last one."""
+    loader = _StrictLoader(text)
+    try:
+        node = loader.get_single_node()
+        if node is None:
+            return None
+        _check_duplicates(loader, node, "", set())
+        return loader.construct_document(node)
+    finally:
+        loader.dispose()
+
+
+def read_rig_text(path: str | Path) -> str:
+    """The file as text; RigFileError if it isn't UTF-8 (we don't guess the encoding)."""
+    data = Path(path).read_bytes()
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        line = data.count(b"\n", 0, e.start) + 1
+        column = e.start - data.rfind(b"\n", 0, e.start)
+        raise RigFileError(
+            f"not UTF-8 (byte 0x{data[e.start]:02x} at line {line}, column {column}); save the file as UTF-8"
+        ) from None
+
+
 def load(path: str | Path) -> Rig:
-    path = Path(path)
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data = parse_yaml(read_rig_text(path)) or {}
     return Rig.model_validate(data)

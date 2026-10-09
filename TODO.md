@@ -100,18 +100,19 @@ Keep items small enough for one reviewed change. Add context under an item when 
   gives a foreman that can't delegate. Add `ge=1` to these fields so `rig check` rejects
   them, and test that each one fails validation.
   Note: `defaults.max_tokens`/`max_turns`, each hand's (and the foreman's) `max_tokens`/`max_turns`, and `foreman.max_delegations` now need `ge=1`; `rig check` rejects 0 or negative values with the field path.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **Duplicate keys and non-UTF-8 files in rig.yaml**: `spec.load` uses `yaml.safe_load`,
+- [x] **Duplicate keys and non-UTF-8 files in rig.yaml**: `spec.load` uses `yaml.safe_load`,
   which keeps only the last of two same-named keys, so a second `coder:` under `hands`
   silently replaces the first. A rig.yaml saved in another encoding (e.g. cp949 from a Korean
   Windows editor) raises `UnicodeDecodeError`, which `cli._load_or_exit` doesn't catch, so
   the user gets a traceback. Reject duplicate mapping keys with the key and its line number,
   and have `_load_or_exit` say "save the file as UTF-8". The serve page should show these
   errors too. Tests in `test_cli.py` for both cases.
+  Note: spec.load raises RigFileError (duplicate key with its path and both lines, aliases included; non-UTF-8 with byte/line/column and "save the file as UTF-8"); `<<` merge overrides aren't duplicates; a UTF-8 BOM is fine; rig serve lists undecodable rig files with the error.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **Catch hands that never run, and an approver that can't approve**: in foreman mode,
   hands not in `foreman.crew` never run, and `publish.approver` only has to be one of
   `hands` (`spec.py` `_check_lines`). An approver left off the crew never replies, so

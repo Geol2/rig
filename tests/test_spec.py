@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from rig.graph import CycleError, layers
 from rig.hand import EchoWorker
 from rig.runner import new_shift, run_shift
-from rig.spec import Rig, load
+from rig.spec import Rig, RigFileError, load, parse_yaml
 
 
 def make(**overrides):
@@ -125,6 +125,63 @@ def test_plain_hand_names_accepted():
                                   Path(__file__).parents[1] / "self.rig.yaml"], ids=lambda p: p.name)
 def test_shipped_rigs_load(path):
     assert load(path).hands
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        ("name: a\nhands:\n  a: {role: A}\nname: b\n", 'duplicate key "name" at line 4 (first at line 1); remove or rename one'),
+        ("name: t\nhands:\n  a:\n    role: A\n    model: m\n    role: B\n",
+         'duplicate key "role" in hands.a at line 6 (first at line 4); remove or rename one'),
+        ("x:\n  - {k: 1}\n  - k: 1\n    k: 2\n", 'duplicate key "k" in x[1] at line 4 (first at line 3); remove or rename one'),
+        ("hands:\n  a: {role: A, role: B}\n", 'duplicate key "role" in hands.a at line 2 (first at line 2); remove or rename one'),
+        ("&k a: 1\n*k : 2\n", 'duplicate key "a" at line 2 (first at line 1); remove or rename one'),
+    ],
+    ids=["top-level", "nested", "list-item", "flow-mapping", "aliased-key"],
+)
+def test_duplicate_keys_rejected(text, message):
+    with pytest.raises(RigFileError) as excinfo:
+        parse_yaml(text)
+    assert str(excinfo.value) == message
+
+
+def test_duplicate_key_lines_in_crlf_file():
+    with pytest.raises(RigFileError, match=r'duplicate key "a" in hands at line 4 \(first at line 3\)'):
+        parse_yaml("name: t\r\nhands:\r\n  a: {role: A}\r\n  a: {role: B}\r\n")
+
+
+def test_non_utf8_byte_position_in_crlf_file(tmp_path):
+    (tmp_path / "rig.yaml").write_bytes(b"name: t\r\nhands:\r\n  a: {role: \xff}\r\n")
+    with pytest.raises(RigFileError) as excinfo:
+        load(tmp_path / "rig.yaml")
+    assert str(excinfo.value) == "not UTF-8 (byte 0xff at line 3, column 13); save the file as UTF-8"
+
+
+def test_utf8_bom_loads(tmp_path):
+    (tmp_path / "rig.yaml").write_bytes(b"\xef\xbb\xbf" + "name: t\nhands:\n  a: {role: 역할}\n".encode("utf-8"))
+    assert load(tmp_path / "rig.yaml").hands["a"].role == "역할"
+
+
+def test_repeated_and_recursive_aliases_parse():
+    assert parse_yaml("a: &x {k: 1}\nb: *x\n") == {"a": {"k": 1}, "b": {"k": 1}}
+    data = parse_yaml("a: &x {self: *x}\n")
+    assert data["a"]["self"] is data["a"]
+
+
+@pytest.mark.parametrize("text", ["", "# just a comment\n# and another\n"], ids=["empty", "comments-only"])
+def test_empty_file_is_invalid(tmp_path, text):
+    (tmp_path / "rig.yaml").write_text(text, encoding="utf-8")
+    with pytest.raises(ValidationError):
+        load(tmp_path / "rig.yaml")
+
+
+def test_merge_keys_may_be_overridden(tmp_path):
+    (tmp_path / "rig.yaml").write_text(
+        "name: t\nhands:\n  r: &base {role: R, max_turns: 3}\n  a:\n    <<: *base\n    role: A\n  b: {<<: *base}\n",
+        encoding="utf-8",
+    )
+    rig = load(tmp_path / "rig.yaml")
+    assert rig.hands["a"].role == "A" and rig.hands["a"].max_turns == 3 and rig.hands["b"].role == "R"
 
 
 def test_cycle_error():

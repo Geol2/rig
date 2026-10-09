@@ -16,7 +16,7 @@ from rig import __version__
 from rig.cost import summary as cost_summary
 from rig.cost import Meter, price_warnings, usd
 from rig.graph import layers
-from rig.spec import InputError, Rig, load
+from rig.spec import InputError, Rig, RigFileError, load
 
 DEFAULT_FILE = "rig.yaml"
 
@@ -26,7 +26,7 @@ def _load_or_exit(path: Path) -> Rig:
         sys.exit(f"rig: {path} not found (run `rig init` to create one)")
     try:
         return load(path)
-    except (ValidationError, yaml.YAMLError) as e:
+    except (ValidationError, yaml.YAMLError, RigFileError) as e:
         sys.exit(f"rig: {path} is invalid\n{e}")
 
 
