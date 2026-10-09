@@ -82,6 +82,8 @@ Each hand receives the task plus its upstream hands' outputs:
 <handoff from="planner">…</handoff>
 ```
 
+A closing tag of one of these blocks inside the content (`</task>`, `</handoff>`, …) is written as `<\/task>`, `<\/handoff>`, …, so content can't end a block early.
+
 If the model declines a request (a safety classifier refusal), the hand stops and its output
 says, in Korean, which category declined it, why, and what to change; the progress output
 names the hand (`✗ coder: [거절됨: reasoning_extraction] …`). The most common case,
