@@ -161,6 +161,38 @@ class _Progress:
         self.running.unlink(missing_ok=True)
 
 
+def live(shift_dir: Path) -> dict[str, Any] | None:
+    """The shift's running.json while the process that runs it is alive, else None."""
+    try:
+        info = json.loads((shift_dir / RUNNING).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    pid = info.get("pid") if isinstance(info, dict) else None
+    # A process killed outright leaves running.json behind; don't show that shift as running forever.
+    return info if isinstance(pid, int) and _alive(pid) else None
+
+
+def _alive(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel32.CloseHandle(handle)
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)  # signal 0: only checks that the process exists
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    return True
+
+
 async def run_shift(
     rig: Rig,
     task: str,

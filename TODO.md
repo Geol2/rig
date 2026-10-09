@@ -117,12 +117,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   (and the start of `rig run`) warn about hands that aren't on the crew, or aren't on any
   line when the rig has `lines`. Test the error and the warnings.
   Note: in foreman mode the approver must be on the crew (validation error); `Rig.hand_warnings()` (hands off the crew / on no line) is printed before the price warnings in `rig check` and at the start of `rig run`.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`rig logs` shows status and order correctly**: the list prints `incomplete` for a shift
+- [x] **`rig logs` shows status and order correctly**: the list prints `incomplete` for a shift
   that is still running (no shift.json yet) and for one that crashed or hit the cost limit
   alike (`cli.py` `cmd_logs`). `rig logs <id>` prints `*.md` in name order, so `coder-10`
   comes before `coder-2` and the final hand isn't last. It also leaves out shift.json's
@@ -130,6 +125,11 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   checks), `error`, `stopped`, `incomplete` or `ok`. In the detail view, list hands in
   shift.json `hands` order and print the error or stop reason first. Tests in
   `test_cli.py`.
+  Note: the running.json check moved to `runner.live()` (shared by serve and cli); the list shows running / error / stopped / ok / incomplete (error wins over stopped, a dead pid's running.json is incomplete); `rig logs <id>` prints the error, the stop reason and "still running" before the cost line, then hands in shift.json order (`coder#10` heading) and leftover .md in natural order.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
 
 ## Needs a design first
 

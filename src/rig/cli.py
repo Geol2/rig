@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 from importlib import resources
 from pathlib import Path
@@ -124,9 +125,45 @@ def _read_summary(shift_dir: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+def _status(summary: dict, running: bool) -> str:
+    if running:
+        return "running"
+    if summary.get("error"):  # a crash or "interrupted" says more than the stop that may have led to it
+        return "error"
+    if summary.get("stopped"):
+        return "stopped"
+    return "ok" if summary.get("ok") else "incomplete"
+
+
+def _stop_line(summary: dict) -> str:
+    if summary["stopped"] != "budget":
+        return "✗ stopped: stopped by user"
+    spent = usd((summary.get("totals") or {}).get("cost_usd"))
+    limit = summary.get("max_cost_usd")
+    if limit is None:
+        return f"✗ stopped: cost limit reached ({spent} spent)"
+    return f"✗ stopped: cost limit {usd(limit)} reached ({spent} spent)"
+
+
+def _natural(name: str) -> list:
+    """Sort key that compares digit runs as numbers, so coder-2 comes before coder-10."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
+
+
+def _outputs(shift: Path, summary: dict) -> list[tuple[str, Path]]:
+    """(heading, file) per hand output: shift.json's hands in run order, then any other .md."""
+    out = [(key, shift / f"{key.replace('#', '-')}.md") for key in summary.get("hands") or {}]
+    out = [(key, f) for key, f in out if f.exists()]
+    seen = {f.name for _, f in out}
+    rest = sorted((f for f in shift.glob("*.md") if f.name not in seen), key=lambda f: _natural(f.stem))
+    return out + [(f.stem, f) for f in rest]
+
+
 def cmd_logs(args: argparse.Namespace) -> None:
+    from rig.runner import live
+
     shifts_dir = Path(args.file).resolve().parent / ".rig" / "shifts"
-    shifts = sorted(shifts_dir.iterdir()) if shifts_dir.is_dir() else []
+    shifts = sorted(d for d in shifts_dir.iterdir() if d.is_dir()) if shifts_dir.is_dir() else []
     if not shifts:
         sys.exit("rig: no shifts yet")
     if args.shift is None:
@@ -134,21 +171,33 @@ def cmd_logs(args: argparse.Namespace) -> None:
         # The branch column only appears when some shift ran with --worktree and left changes.
         branch_width = max((len(m.get("branch") or "") for m in summaries), default=0)
         for s, summary in zip(shifts, summaries):
-            status = "ok" if summary.get("ok") else "incomplete"
-            # Shifts from before cost tracking have no totals.
-            price = usd(summary["totals"].get("cost_usd")) if "totals" in summary else ""
-            branch = f"{summary.get('branch') or '':<{branch_width}}  " if branch_width else ""
-            task = (summary.get("task") or "").strip().splitlines()
-            print(f"{s.name}  {summary.get('mode', ''):<8}  {status:<10}  {price:>9}  {branch}{task[0][:60] if task else ''}")
+            info = live(s)
+            status = _status(summary, bool(info))
+            # Shifts from before cost tracking have no totals; a running shift has no shift.json numbers yet.
+            price = usd(summary["totals"].get("cost_usd")) if "totals" in summary and not info else ""
+            mode = "" if info else summary.get("mode", "")
+            branch = f"{'' if info else summary.get('branch') or '':<{branch_width}}  " if branch_width else ""
+            task = (summary.get("task") or (info or {}).get("task") or "").strip().splitlines()
+            print(f"{s.name}  {mode:<8}  {status:<10}  {price:>9}  {branch}{task[0][:60] if task else ''}")
         return
     shift = shifts[-1] if args.shift == "last" else shifts_dir / args.shift
     if not shift.is_dir():
         sys.exit(f"rig: no shift {args.shift}")
     summary = _read_summary(shift)
+    head = []
+    if summary.get("error"):
+        head.append(f"✗ shift failed: {summary['error']}")
+    if summary.get("stopped"):
+        head.append(_stop_line(summary))
+    info = live(shift)
+    if info:
+        head.append(f"still running (pid {info.get('pid')}). Output so far:")
     if "totals" in summary:
-        print(f"{cost_summary(summary['totals'])}\n")
-    for f in sorted(shift.glob("*.md")):
-        print(f"── {f.stem} ──\n{f.read_text(encoding='utf-8')}\n")
+        head.append(cost_summary(summary["totals"]))
+    if head:
+        print("\n".join(head) + "\n")
+    for heading, f in _outputs(shift, summary):
+        print(f"── {heading} ──\n{f.read_text(encoding='utf-8')}\n")
 
 
 def cmd_report(args: argparse.Namespace) -> None:
