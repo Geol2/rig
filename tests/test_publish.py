@@ -19,10 +19,12 @@ URL = "https://github.com/o/r/pull/7"
 class FakeGh:
     """Answers git push / gh calls; `checks` is a list of successive `gh pr checks` answers."""
 
-    def __init__(self, checks=None, fail=None):
+    def __init__(self, checks=None, fail=None, merges=None, mergeable=None):
         self.calls = []
         self.checks = list(checks or [])
         self.fail = fail or set()
+        self.merges = list(merges or [])  # successive `gh pr merge` exit codes (default 0)
+        self.mergeable = list(mergeable or [])  # successive `gh pr view --json mergeable` answers
 
     def __call__(self, args, cwd, stdin=None):
         self.calls.append((args, stdin))
@@ -31,6 +33,10 @@ class FakeGh:
             return 1, f"{key}: boom"
         if args[:3] == ["gh", "pr", "create"]:
             return 0, f"Creating pull request\n{URL}"
+        if args[:3] == ["gh", "pr", "merge"] and self.merges and self.merges.pop(0):
+            return 1, "Pull request is not mergeable"
+        if args[:3] == ["gh", "pr", "view"]:
+            return 0, self.mergeable.pop(0) if self.mergeable else "UNKNOWN"
         if args[:3] == ["gh", "pr", "checks"]:
             answer = self.checks.pop(0) if len(self.checks) > 1 else (self.checks[0] if self.checks else None)
             return (0, json.dumps(answer)) if answer is not None else (1, "no checks reported on the 'x' branch")
@@ -106,6 +112,44 @@ def test_does_not_merge(kwargs, checks, note):
     pr, _ = go(gh, auto_merge=True, **kwargs)
     assert not pr.merged and note in pr.note and pr.url == URL
     assert not gh.ran("gh", "pr", "merge")
+
+
+PASS = [{"name": "tests", "bucket": "pass"}]
+
+
+def test_base_moved_on_updates_branch_and_merges():
+    gh = FakeGh(checks=[PASS], merges=[1, 0], mergeable=["MERGEABLE"])
+    pr, events = go(gh, auto_merge=True)
+    assert pr.merged and not pr.closed
+    assert gh.ran("gh", "pr", "update-branch", URL)
+    assert len(gh.ran("gh", "pr", "merge")) == 2
+    assert any("updating the PR branch" in e for e in events)
+
+
+def test_ci_failing_after_update_leaves_pr_open():
+    gh = FakeGh(checks=[PASS, [{"name": "tests", "bucket": "fail"}]], merges=[1], mergeable=["MERGEABLE"])
+    pr, _ = go(gh, auto_merge=True)
+    assert not pr.merged and not pr.closed and "after updating the branch: CI failed: tests" in pr.note
+    assert len(gh.ran("gh", "pr", "merge")) == 1
+
+
+def test_conflict_closes_pr_with_comment():
+    # GitHub may still be computing mergeability at first.
+    gh = FakeGh(checks=[PASS], merges=[1], mergeable=["UNKNOWN", "CONFLICTING", "CONFLICTING"])
+    pr, events = go(gh, auto_merge=True)
+    assert pr.closed and not pr.merged and "conflicts with main" in pr.note
+    (close,) = gh.ran("gh", "pr", "close", URL)
+    assert "--comment" in close[0] and "rig/1" in close[0][-1]
+    assert not gh.ran("gh", "pr", "update-branch")
+    assert any(e.startswith("  ✗") and "PR closed" in e for e in events)
+    assert pr.as_dict()["closed"] is True
+
+
+def test_other_merge_failure_leaves_pr_open():
+    gh = FakeGh(checks=[PASS], merges=[1], mergeable=[])  # mergeability stays UNKNOWN
+    pr, _ = go(gh, auto_merge=True)
+    assert not pr.merged and not pr.closed and pr.note.startswith("merge failed")
+    assert not gh.ran("gh", "pr", "close") and not gh.ran("gh", "pr", "update-branch")
 
 
 def test_no_checks_allowed_when_not_required():
@@ -195,7 +239,7 @@ def test_end_to_end_merge(repo, monkeypatch, tmp_path):
     assert create[0][create[0].index("--base") + 1] == "main"
     assert gh.ran("gh", "pr", "merge")
     summary = json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))
-    assert summary["prs"] == [{"repo": str(repo.resolve()), "branch": branch, "url": URL, "number": 7, "merged": True, "note": ""}]
+    assert summary["prs"] == [{"repo": str(repo.resolve()), "branch": branch, "url": URL, "number": 7, "merged": True, "closed": False, "note": ""}]
 
 
 def test_pr_body_has_every_final_hand(repo, monkeypatch, tmp_path):
