@@ -243,6 +243,7 @@ class App:
                 "cost": usd(s["totals"].get("cost_usd")) if "totals" in s else "", "findings": findings,
                 "running": bool(info) or bool(self.run and self.run.status == "running" and self.run.shift_id == d.name),
                 "log": (d / PROGRESS_LOG).exists(),
+                "prs": _prs(s),
             })
         return out
 
@@ -261,8 +262,9 @@ class App:
         if text and not text.endswith("\n"):
             lines.pop()  # half-written; it comes with the next poll
         running = bool(live(d))
-        ok = None if running else report.read_summary(d)[0].get("ok")
-        return {"lines": lines[since:], "total": len(lines), "running": running, "ok": ok}
+        summary = report.read_summary(d)[0]
+        ok = None if running else summary.get("ok")
+        return {"lines": lines[since:], "total": len(lines), "running": running, "ok": ok, "prs": _prs(summary)}
 
     def report_html(self, shift_id: str) -> str:
         return report.render(report.collect(self._shift_dir(shift_id)),
@@ -293,6 +295,16 @@ class App:
             path.unlink()
             raise
         return path.name
+
+
+def _prs(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """The shift's pull requests from shift.json: number, url and merged / closed / open."""
+    out = []
+    for pr in summary.get("prs") or []:
+        if isinstance(pr, dict) and pr.get("url"):
+            state = "merged" if pr.get("merged") else "closed" if pr.get("closed") else "open"
+            out.append({"number": pr.get("number"), "url": pr["url"], "state": state})
+    return out
 
 
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
@@ -445,7 +457,8 @@ button.danger{font:inherit;font-size:14px;border-radius:6px;padding:7px 16px;cur
 .error{color:var(--bad);font-size:14px;white-space:pre-wrap}
 .log{font:12.5px/1.55 var(--mono);background:var(--code);border-radius:6px;padding:12px;max-height:340px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}
 .pill{font-size:12px;font-weight:600;padding:1px 9px;border-radius:999px;border:1px solid currentColor}
-.pill.running{color:var(--warn)}.pill.done{color:var(--ok)}.pill.incomplete,.pill.failed,.pill.stopped{color:var(--bad)}
+.pill.running{color:var(--warn)}
+a.pr.merged{color:var(--ok)}a.pr.closed{color:var(--muted)}a.pr.open{color:var(--warn)}.pill.done{color:var(--ok)}.pill.incomplete,.pill.failed,.pill.stopped{color:var(--bad)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 #viewer[hidden]{display:none}
 table{border-collapse:collapse;width:100%;font-size:14px}
@@ -501,7 +514,7 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
   <section class="panel" aria-labelledby="hist-h">
     <h2 id="hist-h">지난 실행</h2>
     <div class="table-wrap"><table>
-      <thead><tr><th>실행</th><th>설정</th><th>요구사항</th><th>상태</th><th class="num">발견</th><th class="num">비용</th><th></th></tr></thead>
+      <thead><tr><th>실행</th><th>설정</th><th>요구사항</th><th>상태</th><th>PR</th><th class="num">발견</th><th class="num">비용</th><th></th></tr></thead>
       <tbody id="shifts"></tbody>
     </table></div>
     <div class="row"><p class="small muted" style="margin:0">터미널에서 <code>rig run</code>으로 시작한 실행도 새로고침 없이 여기 나타나고, 아래 로그 창에 자동으로 열립니다. 끝나면 탭 제목에 표시됩니다.</p>
@@ -509,6 +522,7 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
   </section>
   <section class="panel" id="viewer" aria-labelledby="viewer-h" hidden>
     <div class="row"><h2 id="viewer-h">실행 로그</h2><span class="pill" id="v-pill"></span>
+      <span id="v-pr"></span>
       <a id="v-report" target="_blank">결과 리포트 열기 →</a>
       <button class="secondary" id="v-close" type="button">닫기</button></div>
     <pre class="log" id="v-log" aria-live="polite"></pre>
@@ -675,7 +689,7 @@ let ownShift = null, ownRunning = false;
 async function loadShifts() {
   const rows = await api('/api/shifts');
   const body = $('shifts'); body.textContent = '';
-  if (!rows.length) { body.append(el('tr', {}, el('td', {colspan: '7', class: 'muted small'}, '아직 실행 기록이 없습니다.'))); return; }
+  if (!rows.length) { body.append(el('tr', {}, el('td', {colspan: '8', class: 'muted small'}, '아직 실행 기록이 없습니다.'))); return; }
   for (const s of rows) {
     const state = s.running ? '실행 중' : s.ok === true ? '완료' : s.ok === false ? '미완료' : '-';
     const links = el('span', {class: 'row'});
@@ -683,9 +697,25 @@ async function loadShifts() {
     if (!s.running) links.append(el('a', {href: '/shifts/' + encodeURIComponent(s.id) + '/report', target: '_blank'}, '리포트'));
     body.append(el('tr', {},
       el('td', {class: 'id'}, s.id), el('td', {}, s.rig), el('td', {}, s.task),
-      el('td', {}, state), el('td', {class: 'num'}, String(s.findings || '')), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
+      el('td', {}, state), el('td', {}, prLinks(s.prs)), el('td', {class: 'num'}, String(s.findings || '')), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
   }
   follow(rows);
+}
+// "#56 병합됨" links to each of a shift's PRs.
+const PR_STATE = {merged: '병합됨', closed: '닫힘', open: '열림'};
+function prLinks(prs) {
+  const box = el('span', {class: 'row'});
+  for (const p of prs || []) {
+    box.append(el('a', {href: p.url, target: '_blank', rel: 'noopener', class: 'pr ' + p.state},
+      (p.number ? '#' + p.number : 'PR') + ' ' + (PR_STATE[p.state] || '')));
+  }
+  return box;
+}
+// While a shift runs, shift.json has no PR yet; take it from the "PR opened/updated: <url>" log line.
+function prsFromLog(text) {
+  const out = [];
+  for (const m of text.matchAll(/PR (?:opened|updated): (\S+\/pull\/(\d+))/g)) out.push({url: m[1], number: Number(m[2]), state: 'open'});
+  return out;
 }
 // A run that starts elsewhere (rig run in a terminal) opens in the log panel by itself, unless
 // another running one is already open there. Runs started from this page show above instead.
@@ -702,7 +732,7 @@ setInterval(() => { if (!document.hidden) loadShifts().catch(() => {}); }, 5000)
 
 let viewing = null, vSince = 0, vTimer = null, vRunning = false;
 function openLog(id, scroll = true) {
-  viewing = id; vSince = 0; vRunning = false; $('v-log').textContent = '';
+  viewing = id; vSince = 0; vRunning = false; $('v-log').textContent = ''; $('v-pr').textContent = '';
   $('viewer-h').textContent = '실행 로그 · ' + id;
   $('v-report').href = '/shifts/' + encodeURIComponent(id) + '/report';
   $('viewer').hidden = false;
@@ -720,6 +750,8 @@ async function pollLog() {
   $('v-pill').className = 'pill ' + state;
   $('v-pill').textContent = LABEL[state];
   $('v-report').hidden = s.running;
+  const prs = s.prs && s.prs.length ? s.prs : prsFromLog($('v-log').textContent);
+  $('v-pr').replaceChildren(prLinks(prs));
   if (vRunning && !s.running) finished(id, state);
   vRunning = s.running;
   if (s.running) vTimer = setTimeout(pollLog, 1000); else loadShifts();
