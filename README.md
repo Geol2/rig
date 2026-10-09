@@ -373,6 +373,19 @@ Uncommitted changes in your working tree are not carried into the worktree (rig 
 Unless `publish` says otherwise (below), rig never merges or pushes; that's left to you.
 `rig logs` lists each shift's branch and status, so you can find it again later.
 
+### Resuming a stopped shift
+
+`rig run --resume last` (or `--resume <shift-id>`) continues a shift that was interrupted,
+crashed, hit its cost limit or was stopped, and that committed changes to its branch. A shift
+that finished ok, or left no branch (no changes, or run without `--worktree`), can't be resumed.
+
+The new shift gets its own id and branch `rig/<new-id>`, starting at the old branch's tip, and
+reuses the old task and inputs (don't pass a task or `-i`). The hand that picks the work up (the
+foreman, or the first stage of `lines`) is told why the shift stopped, what is already on the
+branch and what the hands reported, and to finish only what's left. shift.json records
+`resumed_from`, and `rig logs <id>` shows it. If the resumed shift changes nothing, its own
+branch is removed as usual; the old branch still holds the work.
+
 ### Pull requests and auto-merge
 
 `publish` hands the branch to GitHub when the shift ends, using `git push` and the GitHub

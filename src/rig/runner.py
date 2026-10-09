@@ -14,7 +14,7 @@ from typing import Any, Callable
 from rig import cost, publish, worktree
 from rig.graph import layers, upstreams
 from rig.hand import HandResult, Worker
-from rig.report import findings_of
+from rig.report import findings_of, read_summary
 from rig.spec import Publish, Rig
 from rig.tools import Toolbox, ToolError
 
@@ -60,6 +60,8 @@ class Shift:
     prs: list[publish.PullRequest] = field(default_factory=list)
     # "<Type>: <message>" if the shift crashed, "interrupted" on Ctrl-C/cancel; None otherwise.
     error: str | None = None
+    # Id of the stopped shift this one continues (`rig run --resume`).
+    resumed_from: str | None = None
 
     @property
     def final(self) -> HandResult | None:
@@ -88,9 +90,10 @@ class Shift:
         return [(wt, o) for wt, o in zip(self.worktrees, self.outcomes) if o.changed and not o.kept_at]
 
 
-# Closing tags of build_prompt's own blocks, e.g. "</handoff>" or "</ Task >";
+# Closing tags of build_prompt's own blocks (and the resume block's), e.g. "</handoff>" or "</ Task >";
 # not "</taskbar>", "</task-list>" or "</handoff.v2>".
-_CLOSING_TAG = re.compile(r"</(?=\s*(?:task|inputs|input|handoff|instructions)(?![\w:.-]))", re.IGNORECASE)
+_CLOSING_TAG = re.compile(r"</(?=\s*(?:task|inputs|input|handoff|instructions|resumed|previous)(?![\w:.-]))",
+                          re.IGNORECASE)
 
 
 def _neutralize(text: str) -> str:
@@ -99,9 +102,12 @@ def _neutralize(text: str) -> str:
 
 
 def build_prompt(
-    task: str, handoffs: dict[str, str], instructions: str | None = None, inputs: dict[str, str] | None = None
+    task: str, handoffs: dict[str, str], instructions: str | None = None, inputs: dict[str, str] | None = None,
+    resumed: str | None = None,
 ) -> str:
-    parts = [f"<task>\n{_neutralize(task)}\n</task>"]
+    # `resumed` is load_resume's ready-made block (its contents already neutralized), so it goes in as is.
+    parts = [resumed] if resumed else []
+    parts.append(f"<task>\n{_neutralize(task)}\n</task>")
     if inputs:
         lines = "\n".join(f'<input name="{name}">{_neutralize(value)}</input>' for name, value in inputs.items())
         parts.append(f"<inputs>\n{lines}\n</inputs>")
@@ -193,6 +199,122 @@ def _alive(pid: int) -> bool:
     return True
 
 
+class ResumeError(ValueError):
+    """`rig run --resume` can't continue that shift; the message says why."""
+
+
+@dataclass
+class Resume:
+    """What a new shift needs to continue a stopped one (`rig run --resume`)."""
+
+    shift_id: str
+    task: str
+    inputs: dict[str, str]
+    # Resolved repo path → (the old shift's branch, full sha of its tip): where the new branch starts.
+    starts: dict[Path, tuple[str, str]]
+    why: str  # how the old shift ended, e.g. "interrupted"
+    context: str  # the whole <resumed> block for the prompt of the hand(s) that pick the work up
+
+
+EXCERPT_CHARS = 1500
+
+
+def _why(summary: dict[str, Any]) -> str:
+    """How a shift ended, in a few words; an error wins over a stop, as in `rig logs`."""
+    error, stopped = summary.get("error"), summary.get("stopped")
+    if error == "interrupted":
+        return "interrupted"
+    if error:
+        why = f"failed: {error}"
+        return why if len(why) <= 80 else why[:79] + "…"
+    if stopped == "budget":
+        return "cost limit reached"
+    if stopped:
+        return "stopped by user"
+    return "incomplete: a hand didn't finish cleanly"
+
+
+def load_resume(root: Path, rig: Rig, which: str) -> Resume:
+    """Read shift `which` (`last` or an id) and check it can be continued; creates nothing."""
+    shifts_dir = root / ".rig" / "shifts"
+    if which == "last":
+        shifts = sorted(d for d in shifts_dir.iterdir() if d.is_dir()) if shifts_dir.is_dir() else []
+        if not shifts:
+            raise ResumeError("no shifts yet")
+        shift_dir = shifts[-1]
+    else:
+        shift_dir = shifts_dir / which
+        if not shift_dir.is_dir():
+            raise ResumeError(f"no shift {which}")
+    old = shift_dir.name
+    info = live(shift_dir)
+    if info:
+        raise ResumeError(f"shift {old} is still running (pid {info.get('pid')}); wait for it or stop it first")
+    summary, reason = read_summary(shift_dir)
+    if reason is None and not (shift_dir / "shift.json").exists():
+        reason = "missing"  # read_summary treats that as merely incomplete, but there's nothing to go on
+    if reason is not None:
+        raise ResumeError(f"cannot read {old}/shift.json ({reason}); nothing to resume from")
+    if summary.get("ok") and not summary.get("error") and not summary.get("stopped"):
+        raise ResumeError(f"shift {old} finished ok; nothing to resume")
+    if summary.get("rig") != rig.name:
+        raise ResumeError(f"shift {old} was run by rig '{summary.get('rig')}', not '{rig.name}' "
+                          "(use -f to pick that rig file)")
+    entries = [w for w in summary.get("worktrees") or [] if isinstance(w, dict)]
+    for w in entries:
+        if w.get("kept_at"):
+            raise ResumeError(f"shift {old} kept its worktree at {w['kept_at']} because the commit failed; "
+                              "commit or remove it first")
+    committed = [w for w in entries if w.get("changed") and w.get("commit")]
+    if not committed:
+        hint = f"; try `rig run --resume {summary['resumed_from']}`" if summary.get("resumed_from") else ""
+        raise ResumeError(f"shift {old} left no committed branch (no changes, or run without --worktree){hint}")
+
+    repos = {worktree.repo_of(folder) for folder in rig.workspace_dirs(root).values()}
+    starts: dict[Path, tuple[str, str]] = {}
+    stats: list[tuple[Path, str]] = []
+    for w in committed:
+        repo = Path(w["repo"]).resolve()
+        if repo not in repos:
+            continue
+        branch = w["branch"]
+        try:
+            sha = worktree.git("rev-parse", "--verify", "--quiet", f"refs/heads/{branch}", cwd=repo).strip()
+        except worktree.GitError:
+            sha = ""
+        if not sha:
+            raise ResumeError(f"branch {branch} of shift {old} no longer exists (merged or deleted)")
+        starts[repo] = (branch, sha)
+        stats.append((repo, worktree.git("diff", "--stat", f"{w['base']}..{branch}", cwd=repo).rstrip()))
+    if not starts:
+        raise ResumeError(f"none of shift {old}'s branches are in this rig's repositories")
+
+    why = _why(summary)
+    branches = ", ".join(dict.fromkeys(b for b, _ in starts.values()))
+    changes = stats[0][1] if len(stats) == 1 else "\n".join(f"{repo.name}:\n{stat}" for repo, stat in stats)
+    lines = [
+        f'<resumed from="{old}">',
+        f"This task was started before, in shift {old}, which stopped before finishing ({_neutralize(why)}).",
+        f"Its changes are already in your workspace, committed on {branches}:",
+        _neutralize(changes),
+    ]
+    excerpts = []
+    for key in summary.get("hands") or {}:
+        path = shift_dir / f"{key.replace('#', '-')}.md"
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        cut = text[:EXCERPT_CHARS] + ("…" if len(text) > EXCERPT_CHARS else "")
+        excerpts.append(f'<previous from="{key}">\n{_neutralize(cut)}\n</previous>')
+    if excerpts:
+        lines += ["What its hands reported (start of each reply):", *excerpts]
+    lines += ["Don't redo what is already done. Check the current state, then finish only what is left.",
+              "</resumed>"]
+    inputs = {str(k): str(v) for k, v in (summary.get("inputs") or {}).items()}
+    return Resume(shift_id=old, task=summary.get("task") or "", inputs=inputs, starts=starts, why=why,
+                  context="\n".join(lines))
+
+
 async def run_shift(
     rig: Rig,
     task: str,
@@ -204,8 +326,10 @@ async def run_shift(
     inputs: dict[str, str] | None = None,
     meter: cost.Meter | None = None,
     on_status: StatusHandler | None = None,
+    resume: Resume | None = None,
 ) -> Shift:
-    use_worktree = use_worktree or rig.publish.pr  # a PR needs the branch a worktree shift makes
+    # A PR needs the branch a worktree shift makes; resuming continues from the old shift's branch.
+    use_worktree = use_worktree or rig.publish.pr or resume is not None
     dirs = rig.workspace_dirs(root)
     # One folder, or {name: folder} for several projects.
     workspace: Path | dict[str, Path] = dirs if rig.workspaces else dirs["."]
@@ -218,6 +342,7 @@ async def run_shift(
     finished = False  # "finished" goes out once, whichever way the shift ends
     try:
         shift.inputs = values
+        shift.resumed_from = resume.shift_id if resume else None
         meter = meter or cost.Meter()
         if meter.limit is None:
             meter.limit = rig.max_cost_usd
@@ -226,6 +351,8 @@ async def run_shift(
             worker.meter = meter
         mode = "foreman" if rig.foreman else "lines"
         on_event(f"shift {shift.id} · rig '{rig.name}' · {mode}")
+        if resume:
+            on_event(f"  resuming {resume.shift_id} ({resume.why})")
         for line in [*rig.hand_warnings(), *cost.price_warnings(rig.models(), meter.limit)]:
             on_event(line)
 
@@ -233,7 +360,8 @@ async def run_shift(
         if use_worktree:
             # Raises GitError before any hand runs if a workspace isn't in a git repo.
             sync = rig.publish if rig.publish.pr and rig.publish.sync else None
-            workspace, run_wt = _make_worktrees(shift, workspace, root, rig.run.workspace, on_event, sync)
+            workspace, run_wt = _make_worktrees(shift, workspace, root, rig.run.workspace, on_event, sync,
+                                                starts=resume.starts if resume else None)
             env = run_wt.env  # so hands' `run git ...` works in the worktree too
 
         def tools(names: list[str], label: str, extra: dict | None = None) -> Toolbox:
@@ -250,10 +378,11 @@ async def run_shift(
                 on_event(f"  ✗ {key}: {res.output}")
 
         try:
+            resumed = resume.context if resume else None
             if rig.foreman:
-                await _run_foreman(rig, task, worker, shift, record, on_event, tools)
+                await _run_foreman(rig, task, worker, shift, record, on_event, tools, resumed=resumed)
             else:
-                await _run_lines(rig, task, worker, shift, record, on_event, tools)
+                await _run_lines(rig, task, worker, shift, record, on_event, tools, resumed=resumed)
         except Exception as e:
             # Keep what the shift got done; shift.json records the crash instead of a traceback.
             shift.ok = False
@@ -315,6 +444,7 @@ def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Met
         "inputs": shift.inputs,
         "ok": shift.ok,
         "error": shift.error,
+        "resumed_from": shift.resumed_from,
         "branch": shift.branch,
         "worktrees": [
             {"repo": str(wt.repo), "branch": wt.branch, "base": wt.base, "commit": out.commit, "changed": out.changed,
@@ -413,13 +543,27 @@ def _start(folder: Path, sync: Publish | None, on_event: Event) -> str | None:
 
 def _make_worktrees(
     shift: Shift, workspace: Path | dict[str, Path], root: Path, run_in: str | None, on_event: Event,
-    sync: Publish | None = None,
+    sync: Publish | None = None, starts: dict[Path, tuple[str, str]] | None = None,
 ) -> tuple[Path | dict[str, Path], worktree.Worktree]:
-    """A worktree per git repo the workspace(s) live in; returns the mapped workspace and `run`'s worktree."""
+    """A worktree per git repo the workspace(s) live in; returns the mapped workspace and `run`'s worktree.
+
+    A repo in `starts` (resolved repo → (old branch, sha), from `--resume`) starts at that sha, without syncing.
+    """
     branch = f"rig/{shift.id}"
     dest = root / ".rig" / "worktrees" / shift.id
+    starts = starts or {}
+
+    def create(folder: Path, repo: Path | None, where: Path) -> worktree.Worktree:
+        if repo not in starts:
+            return worktree.create(folder, where, branch, _start(folder, sync, on_event))
+        old_branch, sha = starts[repo]
+        wt = worktree.create(folder, where, branch, start=sha)
+        wt.from_branch = old_branch
+        return wt
+
     if isinstance(workspace, Path):
-        wt = worktree.create(workspace, dest, branch, _start(workspace, sync, on_event))
+        repo = worktree.repo_of(workspace) if starts else None
+        wt = create(workspace, repo, dest)
         shift.worktrees.append(wt)
         _announce(wt, on_event)
         return wt.map(workspace), wt
@@ -431,7 +575,7 @@ def _make_worktrees(
         for name, folder in workspace.items():
             repo = repos[name]
             if repo not in by_repo:  # projects in the same repo share its worktree
-                by_repo[repo] = worktree.create(folder, dest / name, branch, _start(folder, sync, on_event))
+                by_repo[repo] = create(folder, repo, dest / name)
                 shift.worktrees.append(by_repo[repo])
                 _announce(by_repo[repo], on_event, label=f" {repo.name}")
     except worktree.GitError:
@@ -444,7 +588,10 @@ def _make_worktrees(
 
 
 def _announce(wt: worktree.Worktree, on_event: Event, label: str = "") -> None:
-    on_event(f"  worktree{label} {wt.path} · branch {wt.branch} from {wt.base[:7]}")
+    if wt.from_branch:
+        on_event(f"  worktree{label} {wt.path} · branch {wt.branch} from {wt.from_branch} ({wt.base[:7]})")
+    else:
+        on_event(f"  worktree{label} {wt.path} · branch {wt.branch} from {wt.base[:7]}")
     if wt.dirty:
         on_event(f"  ! {wt.repo.name} has uncommitted changes; they are not in the worktree")
 
@@ -502,15 +649,18 @@ async def _guarded_run(worker: Worker, hand, label: str, prompt: str, toolbox: T
                           turns=0, model=hand.model)
 
 
-async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFactory) -> None:
+async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFactory,
+                     resumed: str | None = None) -> None:
     edges = rig.edges
 
     async def run_hand(name: str) -> HandResult:
         hand = rig.resolve(name, shift.inputs)
-        handoffs = {u: shift.results[u].output for u in upstreams(name, edges)}
+        ups = upstreams(name, edges)
+        handoffs = {u: shift.results[u].output for u in ups}
         on_event(f"  ▶ {name}" + (f"  ← {', '.join(handoffs)}" if handoffs else ""))
-        res = await _guarded_run(worker, hand, name, build_prompt(task, handoffs, inputs=shift.inputs),
-                                 tools(hand.tools, name), on_event)
+        # Only the first stage picks up a resumed shift; later ones get its work through handoffs.
+        prompt = build_prompt(task, handoffs, inputs=shift.inputs, resumed=None if ups else resumed)
+        res = await _guarded_run(worker, hand, name, prompt, tools(hand.tools, name), on_event)
         on_event(f"  ■ {name}  {_done(res, shift.meter)}")
         return res
 
@@ -531,7 +681,8 @@ async def _run_lines(rig, task, worker, shift, record, on_event, tools: ToolFact
     shift.ok = all(r.ok for r in shift.results.values())
 
 
-async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFactory) -> None:
+async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFactory,
+                       resumed: str | None = None) -> None:
     foreman = rig.foreman
     crew = rig.crew
     counts: dict[str, int] = {}
@@ -615,7 +766,9 @@ async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFa
     toolbox = tools(hand.tools, "foreman", extra={"delegate": (delegate_def, delegate)})
 
     on_event(f"  ▶ foreman  crew: {', '.join(crew)}")
-    res = await worker.run(hand, build_prompt(task, {}, inputs=shift.inputs), toolbox, check=check if foreman.require else None)
+    # Only the foreman hears about a resumed shift; it tells its hands what they need.
+    prompt = build_prompt(task, {}, inputs=shift.inputs, resumed=resumed)
+    res = await worker.run(hand, prompt, toolbox, check=check if foreman.require else None)
     on_event(f"  ■ foreman  {_done(res, shift.meter)} · {total} delegations")
     record("foreman", res)
     shift.finals = [res]
