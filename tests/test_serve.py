@@ -148,3 +148,54 @@ def test_guards(server):
         urllib.request.urlopen(req)
     assert e.value.code == 403
     assert call(base + "/shifts/..%2F..%2Fetc/report")[0] == 404
+
+
+def test_progress_log_of_a_finished_run(server):
+    app, base = server
+    call(base + "/api/run", {"file": "review.rig.yaml", "task": "look", "inputs": {"module": "orders"}, "dry": True})
+    for _ in range(100):
+        state = call(base + "/api/run?since=0")[1]
+        if state["status"] != "running":
+            break
+        time.sleep(0.05)
+    shift_dir = app.shifts_dir / state["shift_id"]
+    assert not (shift_dir / "running.json").exists()
+    status, log = call(f"{base}/shifts/{state['shift_id']}/log")
+    assert status == 200 and not log["running"]
+    assert log["lines"] == state["lines"][: log["total"]] and any("▶ a" in line for line in log["lines"])
+    assert call(base + "/api/shifts")[1][0]["log"]
+
+
+def test_shift_started_from_the_terminal_shows_as_running(server):
+    import os
+
+    app, base = server
+    d = app.shifts_dir / "20261009-120000"
+    d.mkdir(parents=True)
+    (d / "running.json").write_text(json.dumps({"pid": os.getpid(), "rig": "review", "task": "from cli\nmore"}), encoding="utf-8")
+    (d / "progress.log").write_text("shift 20261009-120000 · rig 'review' · lines\n  ▶ a\n  ■ a  do", encoding="utf-8")
+
+    row = call(base + "/api/shifts")[1][0]
+    assert row["running"] and row["rig"] == "review" and row["task"] == "from cli" and row["log"]
+    log = call(f"{base}/shifts/{d.name}/log")[1]
+    assert log["running"] and log["total"] == 2 and log["lines"][1] == "  ▶ a"  # the half-written line waits
+    with (d / "progress.log").open("a", encoding="utf-8") as f:
+        f.write("ne\n")
+    assert call(f"{base}/shifts/{d.name}/log?since=2")[1]["lines"] == ["  ■ a  done"]
+
+    (d / "running.json").unlink()
+    assert not call(base + "/api/shifts")[1][0]["running"]
+
+
+def test_running_json_of_a_dead_process_is_ignored(server):
+    import subprocess
+    import sys
+
+    app, base = server
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    d = app.shifts_dir / "20261009-120000"
+    d.mkdir(parents=True)
+    (d / "running.json").write_text(json.dumps({"pid": p.pid, "rig": "review", "task": "killed"}), encoding="utf-8")
+    assert not call(base + "/api/shifts")[1][0]["running"]
+    assert not call(f"{base}/shifts/{d.name}/log")[1]["running"]

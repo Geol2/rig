@@ -193,6 +193,11 @@ of any past shift. It runs one shift at a time. While a shift runs, the page sho
 so far against the limit (taken from `max_cost_usd`, editable before each run) and a
 **Stop** button that ends it the same way the limit does.
 
+Shifts started with `rig run` in a terminal show up too: every shift writes its progress
+lines to `progress.log` in its folder (and `running.json` while it runs), and the history
+list refreshes on its own. **Log** on a row shows that shift's progress, live while it runs.
+Start `rig serve` in the folder you run rig from (the one holding `.rig/`).
+
 Reports opened from this page have a **Fix** button on each finding. It fills the task
 with that finding (location, problem, suggested fix) and picks `fix.rig.yaml`, a rig that
 makes the smallest change and has a checker review it (`rig init --template fix`). If

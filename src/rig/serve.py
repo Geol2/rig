@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import threading
 from dataclasses import dataclass, field
@@ -24,6 +25,7 @@ from pydantic import ValidationError
 from rig import report
 from rig.cost import Meter, usd
 from rig.graph import layers
+from rig.runner import PROGRESS_LOG, RUNNING
 from rig.spec import InputError, load
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
@@ -224,12 +226,15 @@ class App:
             if not d.is_dir():
                 continue
             s = json.loads((d / "shift.json").read_text(encoding="utf-8")) if (d / "shift.json").exists() else {}
-            task = (s.get("task") or "").strip().splitlines()
+            live = _live(d)  # started here or by `rig run` in a terminal
+            task = (s.get("task") or (live or {}).get("task") or "").strip().splitlines()
             findings = sum(len(h["findings"] or []) for h in report.collect(d)["hands"]) if s else 0
             out.append({
-                "id": d.name, "rig": s.get("rig", ""), "ok": s.get("ok"), "task": task[0] if task else "",
+                "id": d.name, "rig": s.get("rig") or (live or {}).get("rig", ""), "ok": s.get("ok"),
+                "task": task[0] if task else "",
                 "cost": usd(s["totals"].get("cost_usd")) if "totals" in s else "", "findings": findings,
-                "running": bool(self.run and self.run.status == "running" and self.run.shift_id == d.name),
+                "running": bool(live) or bool(self.run and self.run.status == "running" and self.run.shift_id == d.name),
+                "log": (d / PROGRESS_LOG).exists(),
             })
         return out
 
@@ -238,6 +243,16 @@ class App:
         if d.parent != self.shifts_dir.resolve() or not d.is_dir():
             raise ValueError(f"no shift {shift_id}")
         return d
+
+    def shift_log(self, shift_id: str, since: int) -> dict[str, Any]:
+        """A shift's progress lines from `since` on, and whether it's still running."""
+        d = self._shift_dir(shift_id)
+        p = d / PROGRESS_LOG
+        text = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+        lines = text.splitlines()
+        if text and not text.endswith("\n"):
+            lines.pop()  # half-written; it comes with the next poll
+        return {"lines": lines[since:], "total": len(lines), "running": bool(_live(d))}
 
     def report_html(self, shift_id: str) -> str:
         return report.render(report.collect(self._shift_dir(shift_id)),
@@ -268,6 +283,38 @@ class App:
             path.unlink()
             raise
         return path.name
+
+
+def _live(shift_dir: Path) -> dict[str, Any] | None:
+    """The shift's running.json while the process that runs it is alive, else None."""
+    try:
+        info = json.loads((shift_dir / RUNNING).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    pid = info.get("pid") if isinstance(info, dict) else None
+    # A process killed outright leaves running.json behind; don't show that shift as running forever.
+    return info if isinstance(pid, int) and _alive(pid) else None
+
+
+def _alive(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel32.CloseHandle(handle)
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)  # signal 0: only checks that the process exists
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    return True
 
 
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
@@ -311,6 +358,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 if url.path == "/api/finding":
                     q = parse_qs(url.query)
                     return self._json(200, app.finding(q.get("shift", [""])[0], int(q.get("n", ["-1"])[0])))
+                m = re.fullmatch(r"/shifts/([^/]+)/log", url.path)
+                if m:
+                    since = int(parse_qs(url.query).get("since", ["0"])[0])
+                    return self._json(200, app.shift_log(unquote(m.group(1)), since))
                 m = re.fullmatch(r"/shifts/([^/]+)/report", url.path)
                 if m:
                     return self._send(200, app.report_html(unquote(m.group(1))), "text/html; charset=utf-8")
@@ -417,6 +468,7 @@ button.danger{font:inherit;font-size:14px;border-radius:6px;padding:7px 16px;cur
 .pill{font-size:12px;font-weight:600;padding:1px 9px;border-radius:999px;border:1px solid currentColor}
 .pill.running{color:var(--warn)}.pill.done{color:var(--ok)}.pill.incomplete,.pill.failed,.pill.stopped{color:var(--bad)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+#viewer[hidden]{display:none}
 table{border-collapse:collapse;width:100%;font-size:14px}
 th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
 td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}tr:last-child td{border-bottom:0}
@@ -473,6 +525,13 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
       <thead><tr><th>실행</th><th>설정</th><th>요구사항</th><th>상태</th><th class="num">발견</th><th class="num">비용</th><th></th></tr></thead>
       <tbody id="shifts"></tbody>
     </table></div>
+    <p class="small muted">터미널에서 <code>rig run</code>으로 시작한 실행도 여기 나타납니다. 로그를 누르면 진행 상황을 실시간으로 볼 수 있습니다.</p>
+  </section>
+  <section class="panel" id="viewer" aria-labelledby="viewer-h" hidden>
+    <div class="row"><h2 id="viewer-h">실행 로그</h2><span class="pill" id="v-pill"></span>
+      <a id="v-report" target="_blank">결과 리포트 열기 →</a>
+      <button class="secondary" id="v-close" type="button">닫기</button></div>
+    <pre class="log" id="v-log" aria-live="polite"></pre>
   </section>
 </main>
 <script>
@@ -635,12 +694,38 @@ async function loadShifts() {
   if (!rows.length) { body.append(el('tr', {}, el('td', {colspan: '7', class: 'muted small'}, '아직 실행 기록이 없습니다.'))); return; }
   for (const s of rows) {
     const state = s.running ? '실행 중' : s.ok === true ? '완료' : s.ok === false ? '미완료' : '-';
+    const links = el('span', {class: 'row'});
+    if (s.log) links.append(el('a', {href: '#viewer', onclick: e => { e.preventDefault(); openLog(s.id); }}, '로그'));
+    if (!s.running) links.append(el('a', {href: '/shifts/' + encodeURIComponent(s.id) + '/report', target: '_blank'}, '리포트'));
     body.append(el('tr', {},
       el('td', {class: 'id'}, s.id), el('td', {}, s.rig), el('td', {}, s.task),
-      el('td', {}, state), el('td', {class: 'num'}, String(s.findings || '')), el('td', {class: 'num'}, s.cost),
-      el('td', {}, el('a', {href: '/shifts/' + encodeURIComponent(s.id) + '/report', target: '_blank'}, '리포트'))));
+      el('td', {}, state), el('td', {class: 'num'}, String(s.findings || '')), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
   }
 }
+// Pick up runs started elsewhere (rig run in a terminal) and ones that finished.
+setInterval(() => { if (!document.hidden) loadShifts().catch(() => {}); }, 5000);
+
+let viewing = null, vSince = 0, vTimer = null;
+function openLog(id) {
+  viewing = id; vSince = 0; $('v-log').textContent = '';
+  $('viewer-h').textContent = '실행 로그 · ' + id;
+  $('v-report').href = '/shifts/' + encodeURIComponent(id) + '/report';
+  $('viewer').hidden = false; $('viewer').scrollIntoView({behavior: 'smooth'});
+  pollLog();
+}
+async function pollLog() {
+  clearTimeout(vTimer);
+  const id = viewing;
+  if (!id) return;
+  const s = await api('/shifts/' + encodeURIComponent(id) + '/log?since=' + vSince).catch(() => null);
+  if (!s || id !== viewing) return;
+  if (s.lines.length) { const log = $('v-log'); log.textContent += s.lines.join('\n') + '\n'; log.scrollTop = log.scrollHeight; vSince = s.total; }
+  $('v-pill').className = 'pill ' + (s.running ? 'running' : 'done');
+  $('v-pill').textContent = s.running ? '실행 중' : '끝남';
+  $('v-report').hidden = s.running;
+  if (s.running) vTimer = setTimeout(pollLog, 1000); else loadShifts();
+}
+$('v-close').addEventListener('click', () => { viewing = null; clearTimeout(vTimer); $('viewer').hidden = true; });
 
 let fix = null;
 async function start() {
