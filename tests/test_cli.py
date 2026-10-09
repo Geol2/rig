@@ -1,4 +1,7 @@
 import json
+import os
+import subprocess
+import sys
 
 import pytest
 
@@ -111,11 +114,23 @@ def test_check_missing_file_exits_with_error(tmp_path, monkeypatch):
     assert "rig init" in msg
 
 
-def _shift(tmp_path, shift_id, summary):
+def _shift(tmp_path, shift_id, summary, mds=("a",), running=None):
+    """A shift folder; summary None leaves out shift.json, running is written as running.json."""
     d = tmp_path / ".rig" / "shifts" / shift_id
     d.mkdir(parents=True)
-    (d / "a.md").write_text("out", encoding="utf-8")
-    (d / "shift.json").write_text(json.dumps(summary), encoding="utf-8")
+    for stem in mds:
+        (d / f"{stem}.md").write_text("out" if stem == "a" else f"{stem} out", encoding="utf-8")
+    if summary is not None:
+        (d / "shift.json").write_text(json.dumps(summary), encoding="utf-8")
+    if running is not None:
+        (d / "running.json").write_text(json.dumps(running), encoding="utf-8")
+    return d
+
+
+def _dead_pid() -> int:
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    return p.pid
 
 
 def test_logs_show_cost(tmp_path, monkeypatch, capsys):
@@ -142,6 +157,77 @@ def test_logs_show_cost(tmp_path, monkeypatch, capsys):
 
     main(["logs", "20250101-000000"])
     assert capsys.readouterr().out.startswith("── a ──")
+
+
+def test_logs_status_column(tmp_path, monkeypatch, capsys):
+    _shift(tmp_path, "20250101-000000", None, running={"pid": os.getpid(), "task": "live task\nmore"})
+    _shift(tmp_path, "20250102-000000", {"mode": "lines", "ok": False, "task": "crashed", "error": "RuntimeError: boom"})
+    _shift(tmp_path, "20250103-000000", {"mode": "lines", "ok": False, "task": "both", "error": "interrupted",
+                                         "stopped": "stopped"})
+    _shift(tmp_path, "20250104-000000", {"mode": "lines", "ok": False, "task": "halted", "stopped": "budget"})
+    _shift(tmp_path, "20250105-000000", {"mode": "lines", "ok": True, "task": "fine"})
+    _shift(tmp_path, "20250106-000000", {"mode": "lines", "ok": False, "task": "partial"})
+    _shift(tmp_path, "20250107-000000", None)
+    _shift(tmp_path, "20250108-000000", None, running={"pid": _dead_pid(), "task": "killed"})
+    (tmp_path / ".rig" / "shifts" / "stray.txt").write_text("not a shift", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    main(["logs"])
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0] == f"20250101-000000  {'':<8}  {'running':<10}  {'':>9}  live task"
+    # error wins over stopped; a running.json whose process is gone is just incomplete
+    assert [line[27:37].strip() for line in lines] == [
+        "running", "error", "error", "stopped", "ok", "incomplete", "incomplete", "incomplete"]
+    assert "killed" not in lines[7]  # running.json's task only stands in while the shift runs
+
+
+def test_logs_shows_error_and_stop_first(tmp_path, monkeypatch, capsys):
+    totals = {"input_tokens": 10, "output_tokens": 5, "cache_read_tokens": 0, "cache_write_tokens": 0, "cost_usd": 5.12}
+    _shift(tmp_path, "20250101-000000", {"ok": False, "error": "interrupted", "stopped": "budget", "max_cost_usd": 5,
+                                         "totals": totals})
+    _shift(tmp_path, "20250102-000000", {"ok": False, "stopped": "budget", "max_cost_usd": None, "totals": totals})
+    _shift(tmp_path, "20250103-000000", {"ok": False, "stopped": "stopped", "totals": {**totals, "cost_usd": None}})
+    monkeypatch.chdir(tmp_path)
+
+    main(["logs", "20250101-000000"])
+    assert capsys.readouterr().out.startswith(
+        "✗ shift failed: interrupted\n✗ stopped: cost limit $5.00 reached ($5.12 spent)\n"
+        "tokens: 10 in · 5 out · est. $5.12\n\n── a ──\nout\n")
+    main(["logs", "20250102-000000"])
+    assert capsys.readouterr().out.startswith("✗ stopped: cost limit reached ($5.12 spent)\ntokens: ")
+    main(["logs", "20250103-000000"])
+    assert capsys.readouterr().out.startswith("✗ stopped: stopped by user\ntokens: ")
+
+
+def test_logs_detail_of_running_shift(tmp_path, monkeypatch, capsys):
+    _shift(tmp_path, "20250101-000000", None, running={"pid": os.getpid(), "task": "go"})
+    monkeypatch.chdir(tmp_path)
+    main(["logs", "last"])
+    assert capsys.readouterr().out == f"still running (pid {os.getpid()}). Output so far:\n\n── a ──\nout\n\n"
+
+
+def test_logs_hands_in_run_order(tmp_path, monkeypatch, capsys):
+    hands = {"coder": {}, "coder#2": {}, "coder#10": {}, "gone": {}, "foreman": {}}  # gone has no .md
+    _shift(tmp_path, "20250101-000000", {"ok": True, "hands": hands}, mds=("foreman", "coder-10", "coder", "coder-2"))
+    monkeypatch.chdir(tmp_path)
+    main(["logs", "last"])
+    out = capsys.readouterr().out
+    headings = [line for line in out.splitlines() if line.startswith("── ")]
+    assert headings == ["── coder ──", "── coder#2 ──", "── coder#10 ──", "── foreman ──"]
+    assert "── coder#10 ──\ncoder-10 out\n" in out
+    assert out.endswith("── foreman ──\nforeman out\n\n")
+
+
+def test_logs_leftover_outputs_in_natural_order(tmp_path, monkeypatch, capsys):
+    _shift(tmp_path, "20250101-000000", {"ok": True, "hands": {"b": {}}}, mds=("x-10", "b", "x-2", "a"))
+    _shift(tmp_path, "20250102-000000", None, mds=("coder-10", "coder-2", "coder"))
+    monkeypatch.chdir(tmp_path)
+    main(["logs", "20250101-000000"])
+    headings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("── ")]
+    assert headings == ["── b ──", "── a ──", "── x-2 ──", "── x-10 ──"]
+    main(["logs", "20250102-000000"])
+    headings = [line for line in capsys.readouterr().out.splitlines() if line.startswith("── ")]
+    assert headings == ["── coder ──", "── coder-2 ──", "── coder-10 ──"]
 
 
 def test_check_malformed_yaml_exits_with_error(tmp_path, monkeypatch):

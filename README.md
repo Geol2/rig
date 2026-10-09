@@ -6,7 +6,7 @@ Define a multi-agent harness in YAML, then run it.
 rig init        # write a starter rig.yaml
 rig check       # validate and show the stages
 rig run "task"  # run a shift
-rig logs        # list shifts; `rig logs last` shows the latest outputs
+rig logs        # list shifts and their status; `rig logs last` shows the latest outputs
 rig report      # open the latest shift as a web page
 rig serve       # do all of the above from a local web page
 ```
@@ -35,6 +35,10 @@ Both are stored in `.rig/shifts/<id>/shift.json` and shown by `rig logs`. Prices
 `src/rig/cost.py`; models not listed there show "n/a". A shift that crashes still writes
 `shift.json`, with the exception in an `error` field. `shift.json` also keeps the total
 number of findings (see [Reports](#reports)) as `findings`, which `rig serve`'s history shows.
+
+`rig logs` gives each shift a status: `running`, `error` (crashed or interrupted), `stopped`
+(cost limit or stopped by user), `incomplete` or `ok`. `rig logs <id>` prints the error or
+stop reason first, then the hands' outputs in the order they ran.
 
 Each hand's output is saved as `<hand>.md` in the shift directory, and its full
 conversation (tool calls and results) as `<hand>.transcript.json` next to it, also for
@@ -364,7 +368,7 @@ merge:   git merge rig/20261008-163910    discard: git branch -D rig/20261008-16
 
 Uncommitted changes in your working tree are not carried into the worktree (rig warns).
 Unless `publish` says otherwise (below), rig never merges or pushes; that's left to you.
-`rig logs` lists each shift's branch, so you can find it again later.
+`rig logs` lists each shift's branch and status, so you can find it again later.
 
 ### Pull requests and auto-merge
 

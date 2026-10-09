@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import threading
 from dataclasses import dataclass, field
@@ -25,7 +24,7 @@ from pydantic import ValidationError
 from rig import report
 from rig.cost import Meter, usd
 from rig.graph import layers
-from rig.runner import PROGRESS_LOG, RUNNING, ShiftEvent
+from rig.runner import PROGRESS_LOG, ShiftEvent, live
 from rig.spec import InputError, RigFileError, load, parse_yaml, read_rig_text
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
@@ -233,16 +232,16 @@ class App:
             if not d.is_dir():
                 continue
             s = json.loads((d / "shift.json").read_text(encoding="utf-8")) if (d / "shift.json").exists() else {}
-            live = _live(d)  # started here or by `rig run` in a terminal
-            task = (s.get("task") or (live or {}).get("task") or "").strip().splitlines()
+            info = live(d)  # started here or by `rig run` in a terminal
+            task = (s.get("task") or (info or {}).get("task") or "").strip().splitlines()
             findings = s.get("findings")
             if not isinstance(findings, int):  # older shift.json: count from the outputs
                 findings = sum(len(h["findings"] or []) for h in report.collect(d)["hands"]) if s else 0
             out.append({
-                "id": d.name, "rig": s.get("rig") or (live or {}).get("rig", ""), "ok": s.get("ok"),
+                "id": d.name, "rig": s.get("rig") or (info or {}).get("rig", ""), "ok": s.get("ok"),
                 "task": task[0] if task else "",
                 "cost": usd(s["totals"].get("cost_usd")) if "totals" in s else "", "findings": findings,
-                "running": bool(live) or bool(self.run and self.run.status == "running" and self.run.shift_id == d.name),
+                "running": bool(info) or bool(self.run and self.run.status == "running" and self.run.shift_id == d.name),
                 "log": (d / PROGRESS_LOG).exists(),
             })
         return out
@@ -261,7 +260,7 @@ class App:
         lines = text.splitlines()
         if text and not text.endswith("\n"):
             lines.pop()  # half-written; it comes with the next poll
-        running = bool(_live(d))
+        running = bool(live(d))
         ok = None
         if not running and (d / "shift.json").exists():
             ok = json.loads((d / "shift.json").read_text(encoding="utf-8")).get("ok")
@@ -296,38 +295,6 @@ class App:
             path.unlink()
             raise
         return path.name
-
-
-def _live(shift_dir: Path) -> dict[str, Any] | None:
-    """The shift's running.json while the process that runs it is alive, else None."""
-    try:
-        info = json.loads((shift_dir / RUNNING).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    pid = info.get("pid") if isinstance(info, dict) else None
-    # A process killed outright leaves running.json behind; don't show that shift as running forever.
-    return info if isinstance(pid, int) and _alive(pid) else None
-
-
-def _alive(pid: int) -> bool:
-    if os.name == "nt":
-        import ctypes
-
-        kernel32 = ctypes.windll.kernel32
-        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
-        if not handle:
-            return False
-        code = ctypes.c_ulong()
-        ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-        kernel32.CloseHandle(handle)
-        return bool(ok) and code.value == 259  # STILL_ACTIVE
-    try:
-        os.kill(pid, 0)  # signal 0: only checks that the process exists
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # exists, owned by someone else
-    return True
 
 
 def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
