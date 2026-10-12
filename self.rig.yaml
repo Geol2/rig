@@ -19,7 +19,7 @@ defaults:
 
 run:
   allow: ["uv run pytest", "git diff", "git status", "git log"]
-  timeout: 300
+  timeout: 900  # the full suite takes ~8 min on Windows
 
 foreman:
   role: |
