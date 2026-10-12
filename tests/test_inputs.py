@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 
 import pytest
 from pydantic import ValidationError
@@ -72,6 +73,48 @@ def test_roles_get_input_values():
 def test_undeclared_input_in_role_rejected():
     with pytest.raises(ValidationError, match=r"writer's role uses undeclared inputs \['tone'\]"):
         make(hands={"analyst": {"role": "A"}, "writer": {"role": "Use a {{ inputs.tone }} tone."}})
+
+
+@pytest.mark.parametrize("name", ["due-date", "due date", 'a"b'])
+def test_input_names_must_be_plain(name):
+    with pytest.raises(ValidationError, match=re.escape(f"input names must be plain names (letters, digits, _): {[name]}")):
+        make(inputs={name: {}}, hands={"writer": {"role": "W"}}, lines=[])
+
+
+def test_input_name_error_suggests_fix():
+    with pytest.raises(ValidationError, match=re.escape(
+        "input names must be plain names (letters, digits, _): ['due-date']; use _ instead of - or spaces, e.g. 'due_date'"
+    )):
+        make(inputs={"due-date": {}}, hands={"writer": {"role": "W"}}, lines=[])
+
+
+def test_korean_input_name_accepted():
+    rig = make(inputs={"마감일": {}}, hands={"writer": {"role": "Due {{ inputs.마감일 }}."}}, lines=[])
+    assert rig.resolve("writer", rig.resolve_inputs({"마감일": "금요일"})).role == "Due 금요일."
+
+
+@pytest.mark.parametrize("ref", ["{{ inputs.due-date }}", "{{ input.x }}"])
+def test_malformed_input_ref_rejected(ref):
+    with pytest.raises(ValidationError, match=re.escape(
+        f"writer's role has malformed input references {[ref]}; write them as {{{{ inputs.name }}}} with a declared input name"
+    )):
+        make(hands={"analyst": {"role": "A"}, "writer": {"role": f"Due {ref}."}})
+
+
+def test_malformed_input_refs_listed_in_order_once():
+    role = "{{ inputs.b-1 }} {{ input.a }} {{ inputs.weeks }} {{ inputs.b-1 }}"
+    with pytest.raises(ValidationError, match=re.escape("['{{ inputs.b-1 }}', '{{ input.a }}'];")):
+        make(hands={"analyst": {"role": "A"}, "writer": {"role": role}})
+
+
+def test_foreman_malformed_input_ref_rejected():
+    with pytest.raises(ValidationError, match=re.escape("foreman's role has malformed input references ['{{inputs.x.y}}']")):
+        Rig.model_validate({"name": "t", "foreman": {"role": "Lead {{inputs.x.y}}."}, "hands": {"a": {"role": "A"}}})
+
+
+def test_input_like_text_not_flagged():
+    rig = make(hands={"analyst": {"role": "Keep {{ my_inputs }} and {{ other }}."}, "writer": {"role": "{{inputs.weeks}}"}})
+    assert rig.resolve("writer", rig.resolve_inputs({"dataset": "x"})).role == "4"
 
 
 def test_prompt_has_inputs_block():
@@ -193,6 +236,22 @@ def test_cli_check_lists_inputs(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     main(["check"])
     assert "inputs: dataset (required), weeks (default 4)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "inputs, role, message",
+    [
+        ("{due-date: {}}", "Due {{ inputs.due_date }}.", "input names must be plain names (letters, digits, _): ['due-date']"),
+        ("{dataset: {}}", "Due {{ inputs.due-date }}.", "analyst's role has malformed input references ['{{ inputs.due-date }}']"),
+        ("{dataset: {}}", "Use {{ input.dataset }}.", "analyst's role has malformed input references ['{{ input.dataset }}']"),
+    ],
+)
+def test_cli_check_rejects_bad_input_names_and_refs(tmp_path, inputs, role, message):
+    path = tmp_path / "rig.yaml"
+    path.write_text(f'name: t\ninputs: {inputs}\nhands:\n  analyst: {{role: "{role}"}}\n', encoding="utf-8")
+    with pytest.raises(SystemExit) as excinfo:
+        main(["-f", str(path), "check"])
+    assert message in str(excinfo.value.code)
 
 
 def test_cli_run_with_inputs(tmp_path, monkeypatch, capsys):
