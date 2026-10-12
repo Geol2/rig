@@ -92,7 +92,8 @@ class App:
                 continue
             dirs = rig.workspace_dirs(p.parent)
             folders = [
-                {"name": "" if n == "." else n, "path": rig.workspace if n == "." else rig.workspaces[n], "ok": d.is_dir()}
+                {"name": "" if n == "." else n, "path": rig.workspace if n == "." else rig.workspaces[n],
+                 "dir": d.as_posix(), "ok": d.is_dir()}
                 for n, d in dirs.items()
             ]
             stages = [rig.crew] if rig.foreman else layers(list(rig.hands), rig.edges)
@@ -244,6 +245,7 @@ class App:
                 "running": bool(info) or bool(self.run and self.run.status == "running" and self.run.shift_id == d.name),
                 "log": (d / PROGRESS_LOG).exists(),
                 "prs": _prs(s),
+                "workspaces": _workspaces(s) or _workspaces(info or {}),
             })
         return out
 
@@ -277,11 +279,20 @@ class App:
         data = report.collect(self._shift_dir(shift_id))
         if not 0 <= n < len(data["findings"]):
             raise ValueError(f"no finding {n} in shift {shift_id}")
-        review = next((r for r in self.rigs() if r.get("name") == data["summary"].get("rig")), None)
-        return {
-            "task": report.fix_task(data["findings"][n]),
-            "workspaces": [{"name": w["name"], "path": w["path"]} for w in review["workspaces"]] if review else None,
-        }
+        task = report.fix_task(data["findings"][n])
+        recorded = _workspaces(data["summary"])
+        if recorded:
+            return {"task": task, "workspaces": [{"name": w["name"], "path": w["dir"], "dir": w["dir"]} for w in recorded],
+                    "ambiguous": False}
+        # Older shift.json without `workspaces`: guess from the rig files with that name.
+        matches = [r for r in self.rigs() if "error" not in r and r.get("name") == data["summary"].get("rig")]
+        if not matches:
+            return {"task": task, "workspaces": None, "ambiguous": False}
+        folders = [{(w["name"], w["dir"]) for w in r["workspaces"]} for r in matches]
+        if any(f != folders[0] for f in folders[1:]):
+            return {"task": task, "workspaces": None, "ambiguous": True}
+        return {"task": task, "workspaces": [{"name": w["name"], "path": w["path"], "dir": w["dir"]}
+                                             for w in matches[0]["workspaces"]], "ambiguous": False}
 
     def init_fix(self, workspaces: list[dict[str, str]]) -> str:
         """Write fix.rig.yaml from the fix template, pointed at `workspaces`."""
@@ -295,6 +306,15 @@ class App:
             path.unlink()
             raise
         return path.name
+
+
+def _workspaces(summary: dict[str, Any]) -> list[dict[str, str]]:
+    """The project folders a shift worked on (shift.json / running.json `workspaces`); [] for older shifts."""
+    recorded = summary.get("workspaces")
+    if not isinstance(recorded, list):
+        return []
+    return [{"name": w.get("name") if isinstance(w.get("name"), str) else "", "dir": w["dir"]}
+            for w in recorded if isinstance(w, dict) and isinstance(w.get("dir"), str)]
 
 
 def _prs(summary: dict[str, Any]) -> list[dict[str, Any]]:
@@ -512,7 +532,7 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
     </section>
   </div>
   <section class="panel" aria-labelledby="hist-h">
-    <h2 id="hist-h">지난 실행</h2>
+    <div class="row"><h2 id="hist-h">지난 실행</h2><label class="small"><input type="checkbox" id="hist-mine"> 선택한 설정의 프로젝트만 보기</label></div>
     <div class="table-wrap"><table>
       <thead><tr><th>실행</th><th>설정</th><th>요구사항</th><th>상태</th><th>PR</th><th class="num">발견</th><th class="num">비용</th><th></th></tr></thead>
       <tbody id="shifts"></tbody>
@@ -532,6 +552,7 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
 const $ = id => document.getElementById(id);
 let rigs = [], selected = null, since = 0, polling = null;
 try { selected = localStorage.getItem('rig.selected'); } catch (e) {}
+try { $('hist-mine').checked = localStorage.getItem('rig.histMine') === '1'; } catch (e) {}
 
 async function api(path, body) {
   const opts = body ? {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Rig': '1'}, body: JSON.stringify(body)} : {};
@@ -550,7 +571,7 @@ function el(tag, attrs = {}, ...kids) {
 async function loadRigs() {
   rigs = await api('/api/rigs');
   const box = $('rigs'); box.textContent = '';
-  if (!rigs.length) { box.append(el('p', {class: 'muted small'}, '이 폴더에 rig 설정 파일(*.yaml)이 없습니다. 터미널에서 rig init --template review 로 만들 수 있습니다.')); return; }
+  if (!rigs.length) { box.append(el('p', {class: 'muted small'}, '이 폴더에 rig 설정 파일(*.yaml)이 없습니다. 터미널에서 rig init --template review 로 만들 수 있습니다.')); renderShifts(); return; }
   if (fix && fix.pick) {
     // Coming from a report's fix button: prefer fix.rig.yaml, else any rig that can edit code.
     const writer = rigs.find(r => r.file === 'fix.rig.yaml' && !r.error) || rigs.find(r => r.writes && !r.error);
@@ -573,10 +594,11 @@ async function loadRigs() {
     box.append(b);
   }
   renderSelected();
+  renderShifts();  // the history filter follows the selected rig
 }
 function select(file) { selected = file; try { localStorage.setItem('rig.selected', file); } catch (e) {} loadRigs(); }
 function sameFolders(a, b) {
-  const key = ws => JSON.stringify(ws.map(w => [w.name || '', w.path]).sort());
+  const key = ws => JSON.stringify(ws.map(w => [w.name || '', w.dir || w.path]).sort());
   return key(a) === key(b);
 }
 function renderFix(r) {
@@ -586,7 +608,8 @@ function renderFix(r) {
   const writer = r && !r.error && r.writes;
   const button = (label, onclick) => actions.append(el('button', {type: 'button', class: 'secondary', onclick}, label));
   if (!rigs.some(x => x.writes && !x.error)) {
-    $('fix-msg').textContent = '리뷰에서 수정 요청을 가져왔습니다. 코드를 고칠 수 있는 설정이 아직 없어서 먼저 만들어야 합니다.';
+    $('fix-msg').textContent = '리뷰에서 수정 요청을 가져왔습니다. 코드를 고칠 수 있는 설정이 아직 없어서 먼저 만들어야 합니다.'
+      + (fix.ambiguous ? ' 리뷰한 프로젝트 폴더를 알 수 없어서 자동으로 만들 수는 없습니다.' : '');
     if (fix.workspaces) button('수정용 설정 만들기 (리뷰와 같은 폴더)', async () => {
       try { await api('/api/init-fix', {workspaces: fix.workspaces}); fix.pick = true; await loadRigs(); }
       catch (e) { $('fix-msg').textContent = e.message; }
@@ -595,6 +618,11 @@ function renderFix(r) {
   }
   if (!writer) {
     $('fix-msg').textContent = '선택한 설정은 읽기 전용이라 코드를 고칠 수 없습니다. 왼쪽에서 "코드 수정" 설정을 고르세요.';
+    return;
+  }
+  if (fix.ambiguous) {
+    $('fix-msg').textContent = '리뷰에서 수정 요청을 가져왔지만, 리뷰한 프로젝트 폴더를 알 수 없습니다 (같은 이름의 설정 파일이 여러 개이고 폴더가 서로 다릅니다). 왼쪽에서 선택한 설정의 프로젝트 폴더가 리뷰한 프로젝트와 같은지 확인한 뒤 실행하세요.';
+    button('닫기', () => { fix = null; renderFix(r); });
     return;
   }
   if (fix.workspaces && !sameFolders(fix.workspaces, r.workspaces)) {
@@ -686,21 +714,46 @@ async function poll() {
 }
 let ownShift = null, ownRunning = false;
 
+let shiftRows = null;  // the last /api/shifts result; the filter re-renders from it
 async function loadShifts() {
-  const rows = await api('/api/shifts');
+  shiftRows = await api('/api/shifts');
+  renderShifts();
+  follow(shiftRows);
+}
+// A folder's last path segment, for a project without a name.
+const baseName = dir => dir.split(/[\\/]/).filter(Boolean).pop() || dir;
+const dirSet = ws => JSON.stringify([...new Set(ws.map(w => w.dir))].sort());
+function renderShifts() {
+  if (!shiftRows) return;
+  const r = rigs.find(x => x.file === selected);
+  const box = $('hist-mine');
+  box.disabled = !r || !!r.error;
+  const mine = box.checked && !box.disabled;
   const body = $('shifts'); body.textContent = '';
-  if (!rows.length) { body.append(el('tr', {}, el('td', {colspan: '8', class: 'muted small'}, '아직 실행 기록이 없습니다.'))); return; }
+  const empty = text => body.append(el('tr', {}, el('td', {colspan: '8', class: 'muted small'}, text)));
+  if (!shiftRows.length) { empty('아직 실행 기록이 없습니다.'); return; }
+  // Shown with the filter on: runs on exactly the selected rig's folders (names ignored).
+  const rows = mine ? shiftRows.filter(s => s.workspaces.length && dirSet(s.workspaces) === dirSet(r.workspaces)) : shiftRows;
+  if (!rows.length) { empty('선택한 설정(' + r.name + ')의 프로젝트로 실행한 기록이 없습니다. 체크를 끄면 모든 실행을 볼 수 있습니다.'); return; }
   for (const s of rows) {
     const state = s.running ? '실행 중' : s.ok === true ? '완료' : s.ok === false ? '미완료' : '-';
     const links = el('span', {class: 'row'});
     if (s.log) links.append(el('a', {href: '#viewer', onclick: e => { e.preventDefault(); openLog(s.id); }}, '로그'));
     if (!s.running) links.append(el('a', {href: '/shifts/' + encodeURIComponent(s.id) + '/report', target: '_blank'}, '리포트'));
+    const setting = el('td', {}, s.rig);
+    if (s.workspaces.length) {
+      setting.append(el('div', {class: 'small muted', title: s.workspaces.map(w => w.dir).join('\n')},
+        s.workspaces.map(w => w.name || baseName(w.dir)).join(' · ')));
+    }
     body.append(el('tr', {},
-      el('td', {class: 'id'}, s.id), el('td', {}, s.rig), el('td', {}, s.task),
+      el('td', {class: 'id'}, s.id), setting, el('td', {}, s.task),
       el('td', {}, state), el('td', {}, prLinks(s.prs)), el('td', {class: 'num'}, String(s.findings || '')), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
   }
-  follow(rows);
 }
+$('hist-mine').addEventListener('change', () => {
+  try { localStorage.setItem('rig.histMine', $('hist-mine').checked ? '1' : '0'); } catch (e) {}
+  renderShifts();
+});
 // "#56 병합됨" links to each of a shift's PRs.
 const PR_STATE = {merged: '병합됨', closed: '닫힘', open: '열림'};
 function prLinks(prs) {
@@ -784,7 +837,7 @@ async function start() {
   if (params.has('fix')) {
     try {
       const f = await api('/api/finding?shift=' + encodeURIComponent(params.get('fix')) + '&n=' + encodeURIComponent(params.get('n')));
-      fix = {workspaces: f.workspaces, pick: true};
+      fix = {workspaces: f.workspaces, ambiguous: !!f.ambiguous, pick: true};
       $('task').value = f.task;
       $('worktree').checked = true;
     } catch (e) { $('run-error').textContent = e.message; }

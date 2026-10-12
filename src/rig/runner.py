@@ -62,6 +62,9 @@ class Shift:
     error: str | None = None
     # Id of the stopped shift this one continues (`rig run --resume`).
     resumed_from: str | None = None
+    # The rig's project folders, [{"name": "" for a single workspace, "dir": resolved path}]: the
+    # original folders, not the worktree copies, so `rig serve` knows which project a shift worked on.
+    workspaces: list[dict[str, str]] = field(default_factory=list)
 
     @property
     def final(self) -> HandResult | None:
@@ -143,7 +146,7 @@ RUNNING = "running.json"
 class _Progress:
     """Copies progress lines to the shift folder, so `rig serve` can show a shift started from the CLI.
 
-    `running.json` (pid, rig, task) is there while the shift runs and removed when it ends.
+    `running.json` (pid, rig, task, workspaces) is there while the shift runs and removed when it ends.
     """
 
     def __init__(self, shift: Shift, rig: str, task: str, show: Event):
@@ -152,7 +155,8 @@ class _Progress:
         # errors="replace" here and for the .md / shift.json writes: a lone surrogate in the task
         # (from argv) or a hand's output becomes "?" instead of crashing the shift.
         self.running.write_text(json.dumps({"pid": os.getpid(), "rig": rig, "task": task,
-                                            "started": datetime.now().isoformat(timespec="seconds")},
+                                            "started": datetime.now().isoformat(timespec="seconds"),
+                                            "workspaces": shift.workspaces},
                                            ensure_ascii=False), encoding="utf-8", errors="replace")
         self.log = (shift.dir / PROGRESS_LOG).open("a", encoding="utf-8", errors="replace")
 
@@ -386,6 +390,7 @@ async def run_shift(
     workspace: Path | dict[str, Path] = dirs if rig.workspaces else dirs["."]
     values = rig.resolve_inputs(inputs or {})  # raises InputError before anything is created
     shift = new_shift(root)
+    shift.workspaces = _workspace_record(dirs)  # before worktrees replace `workspace`
     if on_status:
         on_status(ShiftEvent("started", shift.id, shift.dir))  # before any progress line
     progress = _Progress(shift, rig.name, task, on_event)
@@ -487,9 +492,15 @@ async def run_shift(
         progress.close()
 
 
+def _workspace_record(dirs: dict[str, Path]) -> list[dict[str, str]]:
+    """`rig.workspace_dirs(...)` as recorded in shift.json / running.json: "" names a single workspace."""
+    return [{"name": "" if n == "." else n, "dir": d.as_posix()} for n, d in dirs.items()]
+
+
 def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Meter) -> dict[str, Any]:
     summary = {
         "rig": rig.name,
+        "workspaces": shift.workspaces,
         "mode": mode,
         "task": task,
         "inputs": shift.inputs,

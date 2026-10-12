@@ -35,6 +35,9 @@ Both are stored in `.rig/shifts/<id>/shift.json` and shown by `rig logs`. Prices
 `src/rig/cost.py`; models not listed there show "n/a". A shift that crashes still writes
 `shift.json`, with the exception in an `error` field. `shift.json` also keeps the total
 number of findings (see [Reports](#reports)) as `findings`, which `rig serve`'s history shows.
+`shift.json` also records the project folders the shift worked on as `workspaces` (each
+with its name and absolute folder; the original folders, not worktree copies), which
+`rig serve` uses for a review finding's fix button and to show and filter the history by project.
 
 `rig logs` gives each shift a status: `running`, `unreadable` (its `shift.json` is damaged),
 `error` (crashed or interrupted), `stopped` (cost limit or stopped by user), `incomplete` or

@@ -242,6 +242,41 @@ def test_shift_started_from_the_terminal_shows_as_running(server):
     assert not call(base + "/api/shifts")[1][0]["running"]
 
 
+def test_history_project_folders(server):
+    import os
+
+    app, base = server
+    live_dir = app.shifts_dir / "20261009-130000"
+    live_dir.mkdir(parents=True)
+    folders = [{"name": "", "dir": "D:/work/proj"}]
+    (live_dir / "running.json").write_text(json.dumps({"pid": os.getpid(), "rig": "review", "task": "t",
+                                                       "workspaces": folders + [{"name": "x"}, "junk"]}), encoding="utf-8")
+    old = app.shifts_dir / "20261009-120000"
+    old.mkdir()
+    (old / "shift.json").write_text(json.dumps({"rig": "review", "ok": True, "findings": 0}), encoding="utf-8")
+    rows = call(base + "/api/shifts")[1]
+    assert [r["workspaces"] for r in rows] == [folders, []]  # malformed entries dropped; older shift.json: none
+    assert 'id="hist-mine"' in call(base + "/")[1]
+
+
+def test_history_folders_prefer_shift_json(tmp_path):
+    import os
+
+    app = App(tmp_path)
+    done = [{"name": "backend", "dir": "D:/work/api"}, {"name": "frontend", "dir": "D:/work/web"}]
+    finished = app.shifts_dir / "20261009-120000"
+    finished.mkdir(parents=True)
+    (finished / "shift.json").write_text(json.dumps({"rig": "review", "ok": True, "workspaces": done}), encoding="utf-8")
+    both = app.shifts_dir / "20261009-130000"
+    both.mkdir()
+    (both / "shift.json").write_text(json.dumps({"rig": "review", "workspaces": done}), encoding="utf-8")
+    (both / "running.json").write_text(json.dumps({"pid": os.getpid(), "rig": "review", "task": "t",
+                                                   "workspaces": [{"name": "", "dir": "D:/other"}]}), encoding="utf-8")
+    rows = {r["id"]: r for r in app.shifts()}
+    assert rows[finished.name]["workspaces"] == done
+    assert rows[both.name]["running"] and rows[both.name]["workspaces"] == done
+
+
 def test_history_reads_findings_count_from_shift_json(server):
     app, base = server
     d = app.shifts_dir / "20261009-120000"

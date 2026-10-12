@@ -91,6 +91,21 @@ def test_worktree_outside_git_still_sends_finished(tmp_path):
     assert status[-1].data["error"].startswith("GitError: ") and "git repository" in status[-1].data["error"]
 
 
+def test_running_json_records_the_project_folders(tmp_path):
+    import json
+
+    seen = []
+
+    class Peek:
+        async def run(self, hand, prompt, toolbox, check=None):
+            (running,) = (tmp_path / ".rig" / "shifts").glob("*/running.json")
+            seen.append(json.loads(running.read_text(encoding="utf-8")))
+            return HandResult(name=hand.name, output="ok", stop_reason="end_turn", turns=1)
+
+    asyncio.run(run_shift(_rig(), "t", Peek(), root=tmp_path, on_event=lambda _: None))
+    assert seen[0]["workspaces"] == [{"name": "", "dir": tmp_path.resolve().as_posix()}]
+
+
 def test_quiet_hides_tool_lines(tmp_path):
     events = []
     asyncio.run(run_shift(_rig(), "t", ToolUsingWorker(), root=tmp_path, on_event=events.append, verbose=False))

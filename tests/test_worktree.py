@@ -56,7 +56,10 @@ def test_changes_land_on_branch_not_main(repo, tmp_path):
     assert "app/new.py" in shift.outcome.stat
     assert not shift.worktree.path.exists()
     assert git("log", "-1", "--format=%s", branch, cwd=repo).strip() == "rig: update main"
-    assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["branch"] == branch
+    summary = json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))
+    assert summary["branch"] == branch
+    # The project folder the shift worked on, not its worktree copy.
+    assert summary["workspaces"] == [{"name": "", "dir": repo.resolve().as_posix()}]
 
 
 def test_workspace_subdir_maps_into_worktree(repo, tmp_path):
