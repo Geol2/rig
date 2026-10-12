@@ -8,7 +8,17 @@
 #   같은 task의 최근 shift가 중단됐으면 이어 받음(최대 두 번; scripts/resume-target.py)
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+# Windows can't replace a file that a running script holds open, and sync-main.sh may update
+# this very script; so it runs from a copy under .rig/run/ (harmless on macOS/Linux).
+root="$(cd "$(dirname "$0")/.." && pwd)"
+me="$(basename "$0")"
+if [[ "${RIG_COPY_OF:-}" != "$me" ]]; then
+  copy="$root/.rig/run/${me%.sh}"
+  mkdir -p "$copy" && cp "$root"/scripts/*.sh "$copy/"
+  RIG_COPY_OF="$me" RIG_ROOT="$root" exec bash "$copy/$me" "$@"
+fi
+here="$(cd "$(dirname "$0")" && pwd)"  # the copy's folder: helper scripts that git may replace run from here
+cd "$RIG_ROOT"
 port="${PORT:-8000}"
 log=".rig/serve.log"
 
@@ -22,12 +32,14 @@ fi
 # 1. Update this checkout, so the rig code that runs is the newest (clears leftover merges and
 #    works around conflicts; see sync-main.sh). Shifts start from the newest of local and
 #    remote main anyway (publish.sync); this is for rig itself.
-scripts/sync-main.sh
+"$here/sync-main.sh"
 # The task: what was passed, or else the next TODO.md item by name (read after the update).
 if [[ $# -gt 0 ]]; then task="$*"; else task="$(scripts/next-task.sh)"; fi
 # Dependencies from the lockfile, wheels only (no build scripts run); rig itself runs from src/.
 # Relative on purpose: hands' commands inherit it, and in a worktree it means that worktree's src/.
-uv sync -q --locked --no-build --no-install-project
+# --inexact: leave an installed rig (Scripts/rig.exe) alone; on Windows it's locked while any
+# `uv run rig ...` is running, and removing it would fail.
+uv sync -q --locked --no-build --no-install-project --inexact
 export PYTHONPATH=src
 
 # 2. Start rig serve in the background unless something already answers on the port.
