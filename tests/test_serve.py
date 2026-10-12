@@ -4,8 +4,10 @@ import json
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
@@ -342,3 +344,28 @@ def test_shift_prs_in_history_and_log(server):
             {"number": 57, "url": "https://github.com/o/r/pull/57", "state": "open"}]
     assert call(base + "/api/shifts")[1][0]["prs"] == want
     assert call(f"{base}/shifts/{d.name}/log")[1]["prs"] == want
+
+
+def test_folder_picker_lists_subfolders(server, tmp_path):
+    _, base = server
+    (tmp_path / "proj" / "src").mkdir()
+    (tmp_path / "proj" / ".git").mkdir()
+    (tmp_path / "proj" / "Beta").mkdir()
+    (tmp_path / "proj" / "notes.txt").write_text("x", encoding="utf-8")
+    status, d = call(base + "/api/dirs?path=" + urllib.parse.quote(str(tmp_path / "proj")))
+    assert status == 200
+    assert d["path"] == (tmp_path / "proj").resolve().as_posix()
+    assert d["dirs"] == ["Beta", "src"]  # folders only, hidden ones left out, case-insensitive order
+    assert d["parent"] == tmp_path.resolve().as_posix() and d["roots"] and not d["more"]
+    # A relative path is taken from the rig folder; no path starts at the home folder.
+    assert call(base + "/api/dirs?path=proj")[1]["path"] == d["path"]
+    assert call(base + "/api/dirs")[1]["path"] == Path.home().resolve().as_posix()
+
+
+def test_folder_picker_errors(server, tmp_path):
+    _, base = server
+    (tmp_path / "file.txt").write_text("x", encoding="utf-8")
+    status, d = call(base + "/api/dirs?path=" + urllib.parse.quote(str(tmp_path / "file.txt")))
+    assert status == 404 and "not a folder" in d["error"]
+    status, d = call(base + "/api/dirs?path=" + urllib.parse.quote(str(tmp_path / "missing")))
+    assert status == 404 and "not a folder" in d["error"]

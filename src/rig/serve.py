@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import threading
 from dataclasses import dataclass, field
@@ -249,6 +250,31 @@ class App:
             })
         return out
 
+    # --- folder picker -----------------------------------------------------------------------
+
+    def dirs(self, path: str) -> dict[str, Any]:
+        """Subfolders of `path` (default: the home folder) for the page's folder picker.
+
+        Only names are listed, and only to this machine's own browser (the server answers
+        localhost only). Hidden folders (starting with ".") are left out.
+        """
+        start = Path(path).expanduser() if path.strip() else Path.home()
+        if not start.is_absolute():
+            start = self.root / start
+        try:
+            here = start.resolve()
+            if not here.is_dir():
+                raise ValueError(f"not a folder: {path}")
+            names = sorted((c.name for c in here.iterdir() if not c.name.startswith(".") and _is_dir(c)),
+                           key=str.lower)
+        except PermissionError as e:
+            raise ValueError(f"can't open {path}: permission denied") from e
+        except OSError as e:
+            raise ValueError(f"can't open {path}: {e.strerror or e}") from e
+        parent = here.parent if here.parent != here else None
+        return {"path": here.as_posix(), "parent": parent.as_posix() if parent else None,
+                "dirs": names[:DIR_LIMIT], "more": len(names) > DIR_LIMIT, "roots": _roots()}
+
     def _shift_dir(self, shift_id: str) -> Path:
         d = (self.shifts_dir / shift_id).resolve()
         if d.parent != self.shifts_dir.resolve() or not d.is_dir():
@@ -317,6 +343,25 @@ def _workspaces(summary: dict[str, Any]) -> list[dict[str, str]]:
             for w in recorded if isinstance(w, dict) and isinstance(w.get("dir"), str)]
 
 
+DIR_LIMIT = 500
+
+
+def _is_dir(p: Path) -> bool:
+    try:
+        return p.is_dir()
+    except OSError:
+        return False
+
+
+def _roots() -> list[str]:
+    """Drive letters on Windows ("C:/", "D:/", ...); "/" elsewhere."""
+    if os.name != "nt":
+        return ["/"]
+    import string
+
+    return [f"{c}:/" for c in string.ascii_uppercase if os.path.isdir(f"{c}:/")]
+
+
 def _prs(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """The shift's pull requests from shift.json: number, url and merged / closed / open."""
     out = []
@@ -359,6 +404,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             try:
                 if url.path == "/":
                     return self._send(200, PAGE, "text/html; charset=utf-8")
+                if url.path == "/api/dirs":
+                    return self._json(200, app.dirs(parse_qs(url.query).get("path", [""])[0]))
                 if url.path == "/api/rigs":
                     return self._json(200, app.rigs())
                 if url.path == "/api/run":
@@ -455,7 +502,17 @@ code{font-family:var(--mono);font-size:.9em;background:var(--code);padding:1px 4
 .tag{display:inline-block;font-size:11px;padding:0 7px;border-radius:999px;border:1px solid currentColor;margin-left:6px;vertical-align:1px}
 .tag.read{color:var(--ok)}.tag.write{color:var(--warn)}
 .ws-rows{display:grid;gap:6px}
-.ws-row{display:grid;grid-template-columns:110px minmax(0,1fr) 22px 30px;gap:6px;align-items:center}
+.ws-row{display:grid;grid-template-columns:110px minmax(0,1fr) auto 22px 30px;gap:6px;align-items:center}
+.pick-btn{font:inherit;font-size:13px;border:1px solid var(--accent);background:transparent;color:var(--accent);border-radius:6px;height:32px;padding:0 10px;cursor:pointer;white-space:nowrap}
+dialog#picker{border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--fg);padding:18px 20px;width:min(560px,calc(100vw - 32px))}
+dialog#picker::backdrop{background:rgba(0,0,0,.35)}
+#pick-path{font-family:var(--mono);font-size:13px;word-break:break-all;background:var(--code);border-radius:6px;padding:6px 8px;margin:0}
+#pick-list{list-style:none;margin:0;padding:0;max-height:320px;overflow:auto;border:1px solid var(--line);border-radius:6px}
+#pick-list button{all:unset;box-sizing:border-box;display:block;width:100%;padding:7px 10px;cursor:pointer;font-size:14px}
+#pick-list button:hover,#pick-list button:focus-visible{background:var(--soft)}
+#pick-list li+li{border-top:1px solid var(--line)}
+.picker-body{display:grid;gap:10px}
+#pick-error:empty{display:none}
 .ws-row .mark{text-align:center}
 .icon-btn{font:inherit;border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:6px;height:32px;cursor:pointer}
 #ws-box{display:grid;gap:8px}#ws-box[hidden]{display:none}
@@ -503,7 +560,7 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
           <button class="secondary" id="ws-add" type="button">+ 프로젝트 추가</button>
           <button class="primary" id="ws-save" type="button">저장</button>
         </div>
-        <p class="small muted" id="ws-hint">프로젝트가 2개 이상이면 각각 이름을 붙이세요. hand들은 <code>이름/경로</code>로 파일을 봅니다 (예: <code>backend/src/...</code>).</p>
+        <p class="small muted" id="ws-hint"><b>폴더 선택</b>으로 경로를 고른 뒤 저장하세요. 프로젝트가 2개 이상이면 각각 이름을 붙이세요. hand들은 <code>이름/경로</code>로 파일을 봅니다 (예: <code>backend/src/...</code>).</p>
         <p class="small" id="ws-status"></p>
       </div>
     </section>
@@ -548,6 +605,19 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
     <pre class="log" id="v-log" aria-live="polite"></pre>
   </section>
 </main>
+<dialog id="picker" aria-labelledby="pick-h">
+  <div class="picker-body">
+    <h2 id="pick-h">프로젝트 폴더 선택</h2>
+    <p id="pick-path"></p>
+    <div class="row" id="pick-nav"></div>
+    <ul id="pick-list" aria-label="하위 폴더"></ul>
+    <p class="error" id="pick-error"></p>
+    <div class="row">
+      <button class="primary" id="pick-ok" type="button">이 폴더 선택</button>
+      <button class="secondary" id="pick-cancel" type="button">취소</button>
+    </div>
+  </div>
+</dialog>
 <script>
 const $ = id => document.getElementById(id);
 let rigs = [], selected = null, since = 0, polling = null;
@@ -660,12 +730,41 @@ function addRow(w = {name: '', path: '', ok: null}) {
   const row = el('div', {class: 'ws-row'},
     el('input', {type: 'text', class: 'ws-name', id: 'ws-name-' + n, 'aria-label': '프로젝트 이름', placeholder: '이름 (예: backend)', spellcheck: 'false'}),
     el('input', {type: 'text', class: 'ws-path', id: 'ws-path-' + n, 'aria-label': '폴더 경로', placeholder: 'D:/05_project/...', spellcheck: 'false'}),
+    el('button', {type: 'button', class: 'pick-btn', onclick: () => pickFolder(row.querySelector('.ws-path'))}, '폴더 선택'),
     el('span', {class: 'mark ' + (w.ok ? 'status-ok' : 'status-bad')}, mark),
     el('button', {type: 'button', class: 'icon-btn', 'aria-label': '이 프로젝트 빼기', onclick: () => row.remove()}, '×'));
   row.querySelector('.ws-name').value = w.name; row.querySelector('.ws-path').value = w.path;
   $('ws-rows').append(row);
 }
 $('ws-add').addEventListener('click', () => addRow());
+
+// Folder picker: browse this computer's folders through the server (it runs here) and fill the path.
+let pickTarget = null, pickAt = '';
+async function pickFolder(input) {
+  pickTarget = input;
+  $('picker').showModal();
+  await pickShow(input.value.trim()).catch(() => pickShow(''));
+}
+async function pickShow(path) {
+  $('pick-error').textContent = '';
+  let d;
+  try { d = await api('/api/dirs?path=' + encodeURIComponent(path)); }
+  catch (e) { $('pick-error').textContent = e.message; throw e; }
+  pickAt = d.path;
+  $('pick-path').textContent = d.path;
+  const nav = $('pick-nav'); nav.textContent = '';
+  if (d.parent) nav.append(el('button', {type: 'button', class: 'secondary', onclick: () => pickShow(d.parent)}, '↑ 상위 폴더'));
+  for (const r of d.roots) nav.append(el('button', {type: 'button', class: 'secondary', onclick: () => pickShow(r)}, r));
+  const list = $('pick-list'); list.textContent = '';
+  if (!d.dirs.length) list.append(el('li', {class: 'muted small', style: 'padding:7px 10px'}, '하위 폴더가 없습니다.'));
+  for (const name of d.dirs) {
+    const sep = d.path.endsWith('/') ? '' : '/';
+    list.append(el('li', {}, el('button', {type: 'button', onclick: () => pickShow(d.path + sep + name)}, '📁 ' + name)));
+  }
+  if (d.more) list.append(el('li', {class: 'muted small', style: 'padding:7px 10px'}, '폴더가 많아 일부만 보입니다.'));
+}
+$('pick-ok').addEventListener('click', () => { if (pickTarget && pickAt) pickTarget.value = pickAt; $('picker').close(); });
+$('pick-cancel').addEventListener('click', () => $('picker').close());
 $('ws-save').addEventListener('click', async () => {
   const workspaces = [...document.querySelectorAll('.ws-row')].map(r => ({name: r.querySelector('.ws-name').value, path: r.querySelector('.ws-path').value}));
   try { await api('/api/workspaces', {file: selected, workspaces}); await loadRigs(); }

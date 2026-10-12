@@ -223,7 +223,7 @@ opens it in the browser (`--no-open` to only write it). It's one self-contained 
 ### Web page
 
 `rig serve` starts a local web page (http://localhost:8000, `--port` to change) for the rig
-files in the current folder: pick one, set its `workspace`, type the task, fill in its
+files in the current folder: pick one, set its `workspace` (type the path or press **폴더 선택** to browse this computer's folders), type the task, fill in its
 inputs, run it (optionally dry or in a worktree), watch progress live, and open the report
 of any past shift. It runs one shift at a time. While a shift runs, the page shows its cost
 so far against the limit (taken from `max_cost_usd`, editable before each run) and a
