@@ -60,14 +60,56 @@ def test_finding_carries_review_folders(app, tmp_path):
     shift = make_shift(tmp_path, [FINDING])
     f = app.finding(shift, 0)
     assert f["task"].startswith("리뷰에서 발견된 문제를 고쳐줘.")
-    assert f["workspaces"] == [{"name": "backend", "path": "api"}, {"name": "frontend", "path": "web"}]
+    assert f["workspaces"] == [{"name": "backend", "path": "api", "dir": (tmp_path / "api").resolve().as_posix()},
+                               {"name": "frontend", "path": "web", "dir": (tmp_path / "web").resolve().as_posix()}]
+    assert f["ambiguous"] is False
     with pytest.raises(ValueError, match="no finding 5"):
         app.finding(shift, 5)
 
 
 def test_finding_from_unknown_rig_has_no_folders(app, tmp_path):
     shift = make_shift(tmp_path, [FINDING], rig="deleted-rig")
-    assert app.finding(shift, 0)["workspaces"] is None
+    f = app.finding(shift, 0)
+    assert f["workspaces"] is None and f["ambiguous"] is False
+
+
+def two_reviews(tmp_path: Path) -> list[dict[str, str]]:
+    """A second rig file also named code-review, on other folders; returns its recorded workspaces."""
+    for d in ("api2", "web2"):
+        (tmp_path / d).mkdir()
+    (tmp_path / "review2.rig.yaml").write_text(REVIEW.replace(": api", ": api2").replace(": web", ": web2"), encoding="utf-8")
+    return [{"name": "backend", "dir": (tmp_path / "api2").resolve().as_posix()},
+            {"name": "frontend", "dir": (tmp_path / "web2").resolve().as_posix()}]
+
+
+def test_finding_uses_recorded_folders(app, tmp_path):
+    recorded = two_reviews(tmp_path)
+    shift = make_shift(tmp_path, [FINDING])
+    p = tmp_path / ".rig" / "shifts" / shift / "shift.json"
+    p.write_text(json.dumps({**json.loads(p.read_text(encoding="utf-8")), "workspaces": recorded}), encoding="utf-8")
+    f = app.finding(shift, 0)
+    assert f["workspaces"] == [{"name": w["name"], "path": w["dir"], "dir": w["dir"]} for w in recorded]
+    assert f["ambiguous"] is False
+
+
+def test_finding_without_record_and_same_named_rigs_is_ambiguous(app, tmp_path):
+    two_reviews(tmp_path)
+    f = app.finding(make_shift(tmp_path, [FINDING]), 0)
+    assert f["workspaces"] is None and f["ambiguous"] is True
+
+
+def test_finding_without_record_and_same_named_rigs_on_same_folders(app, tmp_path):
+    (tmp_path / "review2.rig.yaml").write_text(REVIEW, encoding="utf-8")
+    f = app.finding(make_shift(tmp_path, [FINDING]), 0)
+    assert f["workspaces"] == [{"name": "backend", "path": "api", "dir": (tmp_path / "api").resolve().as_posix()},
+                               {"name": "frontend", "path": "web", "dir": (tmp_path / "web").resolve().as_posix()}]
+    assert f["ambiguous"] is False
+
+
+def test_init_fix_takes_finding_folders(app, tmp_path):
+    f = app.finding(make_shift(tmp_path, [FINDING]), 0)
+    assert app.init_fix(f["workspaces"]) == "fix.rig.yaml"
+    assert load(tmp_path / "fix.rig.yaml").workspaces == {"backend": "api", "frontend": "web"}
 
 
 def test_init_fix_uses_review_folders(app, tmp_path):

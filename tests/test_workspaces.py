@@ -1,6 +1,7 @@
 """Several projects in one shift: `workspaces: {name: folder}`."""
 
 import asyncio
+import json
 import os
 
 import pytest
@@ -131,6 +132,16 @@ def test_shift_runs_across_projects(projects, tmp_path):
     assert shift.ok
 
 
+def test_shift_json_records_every_project(projects, tmp_path):
+    rig = make_rig({"backend": "api", "frontend": "web"})
+    shift = asyncio.run(run_shift(rig, "look", EchoWorker(), root=tmp_path, on_event=lambda _: None))
+    summary = json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))
+    assert summary["workspaces"] == [
+        {"name": "backend", "dir": projects["backend"].resolve().as_posix()},
+        {"name": "frontend", "dir": projects["frontend"].resolve().as_posix()},
+    ]
+
+
 def test_worktree_needs_git_repos(projects, tmp_path):
     with pytest.raises(GitError, match="needs the workspace to be in a git repository"):
         asyncio.run(run_shift(make_rig(projects), "x", EchoWorker(), root=tmp_path, on_event=lambda _: None, use_worktree=True))
@@ -163,7 +174,10 @@ def test_serve_switches_between_one_and_several(projects, tmp_path):
     assert yaml.safe_load(text)["workspaces"] == {"backend": "api", "frontend": "web"}
     assert "workspace:" not in text and "# keep me" in text and "# The project to review." in text
     entry = app.rigs()[0]
-    assert entry["workspaces"] == [{"name": "backend", "path": "api", "ok": True}, {"name": "frontend", "path": "web", "ok": True}]
+    assert entry["workspaces"] == [
+        {"name": "backend", "path": "api", "dir": (tmp_path / "api").resolve().as_posix(), "ok": True},
+        {"name": "frontend", "path": "web", "dir": (tmp_path / "web").resolve().as_posix(), "ok": True},
+    ]
 
     app.set_workspaces("review.rig.yaml", [{"name": "", "path": "web"}])
     data = yaml.safe_load((tmp_path / "review.rig.yaml").read_text(encoding="utf-8"))

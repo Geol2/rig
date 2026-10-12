@@ -186,6 +186,31 @@ Keep items small enough for one reviewed change. Add context under an item when 
   받는 테스트. ok가 아니어도 에러가 아니면 PR이 열리므로(`runner.py` `run_shift`의 `not shift.error` 조건),
   열린 PR이 있는 중단된 shift를 이어 받을 때도 새 PR 대신 기존 PR을 갱신해야 합니다.
   Note: `runner.py` `ci_failed_pr`/`Resume.prs`, `publish.py` `publish(existing=…)` pushes to the PR's branch (no force) and waits for the new head before CI; `resume-target.py` prints the ↻ line itself.
+- [x] **실행 기록에 프로젝트 폴더를 남기고, 수정 흐름·지난 실행을 그 폴더 기준으로**: 지금 `runner.py`
+  `_write_summary`는 shift.json에 `"rig": rig.name`만 저장하고(`worktrees[]`는 `--worktree`일 때만 있음),
+  `_Progress.__init__`가 쓰는 running.json도 pid/rig/task/started뿐이라 어느 프로젝트에서 돌았는지 남지 않습니다.
+  그래서 `serve.py` `App.finding(shift_id, n)`(보고서의 "fix" 버튼 → `/?fix=<id>&n=<i>`)은
+  `next(r for r in self.rigs() if r.get("name") == data["summary"].get("rig"))`로 이름만 보고 rig를 찾아
+  그 rig 파일의 *현재* workspace를 돌려줍니다. 같은 이름의 rig 파일이 둘이거나(예: review 템플릿으로 만든 두 개를
+  서로 다른 프로젝트에 연결) 리뷰 뒤 serve 페이지에서 workspace를 바꿨다면 "리뷰와 같은 폴더로 맞추기",
+  "수정용 설정 만들기 (리뷰와 같은 폴더)", 페이지 JS `renderFix`의 `sameFolders` 검사가 모두 엉뚱한 프로젝트를
+  가리킵니다. 또 `sameFolders`는 YAML에 적힌 문자열("api" 등)을 그대로 비교해 같은 폴더의 상대/절대 경로가
+  다르다고 판단하고, "지난 실행"(`App.shifts()` + JS `loadShifts`)은 rig 이름만 보여 어느 프로젝트의 실행인지
+  알 수 없고 선택한 rig의 프로젝트로 좁혀 볼 수도 없습니다. 완료 기준: (1) shift.json과 running.json에
+  `workspaces`: `{"name": <workspace가 하나면 "">, "dir": <원래 프로젝트 폴더의 절대 경로, 슬래시 구분>}` 목록을
+  `rig.workspace_dirs(root)`에서 기록(worktree 복사본이 아닌 원래 폴더). (2) `App.finding`은 shift.json에
+  `workspaces`가 있으면 그것을 써서 name·path·dir를 돌려주고, 없는 옛 shift.json일 때만 이름 매칭으로 대체하되
+  같은 이름의 rig 파일이 여럿이고 폴더가 서로 다르면 하나를 조용히 고르지 말고 폴더 없이 플래그를 돌려
+  페이지가 "어느 프로젝트를 리뷰했는지 알 수 없음"이라고 표시. (3) `App.rigs()`의 workspace 항목에도 `dir`를
+  넣고 페이지의 `sameFolders`는 name + dir로 비교. (4) `App.shifts()`가 실행마다 `workspaces`를 돌려주고
+  (shift.json 또는 running.json에서, 옛 기록은 빈 목록) 지난 실행 표에서 rig 이름 아래 프로젝트를 표시,
+  선택한 rig의 프로젝트 폴더에서 돈 실행만 보는 체크박스 추가. (5) README에서 shift.json을 설명하는 곳에
+  `workspaces` 언급. (6) 테스트: `tests/test_fix.py` — 이름이 같고 폴더가 다른 rig 파일 두 개에서 finding이
+  shift.json에 기록된 폴더를 쓰는지, `workspaces` 없는 옛 shift.json의 모호한 경우 폴더 없음 + 플래그인지,
+  일치하는 rig가 하나인 옛 shift.json은 그대로 동작하는지. `tests/test_serve.py`/runner 테스트 — dry run이
+  shift.json에 `workspaces`를 쓰는지(단일·다중 workspace), `shifts()`가 이를 돌려주는지, 실행 중 running.json에
+  들어 있는지.
+  Note: shift.json/running.json `workspaces` = [{name ("" for one workspace), dir (resolved original folder, posix)}]; `App.finding` uses it, else matches by rig name (`ambiguous` when same-named rigs point at different folders); the history filter `#hist-mine` shows runs whose folder set equals the selected rig's.
 
 ## Backlog
 
