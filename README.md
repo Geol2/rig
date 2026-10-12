@@ -380,7 +380,8 @@ Unless `publish` says otherwise (below), rig never merges or pushes; that's left
 
 `rig run --resume last` (or `--resume <shift-id>`) continues a shift that was interrupted,
 crashed, hit its cost limit or was stopped, and that committed changes to its branch. A shift
-that finished ok, or left no branch (no changes, or run without `--worktree`), can't be resumed.
+that finished ok, recorded no task, or left no branch (no changes, or run without `--worktree`), can't
+be resumed.
 
 The new shift gets its own id and branch `rig/<new-id>`, starting at the old branch's tip, and
 reuses the old task and inputs (don't pass a task or `-i`). The hand that picks the work up (the
