@@ -211,12 +211,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   shift.json에 `workspaces`를 쓰는지(단일·다중 workspace), `shifts()`가 이를 돌려주는지, 실행 중 running.json에
   들어 있는지.
   Note: shift.json/running.json `workspaces` = [{name ("" for one workspace), dir (resolved original folder, posix)}]; `App.finding` uses it, else matches by rig name (`ambiguous` when same-named rigs point at different folders); the history filter `#hist-mine` shows runs whose folder set equals the selected rig's.
-
-## Backlog
-
-Requested by the owner ("중간에 그만두고 기억을 하고 계속되는 건 돼나"), first:
-
-- [ ] **`--resume` 빠진 테스트와 안내 보강**: #50 리뷰에서 지적됐지만 병합된 #51에도 없는 것들입니다.
+- [x] **`--resume` 빠진 테스트와 안내 보강**: #50 리뷰에서 지적됐지만 병합된 #51에도 없는 것들입니다.
   (1) 다중 workspace: repo 두 개를 쓰는 `workspaces` rig에서 옛 shift가 한 repo에만 커밋했을 때 그 repo는
   옛 브랜치 끝에서, 다른 repo는 HEAD에서 시작하는지 확인하는 테스트(`runner.py` `_make_worktrees`의 `starts` 분기).
   (2) CLI 끝까지: `main(["run", "-f", <rig.yaml>, "--resume", "last", "--dry"])`가 끊긴 shift를 이어 받아
@@ -225,6 +220,9 @@ Requested by the owner ("중간에 그만두고 기억을 하고 계속되는 �
   비어 있을 때 `--resume`이면 "empty task (pass it as an argument or on stdin)" 대신 "shift <id>에 task가
   없어 이어 할 수 없음"으로 종료. (4) `load_resume`에서 `worktrees[]`의 `repo`/`branch`가 없거나 `None`이면
   traceback 대신 `ResumeError("cannot read …")`. 완료 기준: 위 네 가지 테스트가 있고 전부 통과.
+  Note: load_resume refuses a blank task ("recorded no task") and malformed worktrees[] entries ("worktree entry has no valid …"); tests in test_resume.py/test_cli.py.
+
+## Backlog
 
 From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
 

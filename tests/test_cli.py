@@ -362,6 +362,57 @@ def test_run_resume_of_ok_shift(tmp_path, monkeypatch):
     assert [d.name for d in (tmp_path / ".rig" / "shifts").iterdir()] == ["20250101-000000"]
 
 
+def test_run_resume_of_shift_without_task(tmp_path, monkeypatch):
+    (tmp_path / "rig.yaml").write_text("name: t\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    _shift(tmp_path, "20250101-000000", {"rig": "t", "mode": "lines", "ok": False})
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "--resume", "last"])
+    assert _exit_message(excinfo) == "rig: shift 20250101-000000 recorded no task; nothing to resume"
+
+
+def test_run_resume_last_dry_continues_the_stopped_shift(tmp_path, monkeypatch, capsys, repo):
+    import asyncio
+
+    from rig.runner import run_shift
+    from rig.spec import load
+
+    path = tmp_path / "rig.yaml"
+    path.write_text(
+        "name: t\nworkspace: repo\ninputs:\n  dataset: {required: true}\n"
+        "hands:\n  coder: {role: 'Clean {{ inputs.dataset }}.', tools: [write_file]}\n",
+        encoding="utf-8",
+    )
+
+    class Stopping:
+        async def run(self, hand, prompt, toolbox, check=None):
+            await toolbox.call("write_file", {"path": "app/partial.py", "content": "x = 1\n"})
+            raise KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(run_shift(load(path), "old task", Stopping(), root=tmp_path, on_event=lambda _: None,
+                              use_worktree=True, inputs={"dataset": "old.csv"}))
+    (old,) = [d.name for d in (tmp_path / ".rig" / "shifts").iterdir()]
+    capsys.readouterr()
+
+    class NoStdin:
+        def read(self, *args):
+            raise AssertionError("stdin read")
+
+    monkeypatch.setattr(sys, "stdin", NoStdin())
+    monkeypatch.chdir(tmp_path)
+    main(["-f", "rig.yaml", "run", "--resume", "last", "--dry"])
+    out = capsys.readouterr().out
+
+    (new,) = [d for d in (tmp_path / ".rig" / "shifts").iterdir() if d.name != old]
+    summary = json.loads((new / "shift.json").read_text(encoding="utf-8"))
+    assert summary["resumed_from"] == old and summary["task"] == "old task"
+    assert summary["inputs"]["dataset"] == "old.csv"
+    assert f"resuming {old} (interrupted)" in out
+    assert f'<resumed from="{old}">' in out and "<task>\nold task\n</task>" in out
+    assert '<input name="dataset">old.csv</input>' in out
+
+
 def test_logs_shows_resumed_from(tmp_path, monkeypatch, capsys):
     _shift(tmp_path, "20250102-000000", {"mode": "lines", "ok": True, "task": "go", "resumed_from": "20250101-000000"})
     monkeypatch.chdir(tmp_path)

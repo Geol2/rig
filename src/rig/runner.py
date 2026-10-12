@@ -289,6 +289,9 @@ def load_resume(root: Path, rig: Rig, which: str) -> Resume:
     if summary.get("rig") != rig.name:
         raise ResumeError(f"shift {old} was run by rig '{summary.get('rig')}', not '{rig.name}' "
                           "(use -f to pick that rig file)")
+    task = summary.get("task")
+    if not isinstance(task, str) or not task.strip():
+        raise ResumeError(f"shift {old} recorded no task; nothing to resume")
     entries = [w for w in summary.get("worktrees") or [] if isinstance(w, dict)]
     for w in entries:
         if w.get("kept_at"):
@@ -298,6 +301,11 @@ def load_resume(root: Path, rig: Rig, which: str) -> Resume:
     if not committed:
         hint = f"; try `rig run --resume {summary['resumed_from']}`" if summary.get("resumed_from") else ""
         raise ResumeError(f"shift {old} left no committed branch (no changes, or run without --worktree){hint}")
+    for w in committed:
+        for field in ("repo", "branch", "base"):
+            if not isinstance(w.get(field), str):
+                raise ResumeError(f"cannot read {old}/shift.json (worktree entry has no valid {field}); "
+                                  "nothing to resume from")
 
     repos = {worktree.repo_of(folder) for folder in rig.workspace_dirs(root).values()}
     starts: dict[Path, tuple[str, str]] = {}
@@ -366,7 +374,7 @@ def load_resume(root: Path, rig: Rig, which: str) -> Resume:
         lines.append("Don't redo what is already done. Check the current state, then finish only what is left.")
     lines.append("</resumed>")
     inputs = {str(k): str(v) for k, v in (summary.get("inputs") or {}).items()}
-    return Resume(shift_id=old, task=summary.get("task") or "", inputs=inputs, starts=starts, why=why,
+    return Resume(shift_id=old, task=task, inputs=inputs, starts=starts, why=why,
                   context="\n".join(lines), prs=prs)
 
 

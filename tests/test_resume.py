@@ -248,6 +248,88 @@ def test_refuses_kept_worktree(repo, tmp_path):
     refuses(root, rig_for(repo), old, rf"^shift {old} kept its worktree at /somewhere/kept because the commit failed")
 
 
+@pytest.mark.parametrize("task", ["", "   ", None])
+def test_refuses_shift_without_task(repo, tmp_path, task):
+    root = tmp_path / "rigroot"
+    old = interrupted_shift(repo, root)
+    summary = summary_of(root, old)
+    if task is None:
+        del summary["task"]
+    else:
+        summary["task"] = task
+    (root / ".rig" / "shifts" / old / "shift.json").write_text(json.dumps(summary), encoding="utf-8")
+    refuses(root, rig_for(repo), old, rf"^shift {old} recorded no task; nothing to resume$")
+
+
+@pytest.mark.parametrize("field", ["repo", "branch", "base"])
+@pytest.mark.parametrize("value", ["missing", None, 3])
+def test_refuses_malformed_worktree_entry(repo, tmp_path, field, value):
+    root = tmp_path / "rigroot"
+    old = interrupted_shift(repo, root)
+    summary = summary_of(root, old)
+    assert all(isinstance(summary["worktrees"][0][f], str) for f in ("repo", "branch", "base"))
+    if value == "missing":
+        del summary["worktrees"][0][field]
+    else:
+        summary["worktrees"][0][field] = value
+    (root / ".rig" / "shifts" / old / "shift.json").write_text(json.dumps(summary), encoding="utf-8")
+    refuses(root, rig_for(repo), old,
+            rf"^cannot read {old}/shift.json \(worktree entry has no valid {field}\); nothing to resume from$")
+
+
+def make_repo(path):
+    path.mkdir(parents=True)
+    (path / "README.md").write_text("v1\n", encoding="utf-8")
+    git("init", "-q", "-b", "main", cwd=path)
+    git("config", "user.email", "test@example.com", cwd=path)
+    git("config", "user.name", "test", cwd=path)
+    git("add", "-A", cwd=path)
+    git("commit", "-q", "-m", "init", cwd=path)
+    return path
+
+
+def test_resume_with_two_repos_starts_only_the_changed_one_on_its_branch(tmp_path):
+    api, web = make_repo(tmp_path / "api"), make_repo(tmp_path / "web")
+    root = tmp_path / "rigroot"
+    rig = Rig.model_validate({"name": "t", "workspaces": {"backend": str(api), "frontend": str(web)},
+                              "hands": {"coder": {"role": "Code.", "tools": ["write_file"]}}})
+    worker = Worker({"coder": {"backend/src/a.py": "a\n"}}, fail={"coder": KeyboardInterrupt()})
+    with pytest.raises(KeyboardInterrupt):
+        shift_in(rig, worker, root)
+    (old,) = shift_ids(root)
+    # web moves on after the old shift, so starting from its HEAD is distinguishable from its old base.
+    (web / "README.md").write_text("v2\n", encoding="utf-8")
+    git("commit", "-q", "-am", "v2", cwd=web)
+    web_head = git("rev-parse", "main", cwd=web).strip()
+
+    resume = load_resume(root, rig, "last")
+    assert list(resume.starts) == [api.resolve()]
+    found = {}
+
+    class Looking(Worker):
+        async def run(self, hand, prompt, toolbox, check=None):
+            found["roots"] = dict(toolbox.roots)
+            found["a.py"] = (toolbox.roots["backend"] / "src" / "a.py").exists()
+            return await super().run(hand, prompt, toolbox, check)
+
+    worker = Looking({"coder": {"backend/src/b.py": "b\n", "frontend/src/c.js": "c\n"}})
+    events = []
+    shift = shift_in(rig, worker, root, events, task=resume.task, resume=resume)
+
+    assert found["a.py"] and all(".rig" in str(p) for p in found["roots"].values())
+    new_branch = f"rig/{shift.id}"
+    assert git("show", f"{new_branch}:src/a.py", cwd=api) == "a\n"
+    assert git("show", f"{new_branch}:src/b.py", cwd=api) == "b\n"
+    git("merge-base", "--is-ancestor", f"rig/{old}", new_branch, cwd=api)  # raises if not
+    assert git("show", f"{new_branch}:src/c.js", cwd=web) == "c\n"
+    assert git("rev-parse", f"{new_branch}^", cwd=web).strip() == web_head
+    assert f"rig/{old}" not in git("branch", "--format=%(refname:short)", cwd=web).split()
+    announced = [e for e in events if e.startswith("  worktree ") and " · branch " in e]
+    (api_line,) = [e for e in announced if e.startswith("  worktree api ")]
+    (web_line,) = [e for e in announced if e.startswith("  worktree web ")]
+    assert f"from rig/{old} (" in api_line and "from rig/" not in web_line
+
+
 PR_URL = "https://github.com/o/r/pull/7"
 
 
