@@ -7,7 +7,7 @@ running, same rig). Then stderr says "↻ …": which PR's failed checks are bei
 shift is being continued. Otherwise nothing is printed on stdout and next.sh starts afresh; when
 a shift of the same task is passed over, stderr says why. Always exits 0.
 
-    PYTHONPATH=src python scripts/resume-target.py self.rig.yaml "<task>"
+    PYTHONPATH=src python scripts/resume-target.py self.rig.yaml "<task>"   # from the folder holding the rig file
 """
 
 import sys
@@ -31,15 +31,30 @@ def _chain(shifts_dir: Path, summary: dict) -> int:
     return len(seen)
 
 
+def _rig_path(root: Path, name: str) -> Path | None:
+    """The rig file called `name` in `root`, taken from the folder's own listing.
+
+    `name` comes from the command line, so it's never used to build a path: only a .yaml/.yml
+    file that is directly in `root` and has exactly that name is accepted.
+    """
+    for p in root.iterdir():
+        if p.name == name and p.suffix in (".yaml", ".yml") and p.is_file():
+            return p
+    return None
+
+
 def target(rig_file: str, task: str) -> str | None:
     from rig import spec
     from rig.report import read_summary
     from rig.runner import CI_FAILED, ResumeError, ci_failed_pr, load_resume
     from rig.worktree import GitError
 
-    root = Path(rig_file).resolve().parent
+    root = Path.cwd().resolve()
+    path = _rig_path(root, rig_file)
+    if path is None:
+        return None
     try:
-        rig = spec.load(rig_file)
+        rig = spec.load(path)
     except Exception:
         return None
     shifts_dir = root / ".rig" / "shifts"
