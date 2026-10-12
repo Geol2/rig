@@ -13,7 +13,9 @@ port="${PORT:-8000}"
 log=".rig/serve.log"
 
 if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-  echo "✗ ANTHROPIC_API_KEY가 없습니다. ~/.zshrc에 export ANTHROPIC_API_KEY=... 를 넣고 새 터미널에서 다시 실행하세요." >&2
+  echo "✗ ANTHROPIC_API_KEY가 없습니다. 등록한 뒤 새 터미널에서 다시 실행하세요." >&2
+  echo "  macOS(zsh): echo 'export ANTHROPIC_API_KEY=\"sk-ant-...\"' >> ~/.zshrc" >&2
+  echo "  Windows: setx ANTHROPIC_API_KEY \"sk-ant-...\"  (Git Bash만이면 ~/.bashrc에 export)" >&2
   exit 1
 fi
 
