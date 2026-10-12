@@ -398,3 +398,16 @@ def test_next_sh_starts_afresh_without_a_shift_to_resume(tmp_path):
     assert "↻" not in out
     assert resume_target_call(calls)[-3:] == ["scripts/resume-target.py", "self.rig.yaml", TASK]
     assert calls[-1][-4:] == ["run", "--max-cost", "3", TASK] and "--resume" not in calls[-1]
+
+
+def test_scripts_run_from_a_copy(tmp_path):
+    # Windows can't replace a running script, so auto.sh and next.sh re-run themselves from .rig/run/.
+    code, out, calls = auto(tmp_path, ["0.1 true true"], RUNS="1")
+    assert code == 0 and calls == 1
+    assert (tmp_path / ".rig" / "run" / "auto" / "auto.sh").exists()
+
+    shutil.copy(Path(__file__).parent.parent / "scripts" / "next.sh", tmp_path / "scripts" / "next.sh")
+    env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "RIG_COPY_OF")}
+    out = subprocess.run(["bash", "scripts/next.sh"], cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert out.returncode == 1 and "ANTHROPIC_API_KEY" in out.stderr
+    assert (tmp_path / ".rig" / "run" / "next" / "next.sh").exists()

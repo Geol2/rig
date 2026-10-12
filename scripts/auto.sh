@@ -14,7 +14,17 @@
 # Each run still has its own MAX_COST limit (default 3), as with scripts/next.sh.
 set -uo pipefail
 
-cd "$(dirname "$0")/.."
+# Windows can't replace a file that a running script holds open, and sync-main.sh may update
+# this very script; so it runs from a copy under .rig/run/ (harmless on macOS/Linux).
+root="$(cd "$(dirname "$0")/.." && pwd)"
+me="$(basename "$0")"
+if [[ "${RIG_COPY_OF:-}" != "$me" ]]; then
+  copy="$root/.rig/run/${me%.sh}"
+  mkdir -p "$copy" && cp "$root"/scripts/*.sh "$copy/"
+  RIG_COPY_OF="$me" RIG_ROOT="$root" exec bash "$copy/$me" "$@"
+fi
+here="$(cd "$(dirname "$0")" && pwd)"  # the copy's folder: helper scripts that git may replace run from here
+cd "$RIG_ROOT"
 runs="${RUNS:-5}"
 budget="${BUDGET:-10}"
 pause="${PAUSE:-10}"          # seconds between runs
