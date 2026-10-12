@@ -246,7 +246,7 @@ def stopped_shift(repo, shift_id, task=TASK, resumed_from=None, branch=True, **s
 
 
 def resume_target(repo, task=TASK):
-    out = subprocess.run([sys.executable, str(RESUME_TARGET), str(repo / "rig.yaml"), task],
+    out = subprocess.run([sys.executable, str(RESUME_TARGET), "rig.yaml", task], cwd=repo,
                          capture_output=True, text=True, encoding="utf-8",
                          env={**os.environ, "PYTHONPATH": str(SCRIPTS.parent / "src")})
     assert out.returncode == 0, out.stderr
@@ -411,3 +411,14 @@ def test_scripts_run_from_a_copy(tmp_path):
     out = subprocess.run(["bash", "scripts/next.sh"], cwd=tmp_path, capture_output=True, text=True, env=env)
     assert out.returncode == 1 and "ANTHROPIC_API_KEY" in out.stderr
     assert (tmp_path / ".rig" / "run" / "next" / "next.sh").exists()
+
+
+@pytest.mark.parametrize("name", ["../rig.yaml", "sub/rig.yaml", "missing.yaml", "notes.txt"])
+def test_resume_target_takes_only_a_rig_file_in_the_folder(rig_repo, name):
+    # The name is never turned into a path: anything but a .yaml file right here is ignored.
+    (rig_repo / "sub").mkdir(exist_ok=True)
+    shutil.copy(rig_repo / "rig.yaml", rig_repo / "sub" / "rig.yaml")
+    (rig_repo / "notes.txt").write_text("x", encoding="utf-8")
+    out = subprocess.run([sys.executable, str(RESUME_TARGET), name, TASK], cwd=rig_repo,
+                         capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(SCRIPTS.parent / "src")})
+    assert out.returncode == 0 and out.stdout == ""
