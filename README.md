@@ -276,8 +276,10 @@ Every hand (and the foreman) gets them after the task, and `{{ inputs.name }}` i
 ```
 
 Unknown or missing required inputs, and values of the wrong type, stop `rig run` before
-the shift starts; a role that references an undeclared input fails `rig check`. The values
-used are stored in `shift.json`.
+the shift starts; a role that references an undeclared input, or has a malformed
+`{{ … }}` input reference such as `{{ inputs.due-date }}` or `{{ input.x }}`, fails `rig check`.
+Input names are letters, digits and `_` only (no `-` or spaces: `due_date`, not `due-date`).
+The values used are stored in `shift.json`.
 
 ### output.schema
 

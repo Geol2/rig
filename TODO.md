@@ -221,12 +221,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   없어 이어 할 수 없음"으로 종료. (4) `load_resume`에서 `worktrees[]`의 `repo`/`branch`가 없거나 `None`이면
   traceback 대신 `ResumeError("cannot read …")`. 완료 기준: 위 네 가지 테스트가 있고 전부 통과.
   Note: load_resume refuses a blank task ("recorded no task") and malformed worktrees[] entries ("worktree entry has no valid …"); tests in test_resume.py/test_cli.py.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **input 이름 검증과 치환되지 않는 `{{ … }}` 잡기**: `spec.py`의 `inputs` 키는 아무 문자열이나
+- [x] **input 이름 검증과 치환되지 않는 `{{ … }}` 잡기**: `spec.py`의 `inputs` 키는 아무 문자열이나
   허용되지만 `INPUT_REF`는 `\w+`만 찾습니다. 그래서 `due-date` 같은 input을 role에서
   `{{ inputs.due-date }}`로 쓰면 치환도 안 되고 `_check_lines`의 미선언 input 검사에도 안 걸려, 모델이
   중괄호 문자 그대로를 받습니다. `{{ input.x }}`(단수) 같은 오타도 같은 식으로 조용히 남고, 이름에 `"`가
@@ -235,6 +230,11 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   맞지 않는 `{{ … inputs … }}`/`{{ input… }}` 형태가 있으면 해당 hand와 원문을 짚어 거부하세요. README
   inputs 절에 이름 규칙 한 줄. 완료 기준: `tests/test_inputs.py`에 하이픈·공백·따옴표 이름, `{{ inputs.due-date }}`,
   `{{ input.x }}`가 `rig check`에서 거부되는 테스트와, 모든 템플릿과 `self.rig.yaml`이 여전히 로드되는지 확인.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **CLI 인자 검증: 중복 `-i`와 shift id 경로**: `cli.py` `_parse_inputs`는 `-i n=a -i n=b`에서
   앞 값을 조용히 버립니다. `cmd_logs`와 `cmd_report`는 `shifts_dir / args.shift`를 그대로 써서
   `rig report ..`가 `.rig/report.html`을 쓰고 `rig logs ../..`가 shift가 아닌 폴더의 `*.md`를

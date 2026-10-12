@@ -146,9 +146,13 @@ WORKSPACE_NAME = re.compile(r"[A-Za-z0-9_.-]+")
 # Hand names become file names in the shift folder and `name#n` foreman keys:
 # Unicode letters (Korean included), digits, `_` and `-` only.
 HAND_NAME = re.compile(r"[\w-]+")
+# Input names must be matchable by INPUT_REF and safe in `<input name="…">`: letters, digits, `_`.
+INPUT_NAME = re.compile(r"\w+")
 BOOLEANS = {"true": True, "yes": True, "1": True, "false": False, "no": False, "0": False}
 # `{{ inputs.name }}` in a role is replaced with the input's value.
 INPUT_REF = re.compile(r"\{\{\s*inputs\.(\w+)\s*\}\}")
+# Anything that looks like an input reference; those INPUT_REF doesn't fullmatch would stay as literal braces.
+INPUT_LIKE = re.compile(r"\{\{[^{}]*\binputs?\b[^{}]*\}\}")
 
 
 class InputError(ValueError):
@@ -303,7 +307,17 @@ class Rig(BaseModel):
         bad = [n for n in self.hands if not HAND_NAME.fullmatch(n)]
         if bad:
             raise ValueError(f"hand names must be plain names (letters, digits, - _): {bad}")
+        bad = [n for n in self.inputs if not INPUT_NAME.fullmatch(n)]
+        if bad:
+            fix = re.sub(r"\W+", "_", bad[0])
+            raise ValueError(f"input names must be plain names (letters, digits, _): {bad}; "
+                             f"use _ instead of - or spaces, e.g. {fix!r}")
         for n, h in [*self.hands.items(), ("foreman", self.foreman)]:
+            if h:
+                bad = list(dict.fromkeys(c for c in INPUT_LIKE.findall(h.role) if not INPUT_REF.fullmatch(c)))
+                if bad:
+                    raise ValueError(f"{n}'s role has malformed input references {bad}; "
+                                     f"write them as {{{{ inputs.name }}}} with a declared input name")
             unknown = {m for m in INPUT_REF.findall(h.role) if m not in self.inputs} if h else set()
             if unknown:
                 raise ValueError(f"{n}'s role uses undeclared inputs {sorted(unknown)}; add them under `inputs`")
