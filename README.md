@@ -486,7 +486,49 @@ RUNS=10 BUDGET=20 caffeinate -i scripts/auto.sh
 ```
 
 On Windows, from PowerShell or cmd (it runs auto.sh with Git Bash): `scripts\auto.cmd` or
-`scripts\auto.cmd 5 10` (MAX_COST per run, RUNS).
+`scripts\auto.cmd 5 10` (MAX_COST per run, RUNS). See [Windows](#windows-한국어-안내) below.
+
+### Windows (한국어 안내)
+
+**처음 한 번만 준비**
+
+1. [Git for Windows](https://git-scm.com/download/win)를 설치합니다(Git Bash가 같이 깔립니다).
+2. [uv](https://docs.astral.sh/uv/)를 설치합니다.
+3. GitHub CLI를 설치하고 로그인합니다. PR을 열고 병합하는 데 필요합니다.
+   ```powershell
+   winget install --id GitHub.cli
+   gh auth login
+   gh auth status
+   ```
+   `gh auth status`에 "Logged in"이 나오면 됩니다.
+4. API 키를 등록하고 **터미널을 새로 엽니다**. 키는 채팅이나 파일에 붙여 넣지 마세요.
+   ```powershell
+   setx ANTHROPIC_API_KEY "sk-ant-..."
+   ```
+
+**실행 (PowerShell 또는 cmd, rig 폴더에서)**
+
+```powershell
+scripts\auto.cmd          # 한 번에 $3까지, 최대 5번
+scripts\auto.cmd 5        # 한 번에 $5까지
+scripts\auto.cmd 5 10     # 한 번에 $5까지, 최대 10번
+```
+
+- 진행 상황은 http://localhost:8000 에서 봅니다(**지난 실행 → 로그**).
+- 멈추려면 Git Bash에서 `touch .rig/stop`을 실행합니다. 지금 실행이 끝나면 멈춥니다.
+- Git Bash 창이라면 `MAX_COST=5 scripts/auto.sh`처럼 실행해도 됩니다.
+- PC가 절전 모드로 들어가면 실행이 멈추니, 전원 설정을 확인하세요.
+
+**자주 나오는 문제**
+
+| 화면에 나온 것 | 원인과 해결 |
+|---|---|
+| `'MAX_COST=5' 용어는 cmdlet ... 인식되지 않습니다` | PowerShell에서 bash 문법을 썼습니다. `scripts\auto.cmd 5`로 실행하세요. |
+| `ANTHROPIC_API_KEY가 없습니다` | 4번처럼 `setx`로 등록한 뒤 터미널을 새로 여세요. |
+| `couldn't open a PR: gh not found` | 3번처럼 GitHub CLI를 설치하고 `gh auth login` 하세요. 브랜치는 이미 올라가 있으니 `gh pr create --head <브랜치> --base main`으로 PR만 열면 됩니다. |
+| `rig.exe ... 다른 프로세스가 파일을 사용 중` | 다른 창에서 rig가 돌고 있습니다. 그 창을 닫거나 `taskkill /F /IM rig.exe` 후 다시 실행하세요. |
+| 웹 페이지가 예전 모습 그대로 | 예전에 켠 `rig serve`가 아직 돌고 있습니다. `taskkill /F /IM rig.exe`로 끄고 다시 실행한 뒤 브라우저에서 Ctrl+F5. |
+| `uv run rig ...`이 `program not found` | rig 폴더가 아닌 곳에서 실행했습니다. rig 폴더로 가거나 `uv run --project <rig 경로> rig ...`로 실행하세요. |
 
 `scripts/sync-main.sh` never stops on git trouble: it cancels a merge, rebase or
 cherry-pick left half-done, stashes uncommitted changes and puts them back, fast-forwards
