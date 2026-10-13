@@ -148,7 +148,7 @@ def test_cli_report_errors(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="no shifts yet"):
         main(["report"])
     make_shift(tmp_path, {"a": "x"})
-    with pytest.raises(SystemExit, match="no shift nope"):
+    with pytest.raises(SystemExit, match=r"^rig: no shift 'nope' \(run `rig logs` to list shifts\)$"):
         main(["report", "nope"])
 
 

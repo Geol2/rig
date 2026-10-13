@@ -175,7 +175,8 @@ def test_refuses_without_shifts_or_unknown_id(repo, tmp_path):
     root = tmp_path / "rigroot"
     refuses(root, rig_for(repo), "last", "^no shifts yet$")
     interrupted_shift(repo, root)
-    refuses(root, rig_for(repo), "20000101-000000", "^no shift 20000101-000000$")
+    refuses(root, rig_for(repo), "20000101-000000", r"^no shift '20000101-000000' \(run `rig logs` to list shifts\)$")
+    refuses(root, rig_for(repo), "..", r"^no shift '\.\.' \(run `rig logs` to list shifts\)$")
 
 
 def test_refuses_ok_shift(repo, tmp_path):

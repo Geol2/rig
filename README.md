@@ -264,6 +264,8 @@ hands:
 rig run -i dataset=data/sales.csv -i weeks=8 "Weekly KPI report"
 ```
 
+Pass each input once; giving the same `-i` name twice is an error.
+
 Every hand (and the foreman) gets them after the task, and `{{ inputs.name }}` in a
 `role` is replaced with the value (empty for an optional input left unset):
 
