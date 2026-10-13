@@ -234,6 +234,9 @@ lines to `progress.log` in its folder (and `running.json` while it runs), and th
 list refreshes on its own and a newly started shift opens in the log panel by itself (or
 press **Log** on any row). When it ends, the tab title says so, and **끝나면 알림 받기**
 turns on a desktop notification.
+The history list and the log panel show the same status as `rig logs` (실행 중, 완료, 오류,
+중지됨, 미완료, 결과 불명), with a short reason beside it: the error, whether the cost limit
+or the user stopped it, or why `shift.json` can't be read.
 Start `rig serve` in the folder you run rig from (the one holding `.rig/`).
 
 Reports opened from this page have a **Fix** button on each finding. It fills the task
