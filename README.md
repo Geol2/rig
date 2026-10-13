@@ -485,6 +485,9 @@ scripts/auto.sh
 RUNS=10 BUDGET=20 caffeinate -i scripts/auto.sh
 ```
 
+On Windows, from PowerShell or cmd (it runs auto.sh with Git Bash): `scripts\auto.cmd` or
+`scripts\auto.cmd 5 10` (MAX_COST per run, RUNS).
+
 `scripts/sync-main.sh` never stops on git trouble: it cancels a merge, rebase or
 cherry-pick left half-done, stashes uncommitted changes and puts them back, fast-forwards
 when local main is behind, and replays unpushed local commits on top of the remote. If
