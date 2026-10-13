@@ -203,6 +203,23 @@ def _alive(pid: int) -> bool:
     return True
 
 
+class ShiftNotFound(ValueError):
+    """No shift by that id (or no shifts at all); the message says which."""
+
+
+def find_shift(shifts_dir: Path, which: str) -> Path:
+    """Shift `which` (`last` or an id) in shifts_dir; an id that points outside it counts as no shift."""
+    if which == "last":
+        shifts = sorted(d for d in shifts_dir.iterdir() if d.is_dir()) if shifts_dir.is_dir() else []
+        if not shifts:
+            raise ShiftNotFound("no shifts yet")
+        return shifts[-1]
+    d = (shifts_dir / which).resolve()
+    if d.parent != shifts_dir.resolve() or not d.is_dir():
+        raise ShiftNotFound(f"no shift {which!r} (run `rig logs` to list shifts)")
+    return d
+
+
 class ResumeError(ValueError):
     """`rig run --resume` can't continue that shift; the message says why."""
 
@@ -262,16 +279,10 @@ def _why(summary: dict[str, Any]) -> str:
 
 def load_resume(root: Path, rig: Rig, which: str) -> Resume:
     """Read shift `which` (`last` or an id) and check it can be continued; creates nothing."""
-    shifts_dir = root / ".rig" / "shifts"
-    if which == "last":
-        shifts = sorted(d for d in shifts_dir.iterdir() if d.is_dir()) if shifts_dir.is_dir() else []
-        if not shifts:
-            raise ResumeError("no shifts yet")
-        shift_dir = shifts[-1]
-    else:
-        shift_dir = shifts_dir / which
-        if not shift_dir.is_dir():
-            raise ResumeError(f"no shift {which}")
+    try:
+        shift_dir = find_shift(root / ".rig" / "shifts", which)
+    except ShiftNotFound as e:
+        raise ResumeError(str(e)) from None
     old = shift_dir.name
     info = live(shift_dir)
     if info:

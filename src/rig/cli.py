@@ -77,7 +77,10 @@ def _parse_inputs(pairs: list[str]) -> dict[str, str]:
         name, sep, value = pair.partition("=")
         if not sep or not name.strip():
             sys.exit(f"rig: bad input {pair!r}; expected -i name=value")
-        values[name.strip()] = value
+        name = name.strip()
+        if name in values:
+            sys.exit(f"rig: input {name!r} given twice (pass each -i name only once)")
+        values[name] = value
     return values
 
 
@@ -171,7 +174,7 @@ def _outputs(shift: Path, summary: dict) -> list[tuple[str, Path]]:
 
 def cmd_logs(args: argparse.Namespace) -> None:
     from rig.report import read_summary
-    from rig.runner import live
+    from rig.runner import ShiftNotFound, find_shift, live
 
     shifts_dir = Path(args.file).resolve().parent / ".rig" / "shifts"
     shifts = sorted(d for d in shifts_dir.iterdir() if d.is_dir()) if shifts_dir.is_dir() else []
@@ -191,9 +194,10 @@ def cmd_logs(args: argparse.Namespace) -> None:
             task = (summary.get("task") or (info or {}).get("task") or "").strip().splitlines()
             print(f"{s.name}  {mode:<8}  {status:<10}  {price:>9}  {branch}{task[0][:60] if task else ''}")
         return
-    shift = shifts[-1] if args.shift == "last" else shifts_dir / args.shift
-    if not shift.is_dir():
-        sys.exit(f"rig: no shift {args.shift}")
+    try:
+        shift = find_shift(shifts_dir, args.shift)
+    except ShiftNotFound as e:
+        sys.exit(f"rig: {e}")
     summary, reason = read_summary(shift)
     head = []
     if reason is not None:
@@ -217,14 +221,15 @@ def cmd_logs(args: argparse.Namespace) -> None:
 
 def cmd_report(args: argparse.Namespace) -> None:
     from rig import report
+    from rig.runner import ShiftNotFound, find_shift
 
     shifts_dir = Path(args.file).resolve().parent / ".rig" / "shifts"
-    shifts = sorted(shifts_dir.iterdir()) if shifts_dir.is_dir() else []
-    if not shifts:
+    if not (shifts_dir.is_dir() and any(d.is_dir() for d in shifts_dir.iterdir())):
         sys.exit("rig: no shifts yet")
-    shift = shifts[-1] if args.shift == "last" else shifts_dir / args.shift
-    if not shift.is_dir():
-        sys.exit(f"rig: no shift {args.shift}")
+    try:
+        shift = find_shift(shifts_dir, args.shift)
+    except ShiftNotFound as e:
+        sys.exit(f"rig: {e}")
     path = report.write(shift)
     print(f"report → {path}")
     if not args.no_open:

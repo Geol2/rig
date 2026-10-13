@@ -230,18 +230,18 @@ Keep items small enough for one reviewed change. Add context under an item when 
   맞지 않는 `{{ … inputs … }}`/`{{ input… }}` 형태가 있으면 해당 hand와 원문을 짚어 거부하세요. README
   inputs 절에 이름 규칙 한 줄. 완료 기준: `tests/test_inputs.py`에 하이픈·공백·따옴표 이름, `{{ inputs.due-date }}`,
   `{{ input.x }}`가 `rig check`에서 거부되는 테스트와, 모든 템플릿과 `self.rig.yaml`이 여전히 로드되는지 확인.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **CLI 인자 검증: 중복 `-i`와 shift id 경로**: `cli.py` `_parse_inputs`는 `-i n=a -i n=b`에서
+- [x] **CLI 인자 검증: 중복 `-i`와 shift id 경로**: `cli.py` `_parse_inputs`는 `-i n=a -i n=b`에서
   앞 값을 조용히 버립니다. `cmd_logs`와 `cmd_report`는 `shifts_dir / args.shift`를 그대로 써서
   `rig report ..`가 `.rig/report.html`을 쓰고 `rig logs ../..`가 shift가 아닌 폴더의 `*.md`를
   출력합니다(`serve.py` `App._shift_dir`은 이미 부모 폴더를 확인함). 같은 이름이 두 번 오면
   "input 'n' given twice"로 종료하고, shift id는 `_shift_dir`처럼 `.rig/shifts` 바로 아래 폴더인지
   확인하는 공용 함수로 고르세요(`last`는 그대로). 완료 기준: `tests/test_cli.py`에 중복 `-i`, `..`,
   `../..`, 존재하지 않는 id가 각각 명확한 메시지로 종료되는지 테스트.
+  Note: `runner.find_shift` is shared by `rig logs`, `rig report` and `rig run --resume` ("no shift '<id>' (run `rig logs` to list shifts)"); `report last` now skips stray files. serve.py's `_shift_dir` is unchanged.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
 
 ## Needs a design first
 

@@ -286,6 +286,36 @@ def test_report_of_broken_shift_json(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().out.startswith("report → ")
 
 
+@pytest.mark.parametrize("argv", [["logs", ".."], ["logs", "../.."], ["logs", "nope"],
+                                  ["report", ".."], ["report", "../.."], ["report", "nope", "--no-open"]])
+def test_logs_and_report_refuse_ids_outside_shifts(tmp_path, monkeypatch, capsys, argv):
+    _shift(tmp_path, "20250101-000000", {"ok": True})
+    (tmp_path / "notes.md").write_text("not a shift", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        main(argv)
+    assert _exit_message(excinfo) == f"rig: no shift {argv[1]!r} (run `rig logs` to list shifts)"
+    assert capsys.readouterr().out == ""
+    assert not (tmp_path / ".rig" / "report.html").exists()
+    assert not (tmp_path / "report.html").exists()
+
+
+@pytest.mark.parametrize("command", ["logs", "report"])
+def test_logs_and_report_last_without_shifts(tmp_path, monkeypatch, command):
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        main([command, "last"])
+    assert _exit_message(excinfo) == "rig: no shifts yet"
+
+
+def test_report_last_skips_files(tmp_path, monkeypatch):
+    d = _shift(tmp_path, "20250101-000000", {"ok": True})
+    (tmp_path / ".rig" / "shifts" / "zz-stray.txt").write_text("not a shift", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    main(["report", "last", "--no-open"])
+    assert (d / "report.html").exists()
+
+
 def test_check_malformed_yaml_exits_with_error(tmp_path, monkeypatch):
     (tmp_path / "rig.yaml").write_text("name: bad\nhands: [unclosed\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -350,6 +380,32 @@ def test_run_resume_refuses_task_and_inputs(tmp_path, monkeypatch):
         with pytest.raises(SystemExit) as excinfo:
             main(argv)
         assert _exit_message(excinfo) == "rig: --resume reuses the old shift's task and inputs; don't pass a task or -i"
+
+
+def test_run_duplicate_input_exits_before_reading_stdin(tmp_path, monkeypatch):
+    (tmp_path / "rig.yaml").write_text("name: t\ninputs:\n  n: {}\nhands:\n  a: {role: A}\n", encoding="utf-8")
+
+    class NoStdin:
+        def read(self, *args):
+            raise AssertionError("stdin read")
+
+    monkeypatch.setattr(sys, "stdin", NoStdin())
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "--dry", "-i", "n=a", "-i", " n =b"])
+    assert _exit_message(excinfo) == "rig: input 'n' given twice (pass each -i name only once)"
+    assert not (tmp_path / ".rig").exists()
+
+
+@pytest.mark.parametrize("which", ["..", "../..", "nope"])
+def test_run_resume_refuses_unknown_or_outside_id(tmp_path, monkeypatch, which):
+    (tmp_path / "rig.yaml").write_text("name: t\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    _shift(tmp_path, "20250101-000000", {"rig": "t", "mode": "lines", "ok": False, "task": "go"})
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "--resume", which])
+    assert _exit_message(excinfo) == f"rig: no shift {which!r} (run `rig logs` to list shifts)"
+    assert [d.name for d in (tmp_path / ".rig" / "shifts").iterdir()] == ["20250101-000000"]
 
 
 def test_run_resume_of_ok_shift(tmp_path, monkeypatch):
