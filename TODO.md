@@ -238,10 +238,63 @@ Keep items small enough for one reviewed change. Add context under an item when 
   확인하는 공용 함수로 고르세요(`last`는 그대로). 완료 기준: `tests/test_cli.py`에 중복 `-i`, `..`,
   `../..`, 존재하지 않는 id가 각각 명확한 메시지로 종료되는지 테스트.
   Note: `runner.find_shift` is shared by `rig logs`, `rig report` and `rig run --resume` ("no shift '<id>' (run `rig logs` to list shifts)"); `report last` now skips stray files. serve.py's `_shift_dir` is unchanged.
+- [x] **`rig serve`의 실행 상태를 `rig logs`와 같게 표시**: 로그 뷰어 pill은 `serve.py` JS `pollLog`의
+  `s.running ? 'running' : s.ok === false ? 'incomplete' : 'done'`이라, `App.shift_log`가 `ok: null`을 돌려주는
+  경우(shift.json이 아직 없거나 깨진 shift, `report.read_summary`가 `{}`를 돌려줌)에도 "완료"로 보이고
+  `finished()`가 "✓ 완료" 탭 제목과 데스크톱 알림까지 띄웁니다. 지난 실행 표(`renderShifts`)는 같은 경우 `-`를,
+  에러로 죽은 shift와 비용 상한/사용자 중지로 멈춘 shift는 구분 없이 "미완료"를 보여 줍니다(`App.shifts`와
+  `App.shift_log`는 `ok`만 넘기고 `error`/`stopped`는 넘기지 않음). `cli.py` `_status`(running / unreadable /
+  error / stopped / ok / incomplete)를 공용 함수(예: `report.status(summary, running, unreadable)`)로 옮겨
+  `cmd_logs`, `App.shifts`, `App.shift_log`가 모두 쓰게 하고, 두 API가 `status`를 돌려주게 하세요. 페이지는 이
+  값으로 pill·표·알림을 그리고(`LABEL`에 오류/중지됨/읽을 수 없음 추가, "✓"는 `ok`일 때만), 에러·중지 이유를
+  pill 옆에 짧게 표시합니다. 완료 기준: `tests/test_serve.py`에 shift.json 없는 끝난 shift, 잘린 shift.json,
+  `error`가 있는 shift, `stopped: "budget"`인 shift에서 `shift_log()`/`shifts()`의 `status`가 각각 incomplete /
+  unreadable / error / stopped인지 확인하는 테스트, 기존 `test_cli.py`의 `rig logs` 상태 테스트는 그대로 통과.
+  Note: `report.status`/`report.status_reason` (moved from `cli._status`) are shared by `rig logs`, `App.shifts` and `App.shift_log`, which now return `status` and `reason` (error text cut to 80 chars, stopped → "budget"/"user", unreadable → read_summary's reason); the page shows 오류/중지됨/결과 불명 with the reason, and "✓" only for ok. The top "내 실행" panel still uses `run.status`.
 
 ## Backlog
 
 From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
+- [ ] **`run` 명령이 시간 초과되면 자식 프로세스까지 끝내기**: `tools.py` `Toolbox._run`은
+  `subprocess.run(..., timeout=policy.timeout)`을 쓰는데, 시간 초과 때 직접 띄운 프로세스만 kill합니다.
+  `uv run pytest`처럼 손자 프로세스(python/pytest)가 생기는 명령은 그 손자가 계속 돌고, Windows에서는
+  `subprocess.run`이 kill 뒤 `communicate()`로 출력 파이프가 닫히길 기다려서 손자가 파이프를 잡고 있는 동안
+  hand가 멈춘 채 shift 전체가 진행되지 않을 수 있습니다(POSIX에서도 고아 프로세스가 worktree 커밋·삭제 뒤에
+  파일을 쓰거나 CPU를 계속 씀). 새 프로세스 그룹으로 띄우고(POSIX `start_new_session=True`, Windows
+  `CREATE_NEW_PROCESS_GROUP`) 시간 초과 때 그룹 전체를 끝낸 뒤(POSIX `os.killpg`, Windows
+  `taskkill /T /F /PID`) 남은 출력만 읽어 지금처럼 `[timed out after Ns]`와 출력 끝부분을 돌려주세요. 완료 기준:
+  `tests/test_run.py`에 `python -c`로 잠자는 손자 프로세스를 띄우고 자기 pid를 파일에 쓰는 명령을 `timeout=1`로
+  실행했을 때 몇 초 안에 `[timed out after 1s]`로 돌아오고 손자 프로세스가 더는 살아 있지 않은지 확인하는
+  테스트(기존 `test_timeout`은 그대로 통과).
+- [ ] **리포트가 끝나지 못한 리뷰를 "문제 없음"처럼 보이지 않게**: `report.py` `render`는 shift가
+  `ok: false`일 때 헤더에 `incomplete`만 붙이고 shift.json의 `error`나 `stopped`(비용 상한/사용자 중지) 이유는
+  보여 주지 않습니다. 또 reviewer hand가 `max_tokens`, `refusal`, 에러, 중지로 끝나 findings JSON을 못 냈으면
+  `findings_of`가 `None`이라 그 hand는 표에서 그냥 빠지고, 다른 hand도 아무것도 못 찾았으면 "0 findings"로
+  보여 리뷰가 깨끗하게 끝난 것처럼 읽힙니다. 헤더에 `rig logs`와 같은 상태와 이유(`✗ shift failed: …`,
+  `cost limit $X reached` 등)를 표시하고, findings 표 위에 "결과를 내지 못한 hand: security (max_tokens)"처럼
+  `stop_reason`이 `end_turn`이 아니면서 findings가 없는 hand를 경고로 나열하세요(output.schema가 있는 hand만
+  대상). 완료 기준: `tests/test_report.py`에 `error`/`stopped`가 있는 shift.json의 헤더에 이유가 나오는지,
+  `stop_reason: "max_tokens"`이고 JSON이 아닌 출력의 hand가 경고에 이름과 함께 나오는지, 모두 정상인 shift에는
+  경고가 없는지 확인하는 테스트.
+- [ ] **`rig serve` 페이지에서 중단된 shift 이어 하기**: `rig run --resume`은 CLI에만 있고 serve 페이지에는
+  없습니다(`serve.py`에 resume 관련 코드 없음). 그래서 페이지로 실행하던 사용자는 비용 상한이나 **Stop**으로
+  멈춘 shift를 이어 하려면 터미널로 가서 shift id를 찾아야 합니다. `App.start`에 `resume: str | None`을 받아
+  `runner.load_resume(root, rig, resume)`로 확인한 뒤(`ResumeError`는 지금 오류처럼 페이지에 표시) `run_shift(...,
+  resume=...)`로 넘기고, 이때 task·inputs는 받지 않습니다. 지난 실행 표에서 상태가 error/stopped/incomplete이고
+  shift.json `worktrees[]`에 커밋된 항목이 있는 행에 "이어 하기" 버튼을 보이고(`App.shifts`가 `resumable` 플래그를
+  돌려줌), 누르면 shift.json `rig`와 이름이 같은 rig 파일로 실행합니다(그런 파일이 없거나 둘 이상이면 버튼 대신
+  이유를 표시). README Web page 절에 한 줄. 완료 기준: `tests/test_serve.py`에 끊긴 shift(가짜 worker,
+  `tests/conftest.py`의 `repo` fixture)를 `App.start(..., resume=<id>)`로 이어 받아 새 shift.json에
+  `resumed_from`이 기록되는지, ok인 shift는 `ValueError`로 거부되는지, `shifts()`의 `resumable`이 맞는지 테스트.
+- [ ] **`rig serve`에서 실행 전에 rig 경고 보여 주기**: `rig check`와 `rig run` 시작 때 나오는
+  `Rig.hand_warnings()`(crew에 없는 hand, line에 없는 hand)와 `cost.price_warnings`(가격 없는 모델 → 비용 상한이
+  안 먹음)가 serve 페이지에서는 실행을 누른 뒤 로그에만 나옵니다(`serve.py` `App.rigs`는 이를 돌려주지 않음).
+  페이지 사용자는 상한을 믿고 실행한 뒤에야 알게 됩니다. `App.rigs()`의 각 항목에 `warnings` 목록을 넣고, 페이지의
+  rig 정보 영역(단계·폴더 표시 근처)에 경고로 표시하세요. 비용 상한 입력값을 바꾸면 그 값 기준으로 가격 경고
+  문구가 달라지므로 `price_warnings(rig.models(), rig.max_cost_usd)` 기준으로 고정해도 됩니다. 완료 기준:
+  `tests/test_serve.py`에 crew에 없는 hand가 있는 rig와 `cost.PRICES`에 없는 모델을 쓰는 rig에서 `rigs()`의
+  `warnings`에 해당 문구가 들어 있고, 경고 없는 rig는 빈 목록인지 확인하는 테스트.
 
 ## Needs a design first
 

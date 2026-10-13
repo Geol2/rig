@@ -43,6 +43,31 @@ def read_summary(shift_dir: Path) -> tuple[dict[str, Any], str | None]:
     return data, None
 
 
+def status(summary: dict, running: bool, unreadable: bool = False) -> str:
+    """How a shift stands: running, unreadable, error, stopped, ok or incomplete."""
+    if running:
+        return "running"
+    if unreadable:  # a broken shift.json: no telling how the shift ended
+        return "unreadable"
+    if summary.get("error"):  # a crash or "interrupted" says more than the stop that may have led to it
+        return "error"
+    if summary.get("stopped"):
+        return "stopped"
+    return "ok" if summary.get("ok") else "incomplete"
+
+
+def status_reason(status: str, summary: dict, unreadable_reason: str | None = None) -> str | None:
+    """A short why for a status: the error, the stop ("budget" or "user"), or why shift.json can't be read."""
+    if status == "error":
+        reason = " ".join(str(summary["error"]).split())
+        return reason if len(reason) <= 80 else reason[:79] + "…"
+    if status == "stopped":
+        return "budget" if summary["stopped"] == "budget" else "user"
+    if status == "unreadable":
+        return unreadable_reason
+    return None
+
+
 def collect(shift_dir: Path) -> dict[str, Any]:
     """Everything the page shows, read from a shift directory."""
     summary, _ = read_summary(shift_dir)

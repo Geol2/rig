@@ -136,18 +136,6 @@ def cmd_run(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _status(summary: dict, running: bool, unreadable: bool = False) -> str:
-    if running:
-        return "running"
-    if unreadable:  # a broken shift.json: no telling how the shift ended
-        return "unreadable"
-    if summary.get("error"):  # a crash or "interrupted" says more than the stop that may have led to it
-        return "error"
-    if summary.get("stopped"):
-        return "stopped"
-    return "ok" if summary.get("ok") else "incomplete"
-
-
 def _stop_line(summary: dict) -> str:
     if summary["stopped"] != "budget":
         return "✗ stopped: stopped by user"
@@ -173,7 +161,7 @@ def _outputs(shift: Path, summary: dict) -> list[tuple[str, Path]]:
 
 
 def cmd_logs(args: argparse.Namespace) -> None:
-    from rig.report import read_summary
+    from rig.report import read_summary, status as shift_status
     from rig.runner import ShiftNotFound, find_shift, live
 
     shifts_dir = Path(args.file).resolve().parent / ".rig" / "shifts"
@@ -186,7 +174,7 @@ def cmd_logs(args: argparse.Namespace) -> None:
         branch_width = max((len(m.get("branch") or "") for m, _ in read), default=0)
         for s, (summary, reason) in zip(shifts, read):
             info = live(s)
-            status = _status(summary, bool(info), reason is not None)
+            status = shift_status(summary, bool(info), reason is not None)
             # Shifts from before cost tracking have no totals; a running shift has no shift.json numbers yet.
             price = usd(summary["totals"].get("cost_usd")) if "totals" in summary and not info else ""
             mode = "" if info else summary.get("mode", "")

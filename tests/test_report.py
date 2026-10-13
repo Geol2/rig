@@ -50,6 +50,25 @@ def test_read_summary(tmp_path, monkeypatch):
     assert len(reason) == 80 and reason.endswith("…") and "\n" not in reason and "  " not in reason
 
 
+def test_status_and_reason():
+    crashed = {"ok": False, "error": "RuntimeError: boom", "stopped": "budget"}
+    assert report.status(crashed, running=True, unreadable=True) == "running"  # running wins over all
+    assert report.status(crashed, False, unreadable=True) == "unreadable"
+    assert report.status(crashed, False) == "error"  # the error says more than the stop
+    assert report.status({"stopped": "stopped"}, False) == "stopped"
+    assert report.status({"ok": True}, False) == "ok"
+    assert report.status({}, False) == "incomplete"
+    assert report.status_reason("error", crashed) == "RuntimeError: boom"
+    long = report.status_reason("error", {"error": "word\n" * 40})
+    assert len(long) == 80 and long.endswith("…") and "\n" not in long
+    assert report.status_reason("stopped", {"stopped": "budget"}) == "budget"
+    assert report.status_reason("stopped", {"stopped": "stopped"}) == "user"
+    assert report.status_reason("unreadable", {}, "bad JSON") == "bad JSON"
+    assert report.status_reason("ok", {"ok": True}) is None
+    assert report.status_reason("incomplete", {}) is None
+    assert report.status_reason("running", crashed) is None
+
+
 def test_collect_with_broken_shift_json(tmp_path):
     d = make_shift(tmp_path, {"a": "## A", "b": json.dumps({"findings": [finding("high", "a.py", 1)]})})
     (d / "shift.json").write_text('{"rig": "x", "ok": tr', encoding="utf-8")

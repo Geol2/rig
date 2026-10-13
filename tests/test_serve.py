@@ -306,6 +306,44 @@ def test_history_survives_broken_shift_json(server):
     assert app.shift_log(broken.name, 0)["ok"] is None
 
 
+def test_history_and_log_status_match_rig_logs(tmp_path):
+    app = App(tmp_path)
+    shifts = {
+        "20261009-120000": None,  # ended without a shift.json
+        "20261009-120001": '{"rig": "x", "ok": tr',
+        "20261009-120002": json.dumps({"ok": False, "error": "RuntimeError: boom"}),
+        "20261009-120003": json.dumps({"ok": False, "stopped": "budget"}),
+        "20261009-120004": json.dumps({"ok": False, "stopped": "stopped"}),
+        "20261009-120005": json.dumps({"ok": True}),
+        "20261009-120006": json.dumps({"ok": False, "error": "x " * 60, "stopped": "budget"}),
+    }
+    for name, text in shifts.items():
+        d = app.shifts_dir / name
+        d.mkdir(parents=True)
+        (d / "progress.log").write_text("done\n", encoding="utf-8")
+        if text is not None:
+            (d / "shift.json").write_text(text, encoding="utf-8")
+    want = [("incomplete", None), ("unreadable", ...), ("error", "RuntimeError: boom"),
+            ("stopped", "budget"), ("stopped", "user"), ("ok", None), ("error", ...)]
+    rows = {r["id"]: r for r in app.shifts()}
+    for name, (status, reason) in zip(shifts, want):
+        for got in (rows[name], app.shift_log(name, 0)):
+            assert got["status"] == status and not got["running"], name
+            if reason is ...:
+                assert isinstance(got["reason"], str) and got["reason"], name
+            else:
+                assert got["reason"] == reason, name
+    long = app.shift_log("20261009-120006", 0)["reason"]
+    assert len(long) <= 80 and long.endswith("…") and "  " not in long
+    assert rows["20261009-120001"]["ok"] is None and rows["20261009-120005"]["ok"] is True  # old keys stay
+
+
+def test_page_shows_status_labels_and_reason(server):
+    _, base = server
+    page = call(base + "/")[1]
+    assert "결과 불명" in page and 'id="v-reason"' in page and "reasonText" in page
+
+
 def test_history_counts_findings_of_older_shift_json(server):
     app, base = server
     d = app.shifts_dir / "20261009-120000"

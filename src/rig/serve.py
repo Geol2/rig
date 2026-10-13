@@ -233,8 +233,10 @@ class App:
         for d in sorted(self.shifts_dir.iterdir(), reverse=True):
             if not d.is_dir():
                 continue
-            s = report.read_summary(d)[0]  # a broken shift.json reads as {}: ok None, not a success
+            s, unreadable = report.read_summary(d)  # a broken shift.json reads as {}: ok None, not a success
             info = live(d)  # started here or by `rig run` in a terminal
+            running = bool(info) or bool(self.run and self.run.status == "running" and self.run.shift_id == d.name)
+            status = report.status(s, running, unreadable is not None)
             task = (s.get("task") or (info or {}).get("task") or "").strip().splitlines()
             findings = s.get("findings")
             if not isinstance(findings, int):  # older shift.json: count from the outputs
@@ -243,7 +245,7 @@ class App:
                 "id": d.name, "rig": s.get("rig") or (info or {}).get("rig", ""), "ok": s.get("ok"),
                 "task": task[0] if task else "",
                 "cost": usd(s["totals"].get("cost_usd")) if "totals" in s else "", "findings": findings,
-                "running": bool(info) or bool(self.run and self.run.status == "running" and self.run.shift_id == d.name),
+                "running": running, "status": status, "reason": report.status_reason(status, s, unreadable),
                 "log": (d / PROGRESS_LOG).exists(),
                 "prs": _prs(s),
                 "workspaces": _workspaces(s) or _workspaces(info or {}),
@@ -290,9 +292,11 @@ class App:
         if text and not text.endswith("\n"):
             lines.pop()  # half-written; it comes with the next poll
         running = bool(live(d))
-        summary = report.read_summary(d)[0]
+        summary, unreadable = report.read_summary(d)
         ok = None if running else summary.get("ok")
-        return {"lines": lines[since:], "total": len(lines), "running": running, "ok": ok, "prs": _prs(summary)}
+        status = report.status(summary, running, unreadable is not None)
+        return {"lines": lines[since:], "total": len(lines), "running": running, "ok": ok, "prs": _prs(summary),
+                "status": status, "reason": report.status_reason(status, summary, unreadable)}
 
     def report_html(self, shift_id: str) -> str:
         return report.render(report.collect(self._shift_dir(shift_id)),
@@ -535,7 +539,7 @@ button.danger{font:inherit;font-size:14px;border-radius:6px;padding:7px 16px;cur
 .log{font:12.5px/1.55 var(--mono);background:var(--code);border-radius:6px;padding:12px;max-height:340px;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:0}
 .pill{font-size:12px;font-weight:600;padding:1px 9px;border-radius:999px;border:1px solid currentColor}
 .pill.running{color:var(--warn)}
-a.pr.merged{color:var(--ok)}a.pr.closed{color:var(--muted)}a.pr.open{color:var(--warn)}.pill.done{color:var(--ok)}.pill.incomplete,.pill.failed,.pill.stopped{color:var(--bad)}
+a.pr.merged{color:var(--ok)}a.pr.closed{color:var(--muted)}a.pr.open{color:var(--warn)}.pill.done,.pill.ok{color:var(--ok)}.pill.incomplete,.pill.failed,.pill.stopped,.pill.error{color:var(--bad)}.pill.unreadable{color:var(--muted)}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 #viewer[hidden]{display:none}
 table{border-collapse:collapse;width:100%;font-size:14px}
@@ -598,7 +602,7 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
       <button class="secondary" id="notify" type="button" hidden>끝나면 알림 받기</button></div>
   </section>
   <section class="panel" id="viewer" aria-labelledby="viewer-h" hidden>
-    <div class="row"><h2 id="viewer-h">실행 로그</h2><span class="pill" id="v-pill"></span>
+    <div class="row"><h2 id="viewer-h">실행 로그</h2><span class="pill" id="v-pill" role="status"></span><span class="small muted" id="v-reason"></span>
       <span id="v-pr"></span>
       <a id="v-report" target="_blank">결과 리포트 열기 →</a>
       <button class="secondary" id="v-close" type="button">닫기</button></div>
@@ -786,7 +790,11 @@ $('stop').addEventListener('click', async () => {
   try { await api('/api/stop', {}); poll(); } catch (e) { $('run-error').textContent = e.message; }
 });
 
-const LABEL = {running: '실행 중', done: '완료', stopped: '중지됨', incomplete: '미완료', failed: '실패'};
+const LABEL = {running: '실행 중', done: '완료', stopped: '중지됨', incomplete: '미완료', failed: '실패',
+  ok: '완료', error: '오류', unreadable: '결과 불명'};
+// A shift's short why (from the server's status reason): the error, the kind of stop, or why shift.json can't be read.
+const STOP = {budget: '비용 상한 도달', user: '사용자가 중지'};
+const reasonText = s => s.status === 'stopped' ? (STOP[s.reason] || '') : (s.reason || '');
 async function poll() {
   clearTimeout(polling);
   const s = await api('/api/run?since=' + since).catch(() => null);
@@ -835,7 +843,9 @@ function renderShifts() {
   const rows = mine ? shiftRows.filter(s => s.workspaces.length && dirSet(s.workspaces) === dirSet(r.workspaces)) : shiftRows;
   if (!rows.length) { empty('선택한 설정(' + r.name + ')의 프로젝트로 실행한 기록이 없습니다. 체크를 끄면 모든 실행을 볼 수 있습니다.'); return; }
   for (const s of rows) {
-    const state = s.running ? '실행 중' : s.ok === true ? '완료' : s.ok === false ? '미완료' : '-';
+    const state = el('td', {}, LABEL[s.status] || s.status);
+    const why = reasonText(s);
+    if (why) state.append(el('div', {class: 'small muted', title: why}, why));
     const links = el('span', {class: 'row'});
     if (s.log) links.append(el('a', {href: '#viewer', onclick: e => { e.preventDefault(); openLog(s.id); }}, '로그'));
     if (!s.running) links.append(el('a', {href: '/shifts/' + encodeURIComponent(s.id) + '/report', target: '_blank'}, '리포트'));
@@ -846,7 +856,7 @@ function renderShifts() {
     }
     body.append(el('tr', {},
       el('td', {class: 'id'}, s.id), setting, el('td', {}, s.task),
-      el('td', {}, state), el('td', {}, prLinks(s.prs)), el('td', {class: 'num'}, String(s.findings || '')), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
+      state, el('td', {}, prLinks(s.prs)), el('td', {class: 'num'}, String(s.findings || '')), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
   }
 }
 $('hist-mine').addEventListener('change', () => {
@@ -898,24 +908,24 @@ async function pollLog() {
   const s = await api('/shifts/' + encodeURIComponent(id) + '/log?since=' + vSince).catch(() => null);
   if (!s || id !== viewing) return;
   if (s.lines.length) { const log = $('v-log'); log.textContent += s.lines.join('\n') + '\n'; log.scrollTop = log.scrollHeight; vSince = s.total; }
-  const state = s.running ? 'running' : s.ok === false ? 'incomplete' : 'done';
-  $('v-pill').className = 'pill ' + state;
-  $('v-pill').textContent = LABEL[state];
+  const state = s.status;
+  $('v-pill').className = 'pill ' + state; $('v-pill').textContent = LABEL[state] || state;
+  $('v-reason').textContent = reasonText(s);
   $('v-report').hidden = s.running;
   const prs = s.prs && s.prs.length ? s.prs : prsFromLog($('v-log').textContent);
   $('v-pr').replaceChildren(prLinks(prs));
-  if (vRunning && !s.running) finished(id, state);
+  if (vRunning && !s.running) finished(id, state, reasonText(s));
   vRunning = s.running;
   if (s.running) vTimer = setTimeout(pollLog, 1000); else loadShifts();
 }
 
 // When a run ends: the tab title says so, and a desktop notification if allowed.
 const TITLE = document.title;
-function finished(id, state) {
-  const what = (state === 'done' ? '✓ ' : '✗ ') + LABEL[state];
+function finished(id, state, reason = '') {
+  const what = (state === 'ok' || state === 'done' ? '✓ ' : '✗ ') + LABEL[state];
   document.title = what + ' · ' + TITLE;
   if (window.Notification && Notification.permission === 'granted') {
-    try { new Notification('rig 실행 ' + LABEL[state], {body: id}); } catch (e) {}
+    try { new Notification('rig 실행 ' + LABEL[state], {body: id + (reason ? ' · ' + reason : '')}); } catch (e) {}
   }
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = TITLE; });
