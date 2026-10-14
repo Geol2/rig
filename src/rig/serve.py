@@ -23,7 +23,7 @@ import yaml
 from pydantic import ValidationError
 
 from rig import report
-from rig.cost import Meter, usd
+from rig.cost import Meter, price_warnings, usd
 from rig.graph import layers
 from rig.runner import PROGRESS_LOG, Resume, ShiftEvent, live, load_resume
 from rig.spec import InputError, RigFileError, load, parse_yaml, read_rig_text
@@ -110,6 +110,7 @@ class App:
                 "publish": {"pr": rig.publish.pr, "auto_merge": rig.publish.auto_merge},
                 "workspace_ok": all(f["ok"] for f in folders),
                 "writes": writes,
+                "warnings": [*rig.hand_warnings(), *price_warnings(rig.models(), rig.max_cost_usd)],
                 "inputs": [
                     {"name": n, "description": s.description, "required": s.required and s.default is None,
                      "default": s.default_text() if s.default is not None else ""}
@@ -540,6 +541,7 @@ code{font-family:var(--mono);font-size:.9em;background:var(--code);padding:1px 4
 .rig{border:1px solid var(--line);border-radius:8px;padding:12px 14px;cursor:pointer;display:grid;gap:4px;background:var(--surface);text-align:left;font:inherit;color:inherit}
 .rig[aria-pressed=true]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
 .rig b{font-size:15px}.stages{font-family:var(--mono);font-size:12px;color:var(--muted)}
+.rig-warn{color:var(--warn);overflow-wrap:anywhere}
 .tag{display:inline-block;font-size:11px;padding:0 7px;border-radius:999px;border:1px solid currentColor;margin-left:6px;vertical-align:1px}
 .tag.read{color:var(--ok)}.tag.write{color:var(--warn)}
 .ws-rows{display:grid;gap:6px}
@@ -701,7 +703,8 @@ async function loadRigs() {
       b.append(title, el('span', {class: 'small muted'}, r.file + (r.description ? ' · ' + r.description : '')),
         el('span', {class: 'stages'}, r.stages.map(s => s.join(' | ')).join('  →  ')),
         ...r.workspaces.map(w => el('span', {class: 'small ' + (w.ok ? 'status-ok' : 'status-bad')},
-          (w.ok ? '✓ ' : '✗ 폴더 없음: ') + (w.name ? w.name + ' · ' : '') + w.path)));
+          (w.ok ? '✓ ' : '✗ 폴더 없음: ') + (w.name ? w.name + ' · ' : '') + w.path)),
+        ...(r.warnings || []).map(w => el('span', {class: 'small rig-warn'}, w)));
     }
     box.append(b);
   }

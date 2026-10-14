@@ -63,6 +63,21 @@ def test_page_and_rigs(server):
     r = rigs[0]
     assert r["stages"] == [["a"], ["b"]] and r["workspace_ok"] and not r["writes"]
     assert r["inputs"] == [{"name": "module", "description": "", "required": True, "default": ""}]
+    assert r["warnings"] == [] and "rig-warn" in page
+
+
+def test_rigs_show_the_same_warnings_as_rig_check(tmp_path):
+    (tmp_path / "crew.yaml").write_text(
+        "name: crew\nhands:\n  a: {role: A}\n  lonely: {role: B}\nforeman: {crew: [a]}\n", encoding="utf-8")
+    (tmp_path / "price.yaml").write_text(
+        "name: price\nmax_cost_usd: 5\nhands:\n  a: {role: A, model: made-up-model}\n", encoding="utf-8")
+    (tmp_path / "broken.yaml").write_text("name: b\nhands: {}\n", encoding="utf-8")
+    rigs = {r["file"]: r for r in App(tmp_path).rigs()}
+    [crew] = rigs["crew.yaml"]["warnings"]
+    assert "hands not on foreman.crew never run" in crew and "lonely" in crew
+    [price] = rigs["price.yaml"]["warnings"]
+    assert "no price for model 'made-up-model'" in price and "cost limit $" in price
+    assert "error" in rigs["broken.yaml"] and "warnings" not in rigs["broken.yaml"]
 
 
 def test_unreadable_rig_files_show_their_error(tmp_path):
