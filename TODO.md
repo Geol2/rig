@@ -325,18 +325,19 @@ Keep items small enough for one reviewed change. Add context under an item when 
   안 됨·remote 없음이 각각 메시지를 내고 모두 정상이면 빈 목록인지, `tests/test_cli.py`에 preflight가 실패하면 `rig run`이
   worker를 부르기 전에 종료하고 `--dry`에서는 확인하지 않는지 테스트.
   Note: `publish.check_rig(rig, root)` finds each workspace's repo and calls `preflight` (`gh auth status` once, `git remote get-url <publish.remote>` per repo, each with a 15 s timeout via `run_cmd(timeout=)`); `rig run` (also `--resume`) exits with the list before any worktree or hand, `App.start` raises it as a 400, both skip it with `--dry`, and `rig check` prints `⚠ publish.pr: …` warnings.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **YAML 문법 오류가 있는 rig 파일이 `rig serve` 목록에서 사라지지 않게**: `serve.py` `App.rig_files`는
+- [x] **YAML 문법 오류가 있는 rig 파일이 `rig serve` 목록에서 사라지지 않게**: `serve.py` `App.rig_files`는
   `yaml.safe_load`가 `YAMLError`를 내면 `continue`로 건너뛰어, 들여쓰기 하나 틀린 `rig.yaml`이 페이지에서 오류 표시 없이
   그냥 없어집니다(검증 오류나 UTF-8이 아닌 파일은 `rigs()`가 `error`와 함께 보여 주는 것과 다름). 파싱이 안 되는 파일 중
   이름이 `rig.yaml`/`rig.yml`이거나 `*.rig.yaml`/`*.rig.yml`이거나 줄 맨 앞에 `hands:`가 있는 파일은 목록에 넣고,
   `rigs()`가 `load`의 `YAMLError`를 줄·열 번호가 있는 `error`로 돌려주게 하세요(rig가 아닌 `other.yaml` 등은 지금처럼 무시).
   완료 기준: `tests/test_serve.py`에 탭/들여쓰기 오류가 있는 `rig.yaml`과 `x.rig.yaml`이 `rigs()`에 `error`(줄 번호 포함)로
   나오고, 문법 오류가 있는 rig 아닌 `notes.yaml`은 여전히 빠지는지, `_rig_path`로 실행하려 하면 오류가 나는지 테스트.
+  Note: `spec.parse_yaml` turns PyYAML errors into a one-line RigFileError ("YAML syntax error at line L, column C: <problem> (see line N); <hint>", the hint naming tabs or indentation/`:`), shown on `rig serve` cards, as a 400 from /api/run and /api/workspaces (which now checks the file's syntax with `spec.check_yaml_syntax` before rewriting it, so the line is the file's and a repeated `workspace:` is still repaired), and by `rig check`; `App.rig_files` keeps an unparsable file listed when it's named `rig.yaml`/`*.rig.yaml` (or `.yml`) or has a `hands:` line.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **`max_turns`로 멈춘 hand가 한 일을 잃지 않게**: `hand.py` `ClaudeWorker._loop`는 턴이 다 되면 `result.output`을
   `[stopped after N turns]`로 덮어써서, 그 hand의 `.md`에도, foreman이 받는 `runner.py` `delegate`의 ToolError("coder did
   not finish cleanly (max_turns): [stopped after 20 turns]")에도 무엇을 했는지가 남지 않습니다. foreman은 어떤 파일이 이미
