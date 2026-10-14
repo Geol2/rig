@@ -140,6 +140,8 @@ hands:
 Commands run in the workspace with no shell, so pipes, redirects, `&&`, `;` and `$()`
 are rejected. Arguments pointing outside the workspace are rejected too. A failing command
 isn't a tool error: the hand gets `[exit code N]` and the output and decides what to do.
+On timeout the command and every process it started are killed, and the hand gets
+`[timed out after Ns]` with the output so far.
 Allow only what the hands need, since an allowed program can do anything it supports
 (e.g. allowing `python` allows any script).
 

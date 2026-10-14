@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import time
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -228,6 +229,33 @@ def _tail(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return f"[{len(text) - limit} earlier chars cut]\n" + text[-limit:]
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    # Kill a `run` command and every process it started (it leads its own process group).
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        except OSError:
+            pass
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            return
+        except (ProcessLookupError, PermissionError):
+            pass
+    proc.kill()
+
+
+def _abandon(proc: subprocess.Popen) -> None:
+    # Give up on a `run` command without leaving a zombie or an open pipe; never blocks for long.
+    try:
+        proc.kill()
+        if proc.stdout is not None:
+            proc.stdout.close()
+        proc.wait(timeout=2)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
 
 
 def glob_regex(pattern: str) -> re.Pattern[str]:
@@ -452,20 +480,35 @@ class Toolbox:
         if exe is None:
             raise ToolError(f"executable not found: {argv[0]}")
 
+        # Own process group, so a timeout can kill everything the command started.
+        group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+        proc = subprocess.Popen(
+            [exe, *argv[1:]],
+            cwd=self.workspace,
+            env=run_env(self.env if self.env is not None else os.environ, policy.env_passthrough),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            **group,
+        )
         try:
-            proc = subprocess.run(
-                [exe, *argv[1:]],
-                cwd=self.workspace,
-                env=run_env(self.env if self.env is not None else os.environ, policy.env_passthrough),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=policy.timeout,
-            )
+            out, _ = proc.communicate(timeout=policy.timeout)
         except subprocess.TimeoutExpired as e:
-            partial = (e.output or b"").decode("utf-8", errors="replace")
+            _kill_tree(proc)
+            try:
+                # Returns everything captured, including output from before the timeout.
+                out, _ = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired as e2:
+                # Something outside the group still holds the pipe; don't hang on it.
+                _abandon(proc)
+                out = e2.output or e.output
+            partial = (out or b"").decode("utf-8", errors="replace")
             return f"[timed out after {policy.timeout}s]\n{_tail(partial, policy.max_output)}"
-        output = proc.stdout.decode("utf-8", errors="replace")
+        except BaseException:
+            _kill_tree(proc)
+            _abandon(proc)
+            raise
+        output = out.decode("utf-8", errors="replace")
         return f"[exit code {proc.returncode}]\n{_tail(output, policy.max_output)}"
 
     def _read(self, rel: str, offset: int, limit: int) -> str:

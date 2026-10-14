@@ -251,12 +251,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   `error`가 있는 shift, `stopped: "budget"`인 shift에서 `shift_log()`/`shifts()`의 `status`가 각각 incomplete /
   unreadable / error / stopped인지 확인하는 테스트, 기존 `test_cli.py`의 `rig logs` 상태 테스트는 그대로 통과.
   Note: `report.status`/`report.status_reason` (moved from `cli._status`) are shared by `rig logs`, `App.shifts` and `App.shift_log`, which now return `status` and `reason` (error text cut to 80 chars, stopped → "budget"/"user", unreadable → read_summary's reason); the page shows 오류/중지됨/결과 불명 with the reason, and "✓" only for ok. The top "내 실행" panel still uses `run.status`.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`run` 명령이 시간 초과되면 자식 프로세스까지 끝내기**: `tools.py` `Toolbox._run`은
+- [x] **`run` 명령이 시간 초과되면 자식 프로세스까지 끝내기**: `tools.py` `Toolbox._run`은
   `subprocess.run(..., timeout=policy.timeout)`을 쓰는데, 시간 초과 때 직접 띄운 프로세스만 kill합니다.
   `uv run pytest`처럼 손자 프로세스(python/pytest)가 생기는 명령은 그 손자가 계속 돌고, Windows에서는
   `subprocess.run`이 kill 뒤 `communicate()`로 출력 파이프가 닫히길 기다려서 손자가 파이프를 잡고 있는 동안
@@ -267,6 +262,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   `tests/test_run.py`에 `python -c`로 잠자는 손자 프로세스를 띄우고 자기 pid를 파일에 쓰는 명령을 `timeout=1`로
   실행했을 때 몇 초 안에 `[timed out after 1s]`로 돌아오고 손자 프로세스가 더는 살아 있지 않은지 확인하는
   테스트(기존 `test_timeout`은 그대로 통과).
+  Note: `_run` uses `Popen` in a new process group (`start_new_session` / `CREATE_NEW_PROCESS_GROUP`) and `_kill_tree` (`os.killpg` / `taskkill /T /F`); remaining output is read with a bounded second `communicate`. On Windows a grandchild whose parent already exited isn't found by `taskkill /T` (would need a Job Object), but the hand still returns within ~5s.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **리포트가 끝나지 못한 리뷰를 "문제 없음"처럼 보이지 않게**: `report.py` `render`는 shift가
   `ok: false`일 때 헤더에 `incomplete`만 붙이고 shift.json의 `error`나 `stopped`(비용 상한/사용자 중지) 이유는
   보여 주지 않습니다. 또 reviewer hand가 `max_tokens`, `refusal`, 에러, 중지로 끝나 findings JSON을 못 냈으면

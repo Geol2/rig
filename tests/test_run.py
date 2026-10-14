@@ -1,11 +1,15 @@
 import ast
 import os
+import signal
+import subprocess
+import sys
+import time
 
 import pytest
 from pydantic import ValidationError
 
 from rig.spec import Rig, RunPolicy
-from rig.tools import Toolbox, ToolError, run_env
+from rig.tools import Toolbox, ToolError, _abandon, run_env
 
 
 def box(tmp_path, *allow, timeout=30, max_output=20000, env_passthrough=(), env=None):
@@ -78,7 +82,74 @@ def test_non_path_arguments_pass(tmp_path, arg):
 
 def test_timeout(tmp_path):
     out = box(tmp_path, "python -c", timeout=1).run("run", {"command": "python -c \"import time; print('started', flush=True); time.sleep(10)\""})
-    assert out.startswith("[timed out after 1s]")
+    assert out.startswith("[timed out after 1s]") and "started" in out
+
+
+SPAWN = """\
+import subprocess, sys, time
+subprocess.Popen([sys.executable, "-c", "import os, time; open('grandchild.pid', 'w').write(str(os.getpid())); time.sleep(60)"])
+time.sleep(60)
+"""
+
+
+def _alive(pid):
+    if os.name == "nt":
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        # A killed orphan may linger as a zombie until init reaps it.
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except (OSError, IndexError):
+        return True
+
+
+def test_timeout_kills_grandchildren(tmp_path):
+    (tmp_path / "spawn.py").write_text(SPAWN, encoding="utf-8")
+    pid_file = tmp_path / "grandchild.pid"
+    start = time.monotonic()
+    out = box(tmp_path, "python", timeout=1).run("run", {"command": "python spawn.py"})
+    elapsed = time.monotonic() - start
+    deadline = time.monotonic() + 5
+    while not (pid_file.exists() and pid_file.read_text(encoding="utf-8")) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert pid_file.exists() and pid_file.read_text(encoding="utf-8"), "grandchild never wrote grandchild.pid"
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    try:
+        assert out.startswith("[timed out after 1s]"), out
+        assert elapsed < 10
+        deadline = time.monotonic() + 5
+        while _alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not _alive(pid), f"grandchild {pid} survived the timeout"
+    finally:
+        if _alive(pid):
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+            else:
+                os.kill(pid, signal.SIGKILL)
+
+
+def test_abandon_reaps_and_closes_pipe():
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], stdout=subprocess.PIPE)
+    _abandon(proc)
+    assert proc.returncode is not None and proc.stdout.closed
+    _abandon(proc)  # already gone: still no error
 
 
 def test_output_keeps_the_tail(tmp_path):
