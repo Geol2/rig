@@ -595,3 +595,21 @@ def test_page_has_resume_mode(server):
     _, base = server
     page = call(base + "/")[1]
     assert "이어서 실행" in page and "endResume" in page and "이어 하기 취소" in page
+
+
+def test_start_refuses_when_prs_cant_be_opened(tmp_path, monkeypatch):
+    from rig import publish
+
+    (tmp_path / "pr.rig.yaml").write_text("name: p\npublish: {pr: true}\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    app = App(tmp_path)
+    app._work = lambda *args: None  # nothing really runs
+    checked = []
+    monkeypatch.setattr(publish, "check_rig", lambda rig, root: checked.append(root) or ["gh isn't logged in; run `gh auth login`"])
+    with pytest.raises(ValueError) as excinfo:
+        app.start("pr.rig.yaml", "x", {}, dry=False, use_worktree=False)
+    assert str(excinfo.value) == "can't open PRs (publish.pr):\n- gh isn't logged in; run `gh auth login`"
+    assert app.run is None and checked == [tmp_path.resolve()]
+
+    checked.clear()
+    app.start("pr.rig.yaml", "x", {}, dry=True, use_worktree=False)  # --dry doesn't check
+    assert checked == [] and app.run is not None

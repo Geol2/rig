@@ -23,18 +23,63 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from rig.spec import Publish
+from rig import worktree
+from rig.spec import Publish, Rig
 
 # (args, cwd, stdin) -> (exit code, combined output). Swapped out in tests.
 Runner = Callable[[list[str], Path, str | None], tuple[int, str]]
 
+PREFLIGHT_TIMEOUT = 15  # seconds per command; `gh auth status` asks GitHub and can hang offline
 
-def run_cmd(args: list[str], cwd: Path, stdin: str | None = None) -> tuple[int, str]:
+
+def run_cmd(args: list[str], cwd: Path, stdin: str | None = None,
+            timeout: float | None = None) -> tuple[int, str]:
     try:
-        proc = subprocess.run(args, cwd=cwd, input=stdin, capture_output=True, encoding="utf-8", errors="replace")
+        proc = subprocess.run(args, cwd=cwd, input=stdin, capture_output=True, encoding="utf-8", errors="replace",
+                              timeout=timeout)
     except FileNotFoundError:
         return 127, f"{args[0]} not found; install it (GitHub CLI: https://cli.github.com) and run `gh auth login`"
+    except subprocess.TimeoutExpired:
+        return 124, f"{args[0]} timed out after {timeout:g}s"
     return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+def preflight(repos: list[Path], policy: Publish, run: Runner | None = None,
+              cwd: Path | None = None) -> list[str]:
+    """What stops PRs from being opened for these repositories: one line per problem, [] if none."""
+    if run is None:
+        def run(args: list[str], cwd: Path, stdin: str | None) -> tuple[int, str]:
+            return run_cmd(args, cwd, stdin, timeout=PREFLIGHT_TIMEOUT)
+    repos = list(dict.fromkeys(repos))
+    problems = []
+    code, _ = run(["gh", "auth", "status"], repos[0] if repos else cwd or Path.cwd(), None)
+    if code == 127:
+        problems.append("gh (GitHub CLI) isn't installed; publish.pr needs it to open PRs (https://cli.github.com)")
+    elif code == 124:
+        problems.append(f"gh auth status didn't answer in {PREFLIGHT_TIMEOUT}s (offline?); "
+                        "check your connection and run `gh auth status`")
+    elif code:
+        problems.append("gh isn't logged in; run `gh auth login`")
+    for repo in repos:
+        code, _ = run(["git", "remote", "get-url", policy.remote], repo, None)
+        if code:
+            problems.append(f"{repo.name} has no remote {policy.remote!r}; add it with "
+                            f"`git remote add {policy.remote} <url>` or set publish.remote")
+    return problems
+
+
+def check_rig(rig: Rig, root: Path, run: Runner | None = None) -> list[str]:
+    """`preflight` for a rig's workspaces (resolved against `root`); [] when it doesn't open PRs."""
+    if not rig.publish.pr:
+        return []
+    problems, repos = [], []
+    for name, folder in rig.workspace_dirs(root).items():
+        try:
+            repos.append(worktree.repo_of(folder))
+        except worktree.GitError:
+            where = f"workspace ({folder})" if name == "." else f"workspace {name} ({folder})"
+            problems.append(f"{where} isn't in a git repo; publish.pr needs one")
+    return problems + preflight(repos, rig.publish, run, cwd=root)
 
 
 @dataclass

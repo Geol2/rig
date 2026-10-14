@@ -493,3 +493,58 @@ def test_logs_without_branches_has_no_branch_column(tmp_path, monkeypatch, capsy
     monkeypatch.chdir(tmp_path)
     main(["logs"])
     assert capsys.readouterr().out.rstrip("\n") == f"20261008-100000  {'lines':<8}  {'ok':<10}  {'':>9}  plain run"
+
+
+PR_RIG = "name: t\npublish: {pr: true}\nhands:\n  a: {role: A}\n"
+PROBLEMS = ["gh isn't logged in; run `gh auth login`",
+            "proj has no remote 'origin'; add it with `git remote add origin <url>` or set publish.remote"]
+
+
+def test_run_stops_before_any_hand_when_prs_cant_be_opened(tmp_path, monkeypatch):
+    from rig import publish
+
+    (tmp_path / "rig.yaml").write_text(PR_RIG, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(publish, "check_rig", lambda rig, root: PROBLEMS)
+    monkeypatch.setattr("rig.hand.ClaudeWorker", lambda *a, **k: pytest.fail("worker created"))
+    monkeypatch.setattr("rig.runner.run_shift", lambda *a, **k: pytest.fail("shift started"))
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "go"])
+    assert _exit_message(excinfo) == ("rig: can't open PRs (publish.pr), so nothing ran:\n"
+                                      f"  - {PROBLEMS[0]}\n  - {PROBLEMS[1]}")
+    assert not (tmp_path / ".rig").exists()
+
+
+def test_run_dry_skips_the_pr_check(tmp_path, monkeypatch, capsys):
+    from rig import publish
+
+    (tmp_path / "rig.yaml").write_text(PR_RIG, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(publish, "check_rig", lambda rig, root: pytest.fail("checked"))
+    ran = []
+
+    class Shift:
+        finals, worktrees, prs, ok = [], [], [], True
+
+        def committed(self):
+            return []
+
+    async def fake_shift(rig, task, worker, **kwargs):
+        ran.append(task)
+        return Shift()
+
+    monkeypatch.setattr("rig.runner.run_shift", fake_shift)
+    main(["run", "--dry", "go"])
+    assert ran == ["go"]
+
+
+def test_check_warns_when_prs_cant_be_opened(tmp_path, monkeypatch, capsys):
+    from rig import publish
+
+    (tmp_path / "rig.yaml").write_text(PR_RIG, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(publish, "check_rig", lambda rig, root: PROBLEMS)
+    main(["check"])  # a warning, not an error
+    out = capsys.readouterr().out
+    assert "✓ t: 1 hands, 0 lines" in out
+    assert f"⚠ publish.pr: {PROBLEMS[0]}\n⚠ publish.pr: {PROBLEMS[1]}\n" in out
