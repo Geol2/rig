@@ -241,6 +241,7 @@ turns on a desktop notification.
 The history list and the log panel show the same status as `rig logs` (실행 중, 완료, 오류,
 중지됨, 미완료, 결과 불명), with a short reason beside it: the error, whether the cost limit
 or the user stopped it, or why `shift.json` can't be read.
+Runs that stopped (오류, 중지됨, 미완료) with a committed branch get an **이어 하기** button in the history table; it continues them like `rig run --resume` (the old task and inputs, always in a worktree; the cost limit can be raised before running). If the rig name in `shift.json` matches no rig file or several, the row says why instead.
 Start `rig serve` in the folder you run rig from (the one holding `.rig/`).
 
 Reports opened from this page have a **Fix** button on each finding. It fills the task

@@ -274,12 +274,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   `stop_reason: "max_tokens"`이고 JSON이 아닌 출력의 hand가 경고에 이름과 함께 나오는지, 모두 정상인 shift에는
   경고가 없는지 확인하는 테스트.
   Note: shift.json `hands[key]` now has `structured` (hand has `output.schema`); only flagged hands are listed, so older shift.json files get no hand line. `cli._stop_line` moved to `report.stop_line`, shared by `rig logs` and the report's `.notice` block under the stats (also shown by `rig serve`). `incomplete` stays in the meta line only when there's no error/stop to explain it.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`rig serve` 페이지에서 중단된 shift 이어 하기**: `rig run --resume`은 CLI에만 있고 serve 페이지에는
+- [x] **`rig serve` 페이지에서 중단된 shift 이어 하기**: `rig run --resume`은 CLI에만 있고 serve 페이지에는
   없습니다(`serve.py`에 resume 관련 코드 없음). 그래서 페이지로 실행하던 사용자는 비용 상한이나 **Stop**으로
   멈춘 shift를 이어 하려면 터미널로 가서 shift id를 찾아야 합니다. `App.start`에 `resume: str | None`을 받아
   `runner.load_resume(root, rig, resume)`로 확인한 뒤(`ResumeError`는 지금 오류처럼 페이지에 표시) `run_shift(...,
@@ -289,6 +284,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   이유를 표시). README Web page 절에 한 줄. 완료 기준: `tests/test_serve.py`에 끊긴 shift(가짜 worker,
   `tests/conftest.py`의 `repo` fixture)를 `App.start(..., resume=<id>)`로 이어 받아 새 shift.json에
   `resumed_from`이 기록되는지, ok인 shift는 `ValueError`로 거부되는지, `shifts()`의 `resumable`이 맞는지 테스트.
+  Note: `App.shifts` rows carry `resumable`/`resume_file`/`resume_problem` (`no_rig`/`many_rigs`)/`resume_task`; POST /api/run takes `resume` (task/inputs refused; `GitError` from `load_resume` is shown as a 400); the page's resume mode reuses `#fix-box`.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **`rig serve`에서 실행 전에 rig 경고 보여 주기**: `rig check`와 `rig run` 시작 때 나오는
   `Rig.hand_warnings()`(crew에 없는 hand, line에 없는 hand)와 `cost.price_warnings`(가격 없는 모델 → 비용 상한이
   안 먹음)가 serve 페이지에서는 실행을 누른 뒤 로그에만 나옵니다(`serve.py` `App.rigs`는 이를 돌려주지 않음).
