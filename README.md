@@ -113,7 +113,7 @@ Built-in tools (all confined to `workspace`):
 | `list_dir` | List a directory |
 | `glob` | Find files by pattern (`**/*.java`, `src/**/test_*.py`) |
 | `search` | Regex search over file contents, like grep; optional `glob` filter and `ignore_case` |
-| `read_file` | Read a file with line numbers; `offset`/`limit` for large files (max 2000 lines per call) |
+| `read_file` | Read a file with line numbers; `offset`/`limit` for large files (max 2000 lines per call); lines over 2000 chars are cut and a call returns at most 100,000 chars (follow the `continue with offset` hint); binary files (NUL in the first 8 KB) are refused |
 | `write_file` | Create or overwrite a file |
 | `edit_file` | Replace an exact string in a file (`old` → `new`); fails if `old` is missing or appears more than once, unless `replace_all` |
 | `run` | Run an allowed command (tests, linters, `git diff`) and get exit code + output |

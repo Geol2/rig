@@ -25,6 +25,8 @@ IGNORED_DIRS = {
 # Skipped even with `search.builtin_ignore: false`: repo internals and rig's own shifts and worktrees.
 ALWAYS_IGNORED = {".git", ".rig"}
 READ_LIMIT = 2000        # lines per read_file call
+MAX_READ_LINE = 2000     # chars kept per read_file line
+MAX_READ_CHARS = 100_000 # chars per read_file call
 GLOB_LIMIT = 500         # paths per glob call
 SEARCH_LIMIT = 200       # matching lines per search call
 MAX_LINE = 300           # chars kept per search result line
@@ -43,7 +45,9 @@ DEFINITIONS: dict[str, dict[str, Any]] = {
         "description": (
             f"Read a text file from the workspace. Lines come back numbered ('  12\\tcode'). "
             f"Returns at most {READ_LIMIT} lines; for large files, use offset/limit to read the part you need "
-            "(find it first with `search`)."
+            "(find it first with `search`). "
+            f"Lines longer than {MAX_READ_LINE} chars are cut; each call returns at most {MAX_READ_CHARS} chars "
+            "(continue with the offset it gives). Binary files are refused."
         ),
         "input_schema": {
             "type": "object",
@@ -533,15 +537,32 @@ class Toolbox:
         if offset < 1 or limit < 1:
             raise ToolError("offset and limit must be >= 1")
         limit = min(limit, READ_LIMIT)
+        data = p.read_bytes()
+        if b"\0" in data[:8192]:
+            raise ToolError(f"binary file ({len(data)} bytes); not shown")
         # errors="replace": non-UTF-8 sources (e.g. CP949) still read instead of failing.
-        lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+        lines = data.decode("utf-8", errors="replace").splitlines()
         if not lines:
             return "(empty file)"
         if offset > len(lines):
             raise ToolError(f"offset {offset} is past the end ({len(lines)} lines)")
         end = min(offset - 1 + limit, len(lines))
         width = len(str(end))
-        body = "\n".join(f"{i:>{width}}\t{lines[i - 1]}" for i in range(offset, end + 1))
+        rows: list[str] = []
+        total = 0
+        for i in range(offset, end + 1):
+            line = lines[i - 1]
+            if len(line) > MAX_READ_LINE:
+                line = f"{line[:MAX_READ_LINE]} [… {len(line) - MAX_READ_LINE} chars cut]"
+            row = f"{i:>{width}}\t{line}"
+            size = len(row) + (1 if rows else 0)
+            # Always show the first requested line; stop before going past MAX_READ_CHARS.
+            if rows and total + size > MAX_READ_CHARS:
+                break
+            rows.append(row)
+            total += size
+        end = offset + len(rows) - 1
+        body = "\n".join(rows)
         if offset > 1 or end < len(lines):
             body += f"\n[lines {offset}-{end} of {len(lines)}" + (f"; continue with offset={end + 1}]" if end < len(lines) else "]")
         return body
