@@ -485,8 +485,34 @@ def parse_yaml(text: str) -> Any:
             return None
         _check_duplicates(loader, node, "", set())
         return loader.construct_document(node)
+    except yaml.YAMLError as e:
+        raise RigFileError(_yaml_error_message(e)) from None
     finally:
         loader.dispose()
+
+
+def check_yaml_syntax(text: str) -> None:
+    """RigFileError (with line and column) if the text isn't valid YAML; repeated keys are allowed here."""
+    try:
+        yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise RigFileError(_yaml_error_message(e)) from None
+
+
+def _yaml_error_message(e: yaml.YAMLError) -> str:
+    """One line for a YAML syntax error: where it is, PyYAML's problem, and what to check."""
+    mark = getattr(e, "problem_mark", None)
+    problem = getattr(e, "problem", None)
+    if mark is None or not problem:
+        return f"YAML syntax error: {' '.join(str(e).split())}; check the indentation and the ':' after each key"
+    line = mark.line + 1
+    context = getattr(e, "context_mark", None)
+    also = f" (see line {context.line + 1})" if context is not None and context.line + 1 != line else ""
+    if "\\t" in problem or "\t" in problem or "tab" in problem:
+        hint = "use spaces, not tabs, to indent"
+    else:
+        hint = "check the indentation and the ':' after each key on those lines"
+    return f"YAML syntax error at line {line}, column {mark.column + 1}: {problem}{also}; {hint}"
 
 
 def read_rig_text(path: str | Path) -> str:

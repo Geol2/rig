@@ -336,6 +336,17 @@ def test_check_duplicate_key_exits_with_error(tmp_path, monkeypatch):
     assert 'duplicate key "a" in hands at line 5 (first at line 3); remove or rename one' in msg
 
 
+def test_check_tab_indent_exits_with_line_and_column(tmp_path, monkeypatch):
+    (tmp_path / "rig.yaml").write_text("name: t\nhands:\n\ta: {role: A}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["check"])
+    assert _exit_message(excinfo) == (
+        "rig: rig.yaml is invalid\nYAML syntax error at line 3, column 1: "
+        "found character '\\t' that cannot start any token; use spaces, not tabs, to indent"
+    )
+
+
 def test_check_non_utf8_file_exits_with_error(tmp_path, monkeypatch):
     (tmp_path / "rig.yaml").write_bytes("name: t\nhands:\n  a: {role: 역할}\n".encode("cp949"))
     monkeypatch.chdir(tmp_path)

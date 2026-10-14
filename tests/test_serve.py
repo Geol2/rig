@@ -95,6 +95,52 @@ def test_unreadable_rig_files_show_their_error(tmp_path):
         App(tmp_path).set_workspaces("dup.yaml", [{"name": "", "path": "proj"}])
 
 
+TAB_ERROR = ("YAML syntax error at line 3, column 1: found character '\\t' that cannot start any token; "
+             "use spaces, not tabs, to indent")
+
+
+def test_rig_files_with_yaml_syntax_errors_stay_listed(tmp_path):
+    (tmp_path / "rig.yaml").write_text("name: t\nhands:\n\ta: {role: A}\n", encoding="utf-8")
+    (tmp_path / "x.rig.yaml").write_text("name: x\nhands:\n  a: {role: A}\n  b\n", encoding="utf-8")
+    (tmp_path / "y.yaml").write_text("name: y\nhands:\n  a: {role: A}\n b: {role: B}\n", encoding="utf-8")
+    (tmp_path / "notes.yaml").write_text("title: n\n\tbody: x\n", encoding="utf-8")  # not a rig: ignored
+    app = App(tmp_path)
+    assert [(r["file"], r["error"]) for r in app.rigs()] == [
+        ("rig.yaml", TAB_ERROR),
+        ("x.rig.yaml", "YAML syntax error at line 5, column 1: could not find expected ':' (see line 4); "
+                       "check the indentation and the ':' after each key on those lines"),
+        ("y.yaml", "YAML syntax error at line 4, column 2: expected <block end>, but found '<block mapping start>' "
+                   "(see line 1); check the indentation and the ':' after each key on those lines"),
+    ]
+    with pytest.raises(ValueError, match="YAML syntax error at line 3, column 1"):
+        app.start("rig.yaml", "task", {}, dry=True, use_worktree=False)
+    with pytest.raises(ValueError, match="YAML syntax error at line 3, column 1"):  # the file's line, not the rewrite's
+        app.set_workspaces("rig.yaml", [{"name": "", "path": "proj"}])
+    with pytest.raises(ValueError, match="no rig file"):
+        app.set_workspaces("notes.yaml", [{"name": "", "path": "proj"}])
+
+
+def test_non_utf8_rig_with_yaml_syntax_error_says_not_utf8(tmp_path):
+    (tmp_path / "rig.yaml").write_bytes("name: t\nhands:\n\ta: {role: 역할}\n".encode("cp949"))
+    assert [(r["file"], r["error"]) for r in App(tmp_path).rigs()] == [
+        ("rig.yaml", "not UTF-8 (byte 0xbf at line 3, column 12); save the file as UTF-8"),
+    ]
+
+
+def test_set_workspaces_repairs_a_repeated_workspace_key(tmp_path):
+    path = tmp_path / "rig.yaml"
+    path.write_text("name: t\nworkspace: a\nworkspace: b\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    App(tmp_path).set_workspaces("rig.yaml", [{"name": "", "path": "proj"}])
+    assert path.read_text(encoding="utf-8") == 'name: t\nworkspace: "proj"\nhands:\n  a: {role: A}\n'
+
+
+def test_run_with_yaml_syntax_error_is_400(server, tmp_path):
+    _, base = server
+    (tmp_path / "rig.yaml").write_text("name: t\nhands:\n\ta: {role: A}\n", encoding="utf-8")
+    status, body = call(base + "/api/run", {"file": "rig.yaml", "task": "t", "dry": True})
+    assert (status, body) == (400, {"error": TAB_ERROR})
+
+
 def test_set_workspace_keeps_the_rest(server, tmp_path):
     _, base = server
     (tmp_path / "other proj").mkdir()

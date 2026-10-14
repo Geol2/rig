@@ -22,7 +22,8 @@ rig serve       # do all of the above from a local web page
 | **shift** | One run of the rig on a task, logged under `.rig/shifts/<id>/` |
 
 `rig.yaml` must be saved as UTF-8, and a key repeated in the same mapping (say, two `coder:`
-hands) is rejected with both line numbers instead of the last one silently winning.
+hands) is rejected with both line numbers instead of the last one silently winning. A YAML
+syntax error is reported with its line and column (and a hint, e.g. to indent with spaces, not tabs).
 
 Hands run in stages. A hand starts once every hand with a line into it has finished,
 and hands with no path between them run in parallel.
@@ -235,6 +236,9 @@ of any past shift. It runs one shift at a time. While a shift runs, the page sho
 so far against the limit (taken from `max_cost_usd`, editable before each run) and a
 **Stop** button that ends it the same way the limit does.
 Each rig card shows the same warnings as `rig check` (hands off the crew or lines, models with no price).
+A rig file that can't be loaded stays listed with its error instead: not UTF-8, invalid, or a
+YAML syntax error with its line and column (a file with a syntax error counts as a rig if it's
+named `rig.yaml` or `*.rig.yaml` (or `.yml`), or has a `hands:` line).
 
 Shifts started with `rig run` in a terminal show up too: every shift writes its progress
 lines to `progress.log` in its folder (and `running.json` while it runs), and the history

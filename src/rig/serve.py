@@ -26,7 +26,7 @@ from rig import publish, report
 from rig.cost import Meter, price_warnings, usd
 from rig.graph import layers
 from rig.runner import PROGRESS_LOG, Resume, ShiftEvent, live, load_resume
-from rig.spec import InputError, RigFileError, load, parse_yaml, read_rig_text
+from rig.spec import InputError, RigFileError, check_yaml_syntax, load, parse_yaml, read_rig_text
 from rig.tools import crlf
 from rig.worktree import GitError
 
@@ -76,8 +76,14 @@ class App:
                     text = raw.decode("utf-8")
                 except UnicodeDecodeError:  # still listed if it's a rig, so load() can say what's wrong
                     text = raw.decode("utf-8", errors="replace")
+            except OSError:
+                continue
+            try:
                 data = yaml.safe_load(text)
-            except (yaml.YAMLError, OSError):
+            except yaml.YAMLError:  # still listed if it looks like a rig, so load() can say where the error is
+                if p.name in ("rig.yaml", "rig.yml") or p.name.endswith((".rig.yaml", ".rig.yml")) \
+                        or re.search(r"^hands:", text, re.M):
+                    files.append(p)
                 continue
             if isinstance(data, dict) and "hands" in data:
                 files.append(p)
@@ -150,6 +156,9 @@ class App:
                 f"  {n}: {json.dumps(p, ensure_ascii=False)}\n" for n, p in rows
             )
         text = read_rig_text(path)
+        # A syntax error is reported at its line in the file, not in the rewritten text; a repeated
+        # `workspace:` key is fine, the rewrite below replaces both.
+        check_yaml_syntax(text)
         if crlf(text.encode("utf-8")):
             block = block.replace("\n", "\r\n")  # keep the file's line ends; the patterns below take \r as line content
         # The current setting: a `workspace:` line and/or a `workspaces:` line with its indented entries.

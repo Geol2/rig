@@ -4,12 +4,13 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from rig.graph import CycleError, layers
 from rig.hand import EchoWorker
 from rig.runner import new_shift, run_shift
-from rig.spec import Rig, RigFileError, load, parse_yaml
+from rig.spec import Rig, RigFileError, _yaml_error_message, check_yaml_syntax, load, parse_yaml
 
 
 def make(**overrides):
@@ -200,6 +201,43 @@ def test_duplicate_keys_rejected(text, message):
 def test_duplicate_key_lines_in_crlf_file():
     with pytest.raises(RigFileError, match=r'duplicate key "a" in hands at line 4 \(first at line 3\)'):
         parse_yaml("name: t\r\nhands:\r\n  a: {role: A}\r\n  a: {role: B}\r\n")
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        # the context mark is on the problem line, so no "(see line ...)"
+        ("name: t\nhands:\n\ta: {role: A}\n",
+         "YAML syntax error at line 3, column 1: found character '\\t' that cannot start any token; "
+         "use spaces, not tabs, to indent"),
+        ("name: t\nhands:\n  a: {role: A}\n  b\n",
+         "YAML syntax error at line 5, column 1: could not find expected ':' (see line 4); "
+         "check the indentation and the ':' after each key on those lines"),
+        ("name: t\nhands:\n  a: {role: A}\n b: {role: B}\n",
+         "YAML syntax error at line 4, column 2: expected <block end>, but found '<block mapping start>' (see line 1); "
+         "check the indentation and the ':' after each key on those lines"),
+        ("name: t\nhands: a: b\n",
+         "YAML syntax error at line 2, column 9: mapping values are not allowed here; "
+         "check the indentation and the ':' after each key on those lines"),
+    ],
+    ids=["tab", "missing-colon", "bad-indent", "no-context"],
+)
+def test_yaml_syntax_errors_say_where(text, message):
+    with pytest.raises(RigFileError) as excinfo:
+        parse_yaml(text)
+    assert str(excinfo.value) == message
+
+
+def test_check_yaml_syntax_allows_repeated_keys():
+    check_yaml_syntax("workspace: a\nworkspace: b\n")
+    with pytest.raises(RigFileError, match="YAML syntax error at line 2, column 1: found character '\\\\t'"):
+        check_yaml_syntax("a: 1\n\tb: 2\n")
+
+
+def test_yaml_error_without_a_mark_still_reads_as_one_line():
+    assert _yaml_error_message(yaml.YAMLError("something\n  went wrong")) == (
+        "YAML syntax error: something went wrong; check the indentation and the ':' after each key"
+    )
 
 
 def test_non_utf8_byte_position_in_crlf_file(tmp_path):
