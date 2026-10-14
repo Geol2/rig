@@ -133,6 +133,7 @@ def test_set_workspaces_keeps_crlf(server, tmp_path, monkeypatch):
 def test_set_workspaces_keeps_lf(server, tmp_path, monkeypatch):
     app, _ = server
     (tmp_path / "api").mkdir()
+    (tmp_path / "review.rig.yaml").write_bytes(RIG.encode("utf-8"))  # the fixture's write_text is CRLF on Windows
     _no_text_mode_writes(monkeypatch)
     app.set_workspaces("review.rig.yaml", [{"name": "backend", "path": "api"}])
     data = (tmp_path / "review.rig.yaml").read_bytes()
