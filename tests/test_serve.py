@@ -104,6 +104,50 @@ def test_set_workspace_keeps_the_rest(server, tmp_path):
     assert call(base + "/api/rigs")[1][0]["workspace_ok"]
 
 
+def _no_text_mode_writes(monkeypatch):
+    """Fail on Path.write_text: on Windows its newline translation turns a CRLF file's \\r\\n into \\r\\r\\n."""
+    def write_text(self, *args, **kwargs):
+        raise AssertionError(f"text-mode write to {self}")
+
+    monkeypatch.setattr(Path, "write_text", write_text)
+
+
+def test_set_workspaces_keeps_crlf(server, tmp_path, monkeypatch):
+    app, _ = server
+    path = tmp_path / "review.rig.yaml"
+    path.write_bytes(RIG.replace("\n", "\r\n").encode("utf-8"))
+    for d in ("api", "web"):
+        (tmp_path / d).mkdir()
+    _no_text_mode_writes(monkeypatch)
+    app.set_workspaces("review.rig.yaml", [{"name": "", "path": "api"}])
+    app.set_workspaces("review.rig.yaml", [{"name": "backend", "path": "api"}, {"name": "frontend", "path": "web"}])
+    data = path.read_bytes()
+    assert b"\r\r\n" not in data
+    assert data.count(b"\n") == data.count(b"\r\n")
+    assert b"workspace:" not in data and b"workspaces:\r\n  backend: \"api\"\r\n  frontend: \"web\"\r\n" in data
+    assert spec.load(path).workspaces == {"backend": "api", "frontend": "web"}
+    app.set_workspaces("review.rig.yaml", [{"name": "", "path": "proj"}])
+    assert path.read_bytes() == RIG.replace("workspace: proj", 'workspace: "proj"').replace("\n", "\r\n").encode("utf-8")
+
+
+def test_set_workspaces_keeps_lf(server, tmp_path, monkeypatch):
+    app, _ = server
+    (tmp_path / "api").mkdir()
+    _no_text_mode_writes(monkeypatch)
+    app.set_workspaces("review.rig.yaml", [{"name": "backend", "path": "api"}])
+    data = (tmp_path / "review.rig.yaml").read_bytes()
+    assert b"\r" not in data and b"workspaces:\n  backend: \"api\"\n" in data
+
+
+def test_init_fix_writes_without_text_mode(tmp_path, monkeypatch):
+    (tmp_path / "api").mkdir()
+    _no_text_mode_writes(monkeypatch)
+    assert App(tmp_path).init_fix([{"name": "", "path": "api"}]) == "fix.rig.yaml"
+    data = (tmp_path / "fix.rig.yaml").read_bytes()
+    assert b"\r" not in data
+    assert spec.load(tmp_path / "fix.rig.yaml").workspace == "api"
+
+
 def test_dry_run_end_to_end(server):
     app, base = server
     status, body = call(base + "/api/run", {"file": "review.rig.yaml", "task": "look", "inputs": {"module": "orders"}, "dry": True})

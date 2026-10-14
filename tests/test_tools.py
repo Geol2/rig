@@ -1,8 +1,10 @@
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
 from rig.spec import Rig, SearchPolicy
-from rig.tools import READ_LIMIT, Toolbox, ToolError, glob_regex
+from rig.tools import READ_LIMIT, Toolbox, ToolError, crlf, glob_regex
 
 ALL = ["write_file", "edit_file", "read_file", "list_dir", "glob", "search"]
 
@@ -30,6 +32,59 @@ def test_write_then_read(tmp_path):
     tb.run("write_file", {"path": "src/x.txt", "content": "hi"})
     assert tb.run("read_file", {"path": "src/x.txt"}) == "1\thi"
     assert tb.run("list_dir", {"path": "."}) == "src/"
+
+
+def _windows_text_mode(monkeypatch):
+    """Make Path.write_text translate \\n -> \\r\\n as on Windows, so a text-mode write shows up on any OS."""
+    real = Path.write_text
+
+    def write_text(self, data, encoding=None, errors=None, newline=None):
+        if newline is None:
+            data = data.replace("\n", "\r\n")
+        return real(self, data, encoding=encoding, errors=errors, newline="")
+
+    monkeypatch.setattr(Path, "write_text", write_text)
+
+
+def test_write_keeps_lf_in_new_file(tmp_path, monkeypatch):
+    _windows_text_mode(monkeypatch)
+    out = Toolbox(tmp_path, ALL).run("write_file", {"path": "n.txt", "content": "a\nb\n"})
+    assert out == "wrote 4 chars to n.txt"
+    assert (tmp_path / "n.txt").read_bytes() == b"a\nb\n"
+
+
+def test_write_over_crlf_file_keeps_crlf(tmp_path, monkeypatch):
+    _windows_text_mode(monkeypatch)
+    (tmp_path / "w.txt").write_bytes(b"x\r\ny\r\n")
+    out = Toolbox(tmp_path, ALL).run("write_file", {"path": "w.txt", "content": "a\nb\n"})
+    assert out == "wrote 4 chars to w.txt"
+    assert (tmp_path / "w.txt").read_bytes() == b"a\r\nb\r\n"
+
+
+def test_write_crlf_content_not_doubled(tmp_path, monkeypatch):
+    _windows_text_mode(monkeypatch)
+    (tmp_path / "w.txt").write_bytes(b"x\r\ny\r\n")
+    tb = Toolbox(tmp_path, ALL)
+    for path in ("new.txt", "w.txt"):
+        tb.run("write_file", {"path": path, "content": "a\r\nb\r\n"})
+        data = (tmp_path / path).read_bytes()
+        assert b"\r\r\n" not in data
+        assert data == b"a\r\nb\r\n"
+
+
+def test_write_over_lf_file_stays_lf(tmp_path, monkeypatch):
+    _windows_text_mode(monkeypatch)
+    (tmp_path / "l.txt").write_bytes(b"x\ny\n")
+    Toolbox(tmp_path, ALL).run("write_file", {"path": "l.txt", "content": "a\nb\n"})
+    assert (tmp_path / "l.txt").read_bytes() == b"a\nb\n"
+
+
+def test_crlf_detection():
+    assert crlf(b"a\r\nb\n")
+    assert not crlf(b"a\nb\r\n")
+    assert not crlf(b"no newline\r")
+    assert not crlf(b"\nx")
+    assert not crlf(b"")
 
 
 def test_read_range_and_continuation_hint(tmp_path):

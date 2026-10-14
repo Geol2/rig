@@ -30,6 +30,13 @@ SEARCH_LIMIT = 200       # matching lines per search call
 MAX_LINE = 300           # chars kept per search result line
 MAX_SEARCH_BYTES = 2_000_000
 
+
+def crlf(data: bytes) -> bool:
+    """Whether a file uses CRLF line ends: its first \\n comes right after a \\r. No newline counts as LF."""
+    i = data.find(b"\n")
+    return i > 0 and data[i - 1:i] == b"\r"
+
+
 DEFINITIONS: dict[str, dict[str, Any]] = {
     "read_file": {
         "name": "read_file",
@@ -52,7 +59,10 @@ DEFINITIONS: dict[str, dict[str, Any]] = {
     },
     "write_file": {
         "name": "write_file",
-        "description": "Create or overwrite a UTF-8 text file in the workspace. Write plain content, without line numbers.",
+        "description": (
+            "Create or overwrite a UTF-8 text file in the workspace. Write plain content, without line numbers. "
+            "Line ends are kept as given; overwriting a CRLF file with \\n-only content keeps it CRLF."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -423,7 +433,12 @@ class Toolbox:
         if name == "write_file":
             p = self._writable(args["path"])
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(args["content"], encoding="utf-8")
+            content = args["content"]
+            # Written as given (no OS newline translation); read_file shows lines without \r,
+            # so content rewritten with plain \n over a CRLF file gets CRLF back, as in edit_file.
+            if "\r" not in content and p.is_file() and crlf(p.read_bytes()):
+                content = content.replace("\n", "\r\n")
+            p.write_bytes(content.encode("utf-8"))
             return f"wrote {len(args['content'])} chars to {args['path']}"
         if name == "edit_file":
             return self._edit(args["path"], args["old"], args["new"], bool(args.get("replace_all")))
