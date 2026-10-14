@@ -539,7 +539,9 @@ def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Met
         "hands": {
             k: {"stop_reason": r.stop_reason, "turns": r.turns, "model": r.model, "input_tokens": r.input_tokens,
                 "output_tokens": r.output_tokens, "cache_read_tokens": r.cache_read_tokens,
-                "cache_write_tokens": r.cache_write_tokens, "cost_usd": r.cost_usd}
+                "cache_write_tokens": r.cache_write_tokens, "cost_usd": r.cost_usd,
+                # Whether the hand has output.schema, so the report can tell a reviewer that gave no findings.
+                "structured": _structured(rig, r.name)}
             for k, r in shift.results.items()
         },
         "totals": _totals(list(shift.results.values())),
@@ -560,6 +562,12 @@ def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Met
         tmp.unlink(missing_ok=True)
         raise
     return summary
+
+
+def _structured(rig: Rig, name: str) -> bool:
+    """Whether hand `name` has an output schema; False for a name the rig doesn't define."""
+    spec = rig.foreman if name == "foreman" and rig.foreman else rig.hands.get(name)
+    return bool(spec and spec.output)
 
 
 def _totals(results: list[HandResult]) -> dict[str, Any]:

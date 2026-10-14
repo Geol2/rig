@@ -68,6 +68,17 @@ def status_reason(status: str, summary: dict, unreadable_reason: str | None = No
     return None
 
 
+def stop_line(summary: dict) -> str:
+    """Why a stopped shift stopped, as `rig logs` and the report show it."""
+    if summary["stopped"] != "budget":
+        return "✗ stopped: stopped by user"
+    spent = usd((summary.get("totals") or {}).get("cost_usd"))
+    limit = summary.get("max_cost_usd")
+    if limit is None:
+        return f"✗ stopped: cost limit reached ({spent} spent)"
+    return f"✗ stopped: cost limit {usd(limit)} reached ({spent} spent)"
+
+
 def collect(shift_dir: Path) -> dict[str, Any]:
     """Everything the page shows, read from a shift directory."""
     summary, _ = read_summary(shift_dir)
@@ -206,8 +217,12 @@ def render(data: dict[str, Any], fix_link: Callable[[int], str] | None = None) -
     if totals:
         meta.append(f"{totals.get('input_tokens', 0) + totals.get('cache_read_tokens', 0) + totals.get('cache_write_tokens', 0):,} in "
                     f"/ {totals.get('output_tokens', 0):,} out tok · est. {usd(totals.get('cost_usd'))}")
-    if s.get("ok") is False:
-        meta.append('<span class="bad">incomplete</span>')
+    if s.get("ok") is False and not s.get("error") and not s.get("stopped"):
+        meta.append('<span class="bad">incomplete</span>')  # otherwise the notice says why
+    notices = _notices(data)
+    notice_html = (
+        '<div class="notice">' + "".join(f"<p>{n}</p>" for n in notices) + "</div>" if notices else ""
+    )
 
     by_key = {h["key"]: h for h in data["hands"]}
     # Final hands with findings stay in the Hands list; the rest become Summary sections.
@@ -260,6 +275,7 @@ def render(data: dict[str, Any], fix_link: Callable[[int], str] | None = None) -
     <h1>{html.escape(task.splitlines()[0] if task else 'Shift ' + data['id'])}</h1>
     {f'<ul class="inputs">{inputs_html}</ul>' if inputs_html else ''}
     <div class="stats">{stats}</div>
+    {notice_html}
   </header>
   {final_html}
   {table}
@@ -272,6 +288,27 @@ def render(data: dict[str, Any], fix_link: Callable[[int], str] | None = None) -
 </body>
 </html>
 """
+
+
+def _notices(data: dict[str, Any]) -> list[str]:
+    """Escaped lines saying why the shift failed or stopped and which schema hands gave no result,
+    so a review that didn't finish doesn't read as "0 findings"."""
+    s = data["summary"]
+    lines = []
+    if s.get("error"):
+        lines.append(f"✗ shift failed: {html.escape(' '.join(str(s['error']).split()))}")
+    if s.get("stopped"):
+        lines.append(html.escape(stop_line(s)))
+    failed = []
+    for h in data["hands"]:
+        m = h["meta"]
+        # Only hands with output.schema owe findings JSON; old shift.json files have no flag.
+        if m.get("structured") and m.get("stop_reason") != "end_turn" and h["findings"] is None:
+            reason = f" ({html.escape(str(m['stop_reason']))})" if m.get("stop_reason") else ""
+            failed.append(html.escape(h["key"]) + reason)
+    if failed:
+        lines.append("✗ 결과를 내지 못한 hand: " + ", ".join(failed))
+    return lines
 
 
 def _row(r: dict[str, Any], fix_href: str | None = None) -> str:
@@ -358,6 +395,8 @@ td p{margin:4px 0 0}.fix{color:var(--muted)}.loc code{white-space:nowrap}
 .hand summary{padding:12px 16px;cursor:pointer}.hand-body{padding:0 18px 14px;min-width:0}
 details details summary{cursor:pointer;color:var(--muted);font-size:13px}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.notice{margin-top:16px;padding:10px 14px;background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--high);border-radius:8px;font-size:14px;overflow-wrap:anywhere}
+.notice p{margin:0}.notice p+p{margin-top:4px}
 """
 
 JS = """
