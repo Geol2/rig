@@ -470,8 +470,12 @@ async def run_shift(
         finally:
             if shift.worktrees:
                 # Even if the shift crashed, keep whatever the hands wrote on the branch.
-                first = task.strip().splitlines()[0][:60] if task.strip() else "shift"
-                message = f"rig: {first}\n\nShift {shift.id} of rig '{rig.name}' ({'ok' if shift.ok else 'incomplete'})."
+                title, summary = change_title(shift, task)
+                excerpt = "\n".join(summary.splitlines()[:COMMIT_BODY_LINES]).strip()
+                message = "\n\n".join(filter(None, [
+                    f"rig: {title}", excerpt,
+                    f"Shift {shift.id} of rig '{rig.name}' ({'ok' if shift.ok else 'incomplete'}).",
+                ]))
                 several = len(shift.worktrees) > 1
                 for wt in shift.worktrees:
                     try:
@@ -575,6 +579,35 @@ def _latest(results: dict[str, HandResult], hand: str | None) -> HandResult | No
     return found[-1] if found else None
 
 
+TITLE_CHARS = 72
+COMMIT_BODY_LINES = 30
+# A final reply may open with "TITLE: <what changed>" (or "제목: …"); that names the commit and
+# the PR instead of the task, which is often just "do the next item" or a chat message.
+_TITLE_LINE = re.compile(r"^[#>*_\s]*(?:title|제목)[*_\s]*[:：][*_\s]*(.+)$", re.IGNORECASE)
+
+
+def change_title(shift: Shift, task: str) -> tuple[str, str]:
+    """(title, summary) for the shift's commit and PR: the final hand's TITLE line, else the task's first line.
+
+    The summary is the final output(s) without that TITLE line.
+    """
+    finals = [r for r in shift.finals if r.output.strip()]
+    title = None
+    parts = []
+    for r in finals:
+        lines = r.output.strip().splitlines()
+        m = _TITLE_LINE.match(lines[0]) if lines else None
+        if m and title is None:
+            title = m.group(1).rstrip("*_ \t")
+        text = "\n".join(lines[1:] if m else lines).strip()
+        parts.append(f"## {r.name}\n\n{text}" if len(finals) > 1 else text)
+    if not title:
+        title = task.strip().splitlines()[0] if task.strip() else f"shift {shift.id}"
+    if len(title) > TITLE_CHARS:
+        title = title[: TITLE_CHARS - 1].rstrip() + "…"
+    return title, "\n\n".join(p for p in parts if p)
+
+
 async def _publish(
     rig: Rig, task: str, shift: Shift, on_event: Event, reuse: dict[Path, publish.PullRequest] | None = None,
 ) -> None:
@@ -588,11 +621,7 @@ async def _publish(
         why_not = f"{policy.approver} didn't approve (no {policy.approve_word!r} in its last reply)"
     else:
         why_not = ""
-    first = task.strip().splitlines()[0][:70] if task.strip() else f"shift {shift.id}"
-    if len(shift.finals) > 1:
-        result = "\n\n".join(f"## {r.name}\n\n{r.output.strip()}" for r in shift.finals)
-    else:
-        result = shift.final.output.strip() if shift.final else ""
+    first, result = change_title(shift, task)
     body = "\n\n".join(filter(None, [
         result,
         f"---\nShift `{shift.id}` of rig `{rig.name}` · est. cost {cost.usd(shift.meter.spent)}",
