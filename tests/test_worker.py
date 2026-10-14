@@ -213,6 +213,23 @@ def test_max_turns(tmp_path):
     loop = lambda i: response("tool_use", block("tool_use", id=f"t{i}", name="read_file", input={"path": "x"}))
     res = asyncio.run(ClaudeWorker(FakeClient([loop(1), loop(2)])).run(h, "go", Toolbox(tmp_path, h.tools)))
     assert res.stop_reason == "max_turns" and not res.ok
+    assert res.output == "[stopped after 2 turns]"
+
+
+def test_max_turns_keeps_the_last_text(tmp_path):
+    # The last turn is pure tool_use; the earlier turn's text still survives.
+    h = hand().model_copy(update={"max_turns": 2})
+    client = FakeClient([
+        response(
+            "tool_use",
+            block("text", text="wrote a.txt, now testing"),
+            block("tool_use", id="t1", name="write_file", input={"path": "a.txt", "content": "A"}),
+        ),
+        response("tool_use", block("tool_use", id="t2", name="read_file", input={"path": "a.txt"})),
+    ])
+    res = asyncio.run(ClaudeWorker(client).run(h, "go", Toolbox(tmp_path, h.tools)))
+    assert res.stop_reason == "max_turns" and not res.ok
+    assert res.output == "wrote a.txt, now testing\n\n[stopped after 2 turns]"
 
 
 @pytest.mark.parametrize("category", ["reasoning_extraction", "bio", "frontier_llm", "general_harms", "new_category", None])

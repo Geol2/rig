@@ -333,12 +333,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   완료 기준: `tests/test_serve.py`에 탭/들여쓰기 오류가 있는 `rig.yaml`과 `x.rig.yaml`이 `rigs()`에 `error`(줄 번호 포함)로
   나오고, 문법 오류가 있는 rig 아닌 `notes.yaml`은 여전히 빠지는지, `_rig_path`로 실행하려 하면 오류가 나는지 테스트.
   Note: `spec.parse_yaml` turns PyYAML errors into a one-line RigFileError ("YAML syntax error at line L, column C: <problem> (see line N); <hint>", the hint naming tabs or indentation/`:`), shown on `rig serve` cards, as a 400 from /api/run and /api/workspaces (which now checks the file's syntax with `spec.check_yaml_syntax` before rewriting it, so the line is the file's and a repeated `workspace:` is still repaired), and by `rig check`; `App.rig_files` keeps an unparsable file listed when it's named `rig.yaml`/`*.rig.yaml` (or `.yml`) or has a `hands:` line.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`max_turns`로 멈춘 hand가 한 일을 잃지 않게**: `hand.py` `ClaudeWorker._loop`는 턴이 다 되면 `result.output`을
+- [x] **`max_turns`로 멈춘 hand가 한 일을 잃지 않게**: `hand.py` `ClaudeWorker._loop`는 턴이 다 되면 `result.output`을
   `[stopped after N turns]`로 덮어써서, 그 hand의 `.md`에도, foreman이 받는 `runner.py` `delegate`의 ToolError("coder did
   not finish cleanly (max_turns): [stopped after 20 turns]")에도 무엇을 했는지가 남지 않습니다. foreman은 어떤 파일이 이미
   바뀌었는지 모른 채 같은 일을 처음부터 다시 맡기게 됩니다. 마지막 assistant 응답의 텍스트(있으면)를 남기고 그 뒤에
@@ -346,6 +341,11 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   `Toolbox.changed`) `delegate`의 오류 메시지에 "changed files: …"로 넣으세요. 완료 기준: `tests/test_worker.py`에 텍스트와
   tool_use를 함께 내는 가짜 응답으로 `max_turns`에 걸렸을 때 output에 그 텍스트와 표시가 모두 있는지, `tests/test_foreman.py`에
   파일을 쓴 뒤 턴이 다 된 delegate의 오류에 그 경로가 들어 있는지 테스트.
+  Note: `ClaudeWorker._loop` keeps the most recent non-empty assistant text before `[stopped after N turns]`; `Toolbox.changed` lists paths changed by successful `write_file`/`edit_file` (normalized, deduped), and the foreman's `delegate` error adds `changed files: …` when the hand changed any.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
 
 ## Needs a design first
 
