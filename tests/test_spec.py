@@ -330,6 +330,17 @@ def test_crashing_hand_does_not_take_down_its_siblings(tmp_path):
     assert shift.finals == [] and summary(shift)["final"] == []
 
 
+def test_shift_json_marks_hands_with_an_output_schema(tmp_path):
+    schema = {"type": "object", "properties": {"findings": {"type": "array"}}}
+    rig = make(hands={"a": {"role": "A"}, "b": {"role": "B", "output": {"schema": schema}}, "c": {"role": "C"}})
+    hands = summary(asyncio.run(run_shift(rig, "do it", EchoWorker(), root=tmp_path, on_event=lambda _: None)))["hands"]
+    assert hands["b"]["structured"] is True
+    assert hands["a"]["structured"] is False and hands["c"]["structured"] is False
+    from rig.runner import _structured
+
+    assert _structured(rig, "gone") is False  # a name the rig doesn't define doesn't crash
+
+
 def test_crashed_shift_still_writes_shift_json(tmp_path, monkeypatch):
     # A crash outside any hand (here: building the second stage's prompt) ends the shift, not the program.
     def broken(task, handoffs, *args, **kwargs):

@@ -136,16 +136,6 @@ def cmd_run(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
-def _stop_line(summary: dict) -> str:
-    if summary["stopped"] != "budget":
-        return "✗ stopped: stopped by user"
-    spent = usd((summary.get("totals") or {}).get("cost_usd"))
-    limit = summary.get("max_cost_usd")
-    if limit is None:
-        return f"✗ stopped: cost limit reached ({spent} spent)"
-    return f"✗ stopped: cost limit {usd(limit)} reached ({spent} spent)"
-
-
 def _natural(name: str) -> list:
     """Sort key that compares digit runs as numbers, so coder-2 comes before coder-10."""
     return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name)]
@@ -161,7 +151,7 @@ def _outputs(shift: Path, summary: dict) -> list[tuple[str, Path]]:
 
 
 def cmd_logs(args: argparse.Namespace) -> None:
-    from rig.report import read_summary, status as shift_status
+    from rig.report import read_summary, status as shift_status, stop_line
     from rig.runner import ShiftNotFound, find_shift, live
 
     shifts_dir = Path(args.file).resolve().parent / ".rig" / "shifts"
@@ -193,7 +183,7 @@ def cmd_logs(args: argparse.Namespace) -> None:
     if summary.get("error"):
         head.append(f"✗ shift failed: {summary['error']}")
     if summary.get("stopped"):
-        head.append(_stop_line(summary))
+        head.append(stop_line(summary))
     info = live(shift)
     if info:
         head.append(f"still running (pid {info.get('pid')}). Output so far:")

@@ -263,12 +263,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   실행했을 때 몇 초 안에 `[timed out after 1s]`로 돌아오고 손자 프로세스가 더는 살아 있지 않은지 확인하는
   테스트(기존 `test_timeout`은 그대로 통과).
   Note: `_run` uses `Popen` in a new process group (`start_new_session` / `CREATE_NEW_PROCESS_GROUP`) and `_kill_tree` (`os.killpg` / `taskkill /T /F`); remaining output is read with a bounded second `communicate`. On Windows a grandchild whose parent already exited isn't found by `taskkill /T` (would need a Job Object), but the hand still returns within ~5s.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **리포트가 끝나지 못한 리뷰를 "문제 없음"처럼 보이지 않게**: `report.py` `render`는 shift가
+- [x] **리포트가 끝나지 못한 리뷰를 "문제 없음"처럼 보이지 않게**: `report.py` `render`는 shift가
   `ok: false`일 때 헤더에 `incomplete`만 붙이고 shift.json의 `error`나 `stopped`(비용 상한/사용자 중지) 이유는
   보여 주지 않습니다. 또 reviewer hand가 `max_tokens`, `refusal`, 에러, 중지로 끝나 findings JSON을 못 냈으면
   `findings_of`가 `None`이라 그 hand는 표에서 그냥 빠지고, 다른 hand도 아무것도 못 찾았으면 "0 findings"로
@@ -278,6 +273,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   대상). 완료 기준: `tests/test_report.py`에 `error`/`stopped`가 있는 shift.json의 헤더에 이유가 나오는지,
   `stop_reason: "max_tokens"`이고 JSON이 아닌 출력의 hand가 경고에 이름과 함께 나오는지, 모두 정상인 shift에는
   경고가 없는지 확인하는 테스트.
+  Note: shift.json `hands[key]` now has `structured` (hand has `output.schema`); only flagged hands are listed, so older shift.json files get no hand line. `cli._stop_line` moved to `report.stop_line`, shared by `rig logs` and the report's `.notice` block under the stats (also shown by `rig serve`). `incomplete` stays in the meta line only when there's no error/stop to explain it.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **`rig serve` 페이지에서 중단된 shift 이어 하기**: `rig run --resume`은 CLI에만 있고 serve 페이지에는
   없습니다(`serve.py`에 resume 관련 코드 없음). 그래서 페이지로 실행하던 사용자는 비용 상한이나 **Stop**으로
   멈춘 shift를 이어 하려면 터미널로 가서 shift id를 찾아야 합니다. `App.start`에 `resume: str | None`을 받아

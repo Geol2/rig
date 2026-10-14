@@ -132,6 +132,94 @@ def test_render(tmp_path):
     assert "est. $0.30" in page
 
 
+def test_stop_line():
+    totals = {"totals": {"cost_usd": 5.12}}
+    assert report.stop_line({"stopped": "budget", "max_cost_usd": 5, **totals}) == "✗ stopped: cost limit $5.00 reached ($5.12 spent)"
+    assert report.stop_line({"stopped": "budget", **totals}) == "✗ stopped: cost limit reached ($5.12 spent)"
+    assert report.stop_line({"stopped": "stopped"}) == "✗ stopped: stopped by user"
+
+
+def notice(page: str) -> str:
+    """The notice block's inner HTML, or "" if the page has none."""
+    if 'class="notice"' not in page:
+        return ""
+    start = page.index('<div class="notice">')
+    return page[start:page.index("</div>", start)]
+
+
+def test_render_says_why_a_shift_failed(tmp_path):
+    d = make_shift(tmp_path, {"a": "## A"}, ok=False, error="RuntimeError:\n  boom")
+    page = report.render(report.collect(d))
+    assert "<p>✗ shift failed: RuntimeError: boom</p>" in notice(page)
+    assert ">incomplete<" not in page  # the notice says why instead
+
+
+@pytest.mark.parametrize("stopped,line", [
+    ("budget", "✗ stopped: cost limit $5.00 reached ($0.30 spent)"),
+    ("stopped", "✗ stopped: stopped by user"),
+])
+def test_render_says_why_a_shift_stopped(tmp_path, stopped, line):
+    d = make_shift(tmp_path, {"a": "## A"}, ok=False, stopped=stopped, max_cost_usd=5)
+    page = report.render(report.collect(d))
+    assert f"<p>{line}</p>" in notice(page) and ">incomplete<" not in page
+
+
+def test_render_shows_error_and_stop_in_order(tmp_path):
+    d = make_shift(tmp_path, {"a": "## A"}, ok=False, error="interrupted", stopped="stopped")
+    assert notice(report.render(report.collect(d))).endswith(
+        "<p>✗ shift failed: interrupted</p><p>✗ stopped: stopped by user</p>")
+
+
+def test_render_lists_schema_hands_without_a_result(tmp_path):
+    d = make_shift(tmp_path, {
+        "security": "partial text",
+        "bugs": json.dumps({"findings": []}),
+        "perf": "I can't help with that.",
+        "mapper": "## Map",
+    })
+    summary = json.loads((d / "shift.json").read_text(encoding="utf-8"))
+    hands = summary["hands"]
+    hands["security"].update(structured=True, stop_reason="max_tokens")
+    hands["bugs"]["structured"] = True
+    hands["perf"].update(structured=True, stop_reason="refusal")
+    hands["mapper"]["stop_reason"] = "max_tokens"  # no output schema: owes no findings
+    (d / "shift.json").write_text(json.dumps(summary), encoding="utf-8")
+    page = report.render(report.collect(d))
+    assert notice(page) == '<div class="notice"><p>✗ 결과를 내지 못한 hand: security (max_tokens), perf (refusal)</p>'
+    assert "0</b><span>findings" in page  # the stats stay; the notice sits under them
+    assert page.index('<div class="stats">') < page.index('<div class="notice">') < page.index("</header>")
+
+
+def test_render_lists_failed_hand_without_stop_reason(tmp_path):
+    d = make_shift(tmp_path, {"reviewer#2": "cut off"}, mode="foreman")
+    summary = json.loads((d / "shift.json").read_text(encoding="utf-8"))
+    summary["hands"]["reviewer#2"] = {"structured": True}
+    (d / "shift.json").write_text(json.dumps(summary), encoding="utf-8")
+    assert "<p>✗ 결과를 내지 못한 hand: reviewer#2</p>" in notice(report.render(report.collect(d)))
+
+
+def test_render_without_structured_flag_lists_no_hands(tmp_path):
+    # Old shift.json files and hands without a shift.json entry aren't listed.
+    d = make_shift(tmp_path, {"security": "partial text"})
+    summary = json.loads((d / "shift.json").read_text(encoding="utf-8"))
+    summary["hands"]["security"]["stop_reason"] = "max_tokens"
+    (d / "shift.json").write_text(json.dumps(summary), encoding="utf-8")
+    (d / "extra.md").write_text("not JSON", encoding="utf-8")
+    assert notice(report.render(report.collect(d))) == ""
+
+
+def test_render_all_ok_has_no_notice(tmp_path):
+    d = make_shift(tmp_path, {"a": "## A", "b": json.dumps({"findings": []})})
+    page = report.render(report.collect(d))
+    assert 'class="notice"' not in page and "incomplete" not in page
+
+
+def test_render_incomplete_without_a_reason(tmp_path):
+    d = make_shift(tmp_path, {"a": "## A"}, ok=False)
+    page = report.render(report.collect(d))
+    assert '<span class="bad">incomplete</span>' in page and 'class="notice"' not in page
+
+
 def test_markdown_lists_and_headings():
     assert report.markdown("# Title\n- a\n- b\n\ntext `x`") == "<h3>Title</h3>\n<ul><li>a</li><li>b</li></ul>\n<p>text <code>x</code></p>"
 

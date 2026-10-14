@@ -216,6 +216,8 @@ uv run rig -f review.rig.yaml report
 opens it in the browser (`--no-open` to only write it). It's one self-contained file:
 
 - the task, token use and cost, and the number of findings per severity
+- why the shift failed or stopped, and which `output.schema` hands produced no result
+  (e.g. `security (max_tokens)`), so an unfinished review doesn't read as "0 findings"
 - every last-stage hand's reply (or the foreman's) as the summary, one section per hand
 - every finding from hands whose output is `{"findings": [...]}` in one table, most severe
   first, filterable by severity, hand and text; each row shows `file:line`, the problem
