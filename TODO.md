@@ -305,12 +305,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   `b"a\nb\n"`인지, CRLF 파일을 덮어쓰면 CRLF로 남는지, `"\r\n"`이 든 내용이 `\r\r\n`이 되지 않는지 테스트;
   `tests/test_serve.py`에 CRLF rig 파일에 `set_workspaces`를 두 번 해도 bytes에 `\r\r\n`이 없고 CRLF가 유지되는지 테스트.
   Note: `tools.crlf(data)` calls a file CRLF when its first `\n` follows a `\r`; `write_file` uses `write_bytes` and turns `\n` into `\r\n` only when overwriting a CRLF file with content that has no `\r`; `set_workspaces` converts its block to CRLF when the original file is CRLF and writes bytes; `init_fix` copies the template bytes as shipped.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`read_file`이 한 번에 돌려주는 양에 상한 두기**: `tools.py` `Toolbox._read`는 줄 수(`READ_LIMIT` 2000)만 자르고
+- [x] **`read_file`이 한 번에 돌려주는 양에 상한 두기**: `tools.py` `Toolbox._read`는 줄 수(`READ_LIMIT` 2000)만 자르고
   줄 길이나 전체 글자 수는 제한하지 않습니다. 한 줄이 수 MB인 minified JS·`*.min.css`·lock 파일, 또는 바이너리 파일
   (`search`는 NUL 바이트로 건너뛰지만 `read_file`은 `errors="replace"`로 그대로 읽음)을 읽으면 tool result 하나가
   컨텍스트를 채워 비용이 크게 들거나 hand가 `api_error`(prompt too long)로 끝납니다(`hand.py` `_call`도 길이를 자르지
@@ -319,6 +314,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   줄만 돌려주고 지금 형식의 `continue with offset=…` 안내를 붙이세요. `read_file` 도구 설명과 README Built-in tools 표에
   한 줄. 완료 기준: `tests/test_tools.py`에 NUL이 든 파일 거부, 10만 자짜리 한 줄의 잘림 표시, 긴 줄 여러 개에서
   글자 상한으로 멈추고 다음 offset이 맞는지, 평범한 파일 출력은 그대로인지 테스트.
+  Note: `MAX_READ_LINE` (2000) cuts each line with `[… N chars cut]`, `MAX_READ_CHARS` (100,000) stops a call at the last line that fits (always at least one) with the usual `continue with offset=` footer, and a NUL in the first 8 KB raises "binary file (N bytes); not shown".
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **`publish.pr` rig는 hand를 돌리기 전에 `gh`·로그인·remote 확인**: `publish.py` `publish`는 shift가 끝난 뒤에야
   `git push`와 `gh pr create`를 실행해서, `gh`가 없거나(`run_cmd`의 "gh not found") 로그인이 안 됐거나 `publish.remote`
   (기본 `origin`)가 없으면 shift 비용을 다 쓴 뒤 "couldn't open a PR"/"push failed"로 끝납니다(README Windows 표에 이 경우의

@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from rig.spec import Rig, SearchPolicy
-from rig.tools import READ_LIMIT, Toolbox, ToolError, crlf, glob_regex
+from rig.tools import MAX_READ_CHARS, MAX_READ_LINE, READ_LIMIT, Toolbox, ToolError, crlf, glob_regex
 
 ALL = ["write_file", "edit_file", "read_file", "list_dir", "glob", "search"]
 
@@ -101,6 +101,39 @@ def test_read_caps_at_limit(tmp_path):
     (tmp_path / "huge.txt").write_text("x\n" * (READ_LIMIT + 5), encoding="utf-8")
     out = Toolbox(tmp_path, ["read_file"]).run("read_file", {"path": "huge.txt", "limit": 10**6})
     assert out.endswith(f"[lines 1-{READ_LIMIT} of {READ_LIMIT + 5}; continue with offset={READ_LIMIT + 1}]")
+
+
+def test_read_plain_file_unchanged(tmp_path):
+    (tmp_path / "s.txt").write_text("a\nbb\n\nccc\n", encoding="utf-8")
+    assert Toolbox(tmp_path, ["read_file"]).run("read_file", {"path": "s.txt"}) == "1\ta\n2\tbb\n3\t\n4\tccc"
+
+
+def test_read_refuses_binary(tmp_path):
+    (tmp_path / "blob.bin").write_bytes(b"abc\0def" + b"x" * 93)
+    with pytest.raises(ToolError, match=r"binary file \(100 bytes\)"):
+        Toolbox(tmp_path, ["read_file"]).run("read_file", {"path": "blob.bin"})
+
+
+def test_read_cuts_long_line(tmp_path):
+    (tmp_path / "min.js").write_text("y" * 100_000 + "\nshort\n", encoding="utf-8")
+    out = Toolbox(tmp_path, ["read_file"]).run("read_file", {"path": "min.js"})
+    first, second = out.splitlines()
+    assert first == "1\t" + "y" * MAX_READ_LINE + " [… 98000 chars cut]"
+    assert second == "2\tshort"
+    assert len(out) < MAX_READ_LINE + 100
+
+
+def test_read_caps_total_chars(tmp_path):
+    (tmp_path / "wide.txt").write_text("".join(f"{i:04d}" + "z" * 1496 + "\n" for i in range(1, 201)), encoding="utf-8")
+    tb = Toolbox(tmp_path, ["read_file"])
+    out = tb.run("read_file", {"path": "wide.txt"})
+    *rows, footer = out.splitlines()
+    assert len(out) - len(footer) - 1 <= MAX_READ_CHARS
+    last = int(rows[-1].split("\t")[0])
+    assert last < 200 and len(rows) == last
+    assert footer == f"[lines 1-{last} of 200; continue with offset={last + 1}]"
+    nxt = tb.run("read_file", {"path": "wide.txt", "offset": last + 1})
+    assert nxt.startswith(f"{last + 1:>3}\t{last + 1:04d}z")
 
 
 def test_read_non_utf8(tmp_path):
