@@ -477,3 +477,29 @@ def test_sync_off_starts_from_local(synced, tmp_path):
     git("push", "-q", "origin", "main", cwd=other)
     seen, _ = run_peek(repo, tmp_path, sync=False)
     assert "merged.py" not in seen
+
+
+@pytest.mark.parametrize("first_line", ["TITLE: config: 기본값 x를 2로 변경", "**제목:** config: 기본값 x를 2로 변경",
+                                        "## Title: config: 기본값 x를 2로 변경"])
+def test_title_line_names_the_commit_and_pr(repo, monkeypatch, tmp_path, first_line):
+    repo, remote = repo
+    verdict = f"{first_line}\nChecked a.py.\nLGTM"
+    shift, gh, _ = shift_with(repo, verdict, monkeypatch, tmp_path)
+    (create,) = gh.ran("gh", "pr", "create")
+    assert create[0][create[0].index("--title") + 1] == "rig: config: 기본값 x를 2로 변경"
+    body = create[1]
+    assert "Checked a.py." in body and "TITLE" not in body and "제목" not in body
+    message = git("log", "-1", "--format=%B", f"rig/{shift.id}", cwd=remote)
+    assert message.startswith("rig: config: 기본값 x를 2로 변경\n\nChecked a.py.\nLGTM")
+    assert "bump x" not in message  # the task isn't the title any more
+
+
+def test_change_title_falls_back_to_the_task_and_is_cut():
+    from rig.runner import Shift, change_title
+
+    shift = Shift(id="1", dir=__import__("pathlib").Path("."))
+    shift.finals = [HandResult("r", "No title line here.\nLGTM", "end_turn", 1)]
+    assert change_title(shift, "do the next item\nmore") == ("do the next item", "No title line here.\nLGTM")
+    shift.finals = [HandResult("r", "TITLE: " + "가" * 100, "end_turn", 1)]
+    title, summary = change_title(shift, "task")
+    assert len(title) == 72 and title.endswith("…") and summary == ""

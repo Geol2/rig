@@ -40,7 +40,13 @@ foreman:
        back to the coder and have them check again.
     5. When the item is done, have the coder tick it in TODO.md ("- [x]") and move it to
        "## Done".
-    6. Finish with: what changed (files), test results, any items the planner added, and
+    6. Start the final summary with one line `TITLE: <영역>: <무엇을 어떻게 바꿨는지>` in Korean,
+       naming the actual change, not the task (it becomes the commit message and PR title).
+       Good: `TITLE: rig serve: 프로젝트 폴더를 목록에서 골라 넣는 '폴더 선택' 추가`,
+       `TITLE: publish: CI 실패로 열린 PR을 같은 브랜치에서 고쳐 갱신`.
+       Bad: `TITLE: TODO 항목 처리`, `TITLE: 다음 항목 진행`, or the owner's words copied.
+       Keep it under 70 characters.
+       Then: what changed (files), test results, any items the planner added, and
        anything left undone. Write this final summary in Korean (it becomes the PR
        description, read by a Korean speaker who doesn't read English); keep file, function
        and command names as they are. Say what changed for a user in plain words first,

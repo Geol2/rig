@@ -418,6 +418,13 @@ publish:
   # merge_method: squash  # squash | merge | rebase
 ```
 
+The commit and the PR are titled from the final hand's reply when it starts with a line
+`TITLE: <what changed>` (or `제목: …`; Markdown marks around it are fine): that line becomes
+`rig: <what changed>` and is left out of the PR description. Without it, the task's first
+line is used. Have the last hand (the foreman, or the last stage) write one so the history
+says what was changed rather than what was asked.
+
+
 In foreman mode the approver must be on `foreman.crew`, or it never runs; `rig check` rejects that.
 
 A PR is merged only when **all** of these hold; otherwise it stays open with the reason in
