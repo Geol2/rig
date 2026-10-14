@@ -120,6 +120,8 @@ Built-in tools (all confined to `workspace`):
 
 `write_file` and `edit_file` refuse paths inside `.git` or `.rig` (any depth, any case), so a hand can't plant git hooks or change shift records; reading them still works.
 
+`write_file` writes the content exactly as given (no OS newline translation, so LF stays LF on Windows too); overwriting an existing CRLF file with content that has no `\r` writes it back with CRLF, like `edit_file` does.
+
 ### run
 
 `run` only executes commands that start with an entry in `run.allow`:

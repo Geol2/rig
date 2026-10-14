@@ -27,6 +27,7 @@ from rig.cost import Meter, price_warnings, usd
 from rig.graph import layers
 from rig.runner import PROGRESS_LOG, Resume, ShiftEvent, live, load_resume
 from rig.spec import InputError, RigFileError, load, parse_yaml, read_rig_text
+from rig.tools import crlf
 from rig.worktree import GitError
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
@@ -149,6 +150,8 @@ class App:
                 f"  {n}: {json.dumps(p, ensure_ascii=False)}\n" for n, p in rows
             )
         text = read_rig_text(path)
+        if crlf(text.encode("utf-8")):
+            block = block.replace("\n", "\r\n")  # keep the file's line ends; the patterns below take \r as line content
         # The current setting: a `workspace:` line and/or a `workspaces:` line with its indented entries.
         current = re.compile(r"^workspaces?:[^\n]*\n?(?:[ \t]+[^\n]*\n?)*", re.M)
         m = current.search(text)
@@ -160,7 +163,7 @@ class App:
         from rig.spec import Rig
 
         Rig.model_validate(load_check)  # never write a file rig can't load
-        path.write_text(new, encoding="utf-8")
+        path.write_bytes(new.encode("utf-8"))  # no newline translation: Windows would turn \r\n into \r\r\n
 
     # --- runs ------------------------------------------------------------------------------------
 
@@ -360,7 +363,7 @@ class App:
         path = self.root / "fix.rig.yaml"
         if path.exists():
             raise ValueError("fix.rig.yaml already exists")
-        path.write_text(resources.files("rig").joinpath("template-fix.yaml").read_text(encoding="utf-8"), encoding="utf-8")
+        path.write_bytes(resources.files("rig").joinpath("template-fix.yaml").read_bytes())  # as shipped, no newline translation
         try:
             self.set_workspaces(path.name, workspaces)
         except (ValueError, ValidationError):

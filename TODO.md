@@ -294,10 +294,55 @@ Keep items small enough for one reviewed change. Add context under an item when 
   `tests/test_serve.py`에 crew에 없는 hand가 있는 rig와 `cost.PRICES`에 없는 모델을 쓰는 rig에서 `rigs()`의
   `warnings`에 해당 문구가 들어 있고, 경고 없는 rig는 빈 목록인지 확인하는 테스트.
   Note: `App.rigs()` entries carry `warnings` (`hand_warnings()` + `price_warnings(models, max_cost_usd)`, same as `rig check`); error entries don't. The page shows them as `.rig-warn` lines on the rig card; they don't follow the page's cost-limit field and don't block a run.
+- [x] **Windows에서 파일 쓰기가 줄바꿈을 바꾸거나 `\r\r\n`으로 망가뜨리지 않게**: `tools.py` `Toolbox.run`의
+  `write_file`은 `p.write_text(args["content"], encoding="utf-8")`로 써서 Windows에서는 텍스트 모드 변환으로 모든
+  `\n`이 `\r\n`이 됩니다. LF 저장소에서는 파일 전체가 바뀐 diff가 생기고, 모델이 `\r\n`을 넣은 내용은 `\r\r\n`이 됩니다
+  (`edit_file`은 이미 `write_bytes`라 영향 없음). `serve.py` `App.set_workspaces`도 `read_rig_text`로 읽은 CRLF rig 파일을
+  `path.write_text(new, encoding="utf-8")`로 다시 써서, Windows에서 페이지로 폴더를 저장할 때마다 줄 끝이 `\r\r\n`으로
+  불어납니다(`init_fix`도 같은 호출). `write_file`은 받은 내용을 그대로 쓰되(`newline=""` 또는 `write_bytes`), 이미 있는
+  파일이 CRLF이고 새 내용에 `\r`이 없으면 `edit_file`처럼 `\r\n`으로 맞추고, `set_workspaces`는 원래 파일의 줄 끝을
+  유지해 `newline=""`로 쓰세요. 완료 기준: `tests/test_tools.py`에 새 파일에 `"a\nb\n"`을 쓰면 OS와 상관없이 bytes가
+  `b"a\nb\n"`인지, CRLF 파일을 덮어쓰면 CRLF로 남는지, `"\r\n"`이 든 내용이 `\r\r\n`이 되지 않는지 테스트;
+  `tests/test_serve.py`에 CRLF rig 파일에 `set_workspaces`를 두 번 해도 bytes에 `\r\r\n`이 없고 CRLF가 유지되는지 테스트.
+  Note: `tools.crlf(data)` calls a file CRLF when its first `\n` follows a `\r`; `write_file` uses `write_bytes` and turns `\n` into `\r\n` only when overwriting a CRLF file with content that has no `\r`; `set_workspaces` converts its block to CRLF when the original file is CRLF and writes bytes; `init_fix` copies the template bytes as shipped.
 
 ## Backlog
 
 From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
+- [ ] **`read_file`이 한 번에 돌려주는 양에 상한 두기**: `tools.py` `Toolbox._read`는 줄 수(`READ_LIMIT` 2000)만 자르고
+  줄 길이나 전체 글자 수는 제한하지 않습니다. 한 줄이 수 MB인 minified JS·`*.min.css`·lock 파일, 또는 바이너리 파일
+  (`search`는 NUL 바이트로 건너뛰지만 `read_file`은 `errors="replace"`로 그대로 읽음)을 읽으면 tool result 하나가
+  컨텍스트를 채워 비용이 크게 들거나 hand가 `api_error`(prompt too long)로 끝납니다(`hand.py` `_call`도 길이를 자르지
+  않음). 앞 8KB에 NUL이 있으면 "binary file (N bytes); not shown"이라는 ToolError로 거부하고, 한 줄은 `MAX_READ_LINE`
+  (예: 2000자)에서 자르며 `[… N chars cut]` 표시, 한 번의 결과는 `MAX_READ_CHARS`(예: 100,000자)를 넘으면 거기까지의
+  줄만 돌려주고 지금 형식의 `continue with offset=…` 안내를 붙이세요. `read_file` 도구 설명과 README Built-in tools 표에
+  한 줄. 완료 기준: `tests/test_tools.py`에 NUL이 든 파일 거부, 10만 자짜리 한 줄의 잘림 표시, 긴 줄 여러 개에서
+  글자 상한으로 멈추고 다음 offset이 맞는지, 평범한 파일 출력은 그대로인지 테스트.
+- [ ] **`publish.pr` rig는 hand를 돌리기 전에 `gh`·로그인·remote 확인**: `publish.py` `publish`는 shift가 끝난 뒤에야
+  `git push`와 `gh pr create`를 실행해서, `gh`가 없거나(`run_cmd`의 "gh not found") 로그인이 안 됐거나 `publish.remote`
+  (기본 `origin`)가 없으면 shift 비용을 다 쓴 뒤 "couldn't open a PR"/"push failed"로 끝납니다(README Windows 표에 이 경우의
+  수동 복구 방법이 있을 정도로 흔함). `publish.py`에 `preflight(repos, policy, run=run_cmd) -> list[str]`을 두어 각 저장소에서
+  `git remote get-url <remote>`와 `gh auth status`를 확인하고, `cli.py` `cmd_run`과 `serve.py` `App.start`가 `--dry`가 아닐
+  때 worktree를 만들기 전에 불러 문제가 있으면 무엇을 고칠지(설치 링크, `gh auth login`, remote 이름) 말하고 시작하지
+  않게 하세요. `rig check`에서는 경고로만 표시. 완료 기준: `tests/test_publish.py`에 가짜 `run`으로 gh 없음(127)·로그인
+  안 됨·remote 없음이 각각 메시지를 내고 모두 정상이면 빈 목록인지, `tests/test_cli.py`에 preflight가 실패하면 `rig run`이
+  worker를 부르기 전에 종료하고 `--dry`에서는 확인하지 않는지 테스트.
+- [ ] **YAML 문법 오류가 있는 rig 파일이 `rig serve` 목록에서 사라지지 않게**: `serve.py` `App.rig_files`는
+  `yaml.safe_load`가 `YAMLError`를 내면 `continue`로 건너뛰어, 들여쓰기 하나 틀린 `rig.yaml`이 페이지에서 오류 표시 없이
+  그냥 없어집니다(검증 오류나 UTF-8이 아닌 파일은 `rigs()`가 `error`와 함께 보여 주는 것과 다름). 파싱이 안 되는 파일 중
+  이름이 `rig.yaml`/`rig.yml`이거나 `*.rig.yaml`/`*.rig.yml`이거나 줄 맨 앞에 `hands:`가 있는 파일은 목록에 넣고,
+  `rigs()`가 `load`의 `YAMLError`를 줄·열 번호가 있는 `error`로 돌려주게 하세요(rig가 아닌 `other.yaml` 등은 지금처럼 무시).
+  완료 기준: `tests/test_serve.py`에 탭/들여쓰기 오류가 있는 `rig.yaml`과 `x.rig.yaml`이 `rigs()`에 `error`(줄 번호 포함)로
+  나오고, 문법 오류가 있는 rig 아닌 `notes.yaml`은 여전히 빠지는지, `_rig_path`로 실행하려 하면 오류가 나는지 테스트.
+- [ ] **`max_turns`로 멈춘 hand가 한 일을 잃지 않게**: `hand.py` `ClaudeWorker._loop`는 턴이 다 되면 `result.output`을
+  `[stopped after N turns]`로 덮어써서, 그 hand의 `.md`에도, foreman이 받는 `runner.py` `delegate`의 ToolError("coder did
+  not finish cleanly (max_turns): [stopped after 20 turns]")에도 무엇을 했는지가 남지 않습니다. foreman은 어떤 파일이 이미
+  바뀌었는지 모른 채 같은 일을 처음부터 다시 맡기게 됩니다. 마지막 assistant 응답의 텍스트(있으면)를 남기고 그 뒤에
+  `[stopped after N turns]`를 붙이며, `Toolbox`가 이번 hand에서 `write_file`/`edit_file`로 바꾼 경로를 기억해(예:
+  `Toolbox.changed`) `delegate`의 오류 메시지에 "changed files: …"로 넣으세요. 완료 기준: `tests/test_worker.py`에 텍스트와
+  tool_use를 함께 내는 가짜 응답으로 `max_turns`에 걸렸을 때 output에 그 텍스트와 표시가 모두 있는지, `tests/test_foreman.py`에
+  파일을 쓴 뒤 턴이 다 된 delegate의 오류에 그 경로가 들어 있는지 테스트.
 
 ## Needs a design first
 
