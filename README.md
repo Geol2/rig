@@ -232,6 +232,7 @@ inputs, run it (optionally dry or in a worktree), watch progress live, and open 
 of any past shift. It runs one shift at a time. While a shift runs, the page shows its cost
 so far against the limit (taken from `max_cost_usd`, editable before each run) and a
 **Stop** button that ends it the same way the limit does.
+Each rig card shows the same warnings as `rig check` (hands off the crew or lines, models with no price).
 
 Shifts started with `rig run` in a terminal show up too: every shift writes its progress
 lines to `progress.log` in its folder (and `running.json` while it runs), and the history

@@ -285,12 +285,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   `tests/conftest.py`의 `repo` fixture)를 `App.start(..., resume=<id>)`로 이어 받아 새 shift.json에
   `resumed_from`이 기록되는지, ok인 shift는 `ValueError`로 거부되는지, `shifts()`의 `resumable`이 맞는지 테스트.
   Note: `App.shifts` rows carry `resumable`/`resume_file`/`resume_problem` (`no_rig`/`many_rigs`)/`resume_task`; POST /api/run takes `resume` (task/inputs refused; `GitError` from `load_resume` is shown as a 400); the page's resume mode reuses `#fix-box`.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`rig serve`에서 실행 전에 rig 경고 보여 주기**: `rig check`와 `rig run` 시작 때 나오는
+- [x] **`rig serve`에서 실행 전에 rig 경고 보여 주기**: `rig check`와 `rig run` 시작 때 나오는
   `Rig.hand_warnings()`(crew에 없는 hand, line에 없는 hand)와 `cost.price_warnings`(가격 없는 모델 → 비용 상한이
   안 먹음)가 serve 페이지에서는 실행을 누른 뒤 로그에만 나옵니다(`serve.py` `App.rigs`는 이를 돌려주지 않음).
   페이지 사용자는 상한을 믿고 실행한 뒤에야 알게 됩니다. `App.rigs()`의 각 항목에 `warnings` 목록을 넣고, 페이지의
@@ -298,6 +293,11 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   문구가 달라지므로 `price_warnings(rig.models(), rig.max_cost_usd)` 기준으로 고정해도 됩니다. 완료 기준:
   `tests/test_serve.py`에 crew에 없는 hand가 있는 rig와 `cost.PRICES`에 없는 모델을 쓰는 rig에서 `rigs()`의
   `warnings`에 해당 문구가 들어 있고, 경고 없는 rig는 빈 목록인지 확인하는 테스트.
+  Note: `App.rigs()` entries carry `warnings` (`hand_warnings()` + `price_warnings(models, max_cost_usd)`, same as `rig check`); error entries don't. The page shows them as `.rig-warn` lines on the rig card; they don't follow the page's cost-limit field and don't block a run.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
 
 ## Needs a design first
 
