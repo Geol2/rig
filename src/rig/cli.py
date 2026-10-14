@@ -49,6 +49,8 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 
 def cmd_check(args: argparse.Namespace) -> None:
+    from rig import publish
+
     rig = _load_or_exit(Path(args.file))
     _check_workspace(rig, Path(args.file))
     if rig.foreman:
@@ -69,6 +71,8 @@ def cmd_check(args: argparse.Namespace) -> None:
         print(f"  inputs: {', '.join(f'{n} ({describe(s)})' for n, s in rig.inputs.items())}")
     for line in [*rig.hand_warnings(), *price_warnings(rig.models(), rig.max_cost_usd)]:
         print(line)
+    for p in publish.check_rig(rig, Path(args.file).resolve().parent):
+        print(f"⚠ publish.pr: {p}")
 
 
 def _parse_inputs(pairs: list[str]) -> dict[str, str]:
@@ -85,6 +89,7 @@ def _parse_inputs(pairs: list[str]) -> dict[str, str]:
 
 
 def cmd_run(args: argparse.Namespace) -> None:
+    from rig import publish
     from rig.hand import ClaudeWorker, EchoWorker
     from rig.runner import ResumeError, load_resume, run_shift
     from rig.worktree import GitError
@@ -115,6 +120,10 @@ def cmd_run(args: argparse.Namespace) -> None:
         task = args.task if args.task is not None else sys.stdin.read()
     if not task.strip():
         sys.exit("rig: empty task (pass it as an argument or on stdin)")
+    if not args.dry:
+        problems = publish.check_rig(rig, path.resolve().parent)  # before any hand spends money
+        if problems:
+            sys.exit("rig: can't open PRs (publish.pr), so nothing ran:\n" + "\n".join(f"  - {p}" for p in problems))
 
     worker = EchoWorker() if args.dry else ClaudeWorker()
     try:

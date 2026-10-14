@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, quote, unquote, urlparse
 import yaml
 from pydantic import ValidationError
 
-from rig import report
+from rig import publish, report
 from rig.cost import Meter, price_warnings, usd
 from rig.graph import layers
 from rig.runner import PROGRESS_LOG, Resume, ShiftEvent, live, load_resume
@@ -185,6 +185,10 @@ class App:
                 raise ValueError("project folder not found; fix it first" + ("" if missing == ["."] else f": {', '.join(missing)}"))
             if max_cost is not None and max_cost <= 0:
                 raise ValueError("the cost limit must be more than 0")
+            if not dry:
+                problems = publish.check_rig(rig, path.parent)  # before any hand spends money
+                if problems:
+                    raise ValueError("can't open PRs (publish.pr):\n" + "\n".join(f"- {p}" for p in problems))
             res = None
             if resume:
                 try:

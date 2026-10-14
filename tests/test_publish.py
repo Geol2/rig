@@ -3,6 +3,8 @@
 import asyncio
 import json
 import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -256,6 +258,94 @@ def test_existing_pr_head_not_shown_yet_checks_anyway():
 def test_spec_errors(data, message):
     with pytest.raises(ValidationError, match=message):
         Rig.model_validate({"name": "t", "hands": {"a": {"role": "A"}, "b": {"role": "B"}}, **data})
+
+
+# --- preflight: gh, login and remote checked before a publish.pr shift starts ---------------------
+
+def fake_run(gh=0, missing=()):
+    """A runner whose `gh auth status` exits with `gh` and whose repos in `missing` have no remote."""
+    calls = []
+
+    def run(args, cwd, stdin=None):
+        calls.append((args, cwd))
+        if args[0] == "gh":
+            return gh, ""
+        return (2, "error: No such remote") if cwd.name in missing else (0, "git@github.com:o/r.git")
+
+    return run, calls
+
+
+def test_preflight_all_ok():
+    run, calls = fake_run()
+    assert publish.preflight([Path("/w/api"), Path("/w/web")], Publish(pr=True), run) == []
+    assert [a for a, _ in calls] == [["gh", "auth", "status"], ["git", "remote", "get-url", "origin"],
+                                     ["git", "remote", "get-url", "origin"]]
+
+
+def test_preflight_gh_missing_still_checks_remotes():
+    run, calls = fake_run(gh=127, missing={"api"})
+    assert publish.preflight([Path("/w/api")], Publish(pr=True), run) == [
+        "gh (GitHub CLI) isn't installed; publish.pr needs it to open PRs (https://cli.github.com)",
+        "api has no remote 'origin'; add it with `git remote add origin <url>` or set publish.remote",
+    ]
+
+
+@pytest.mark.parametrize("code", [1, 4])
+def test_preflight_gh_not_logged_in(code):
+    run, _ = fake_run(gh=code)
+    assert publish.preflight([Path("/w/api")], Publish(pr=True), run) == ["gh isn't logged in; run `gh auth login`"]
+
+
+def test_preflight_gh_timeout_isnt_called_not_logged_in():
+    run, _ = fake_run(gh=124)
+    assert publish.preflight([Path("/w/api")], Publish(pr=True), run) == [
+        f"gh auth status didn't answer in {publish.PREFLIGHT_TIMEOUT}s (offline?); "
+        "check your connection and run `gh auth status`"]
+
+
+def test_preflight_names_the_repo_without_the_remote():
+    run, calls = fake_run(missing={"web"})
+    problems = publish.preflight([Path("/w/api"), Path("/w/web")], Publish(pr=True, remote="upstream"), run)
+    assert problems == ["web has no remote 'upstream'; add it with `git remote add upstream <url>` or set publish.remote"]
+    assert calls[0][1] == Path("/w/api")  # gh runs in the first repo
+
+
+def test_preflight_checks_each_repo_once():
+    run, calls = fake_run()
+    publish.preflight([Path("/w/api"), Path("/w/api")], Publish(pr=True), run)
+    assert [a[:2] for a, _ in calls].count(["git", "remote"]) == 1
+
+
+def test_check_rig_without_pr_runs_nothing(tmp_path):
+    rig = Rig.model_validate({"name": "t", "hands": {"a": {"role": "A"}}})
+    assert publish.check_rig(rig, tmp_path, lambda *a: pytest.fail("ran a command")) == []
+
+
+def test_check_rig_workspace_not_in_git(tmp_path):
+    (tmp_path / "proj").mkdir()
+    rig = Rig.model_validate({"name": "t", "workspace": "proj", "hands": {"a": {"role": "A"}}, "publish": {"pr": True}})
+    run, calls = fake_run()
+    assert publish.check_rig(rig, tmp_path, run) == [
+        f"workspace ({(tmp_path / 'proj').resolve()}) isn't in a git repo; publish.pr needs one"]
+    assert [a for a, _ in calls] == [["gh", "auth", "status"]]  # no repo, so no remote to check
+
+
+def test_check_rig_workspaces_in_one_repo_check_its_remote_once(tmp_path, repo):
+    repo, _ = repo
+    (repo / "api").mkdir()
+    (tmp_path / "plain").mkdir()
+    rig = Rig.model_validate({"name": "t", "workspaces": {"api": "repo/api", "web": "repo", "notes": "plain"},
+                              "hands": {"a": {"role": "A"}}, "publish": {"pr": True}})
+    run, calls = fake_run()
+    assert publish.check_rig(rig, tmp_path, run) == [
+        f"workspace notes ({(tmp_path / 'plain').resolve()}) isn't in a git repo; publish.pr needs one"]
+    remotes = [cwd for a, cwd in calls if a[:3] == ["git", "remote", "get-url"]]
+    assert remotes == [repo.resolve()]
+
+
+def test_run_cmd_timeout():
+    code, out = publish.run_cmd([sys.executable, "-c", "import time; time.sleep(5)"], Path.cwd(), timeout=0.2)
+    assert code == 124 and out.endswith("timed out after 0.2s")
 
 
 # --- end to end: a real repo and a real (local, bare) remote; gh is faked ------------------------

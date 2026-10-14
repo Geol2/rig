@@ -432,8 +432,12 @@ The commit and the PR are titled from the final hand's reply when it starts with
 line is used. Have the last hand (the foreman, or the last stage) write one so the history
 says what was changed rather than what was asked.
 
-
 In foreman mode the approver must be on `foreman.crew`, or it never runs; `rig check` rejects that.
+
+Before any hand runs (`rig run`, or starting a run on the `rig serve` page; not with `--dry`),
+rig checks that `gh` is installed and logged in and that each repo has the `publish.remote`
+remote (default `origin`), and doesn't start if one is missing, saying what to fix.
+`rig check` shows the same problems as warnings.
 
 A PR is merged only when **all** of these hold; otherwise it stays open with the reason in
 the output and in `shift.json` (`prs`):
@@ -545,6 +549,7 @@ scripts\auto.cmd 5 10     # 한 번에 $5까지, 최대 10번
 |---|---|
 | `'MAX_COST=5' 용어는 cmdlet ... 인식되지 않습니다` | PowerShell에서 bash 문법을 썼습니다. `scripts\auto.cmd 5`로 실행하세요. |
 | `ANTHROPIC_API_KEY가 없습니다` | 4번처럼 `setx`로 등록한 뒤 터미널을 새로 여세요. |
+| `can't open PRs (publish.pr)` | PR을 열 수 없어서 아무것도 실행하지 않았습니다(비용 없음). 아래 `-` 줄마다 적힌 것을 고치세요: GitHub CLI 설치, `gh auth login`, 또는 `git remote add origin <url>`. 그런 다음 다시 실행하세요. |
 | `couldn't open a PR: gh not found` | 3번처럼 GitHub CLI를 설치하고 `gh auth login` 하세요. 브랜치는 이미 올라가 있으니 `gh pr create --head <브랜치> --base main`으로 PR만 열면 됩니다. |
 | `rig.exe ... 다른 프로세스가 파일을 사용 중` | 다른 창에서 rig가 돌고 있습니다. 그 창을 닫거나 `taskkill /F /IM rig.exe` 후 다시 실행하세요. |
 | 웹 페이지가 예전 모습 그대로 | 예전에 켠 `rig serve`가 아직 돌고 있습니다. `taskkill /F /IM rig.exe`로 끄고 다시 실행한 뒤 브라우저에서 Ctrl+F5. |

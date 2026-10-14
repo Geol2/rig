@@ -315,12 +315,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   한 줄. 완료 기준: `tests/test_tools.py`에 NUL이 든 파일 거부, 10만 자짜리 한 줄의 잘림 표시, 긴 줄 여러 개에서
   글자 상한으로 멈추고 다음 offset이 맞는지, 평범한 파일 출력은 그대로인지 테스트.
   Note: `MAX_READ_LINE` (2000) cuts each line with `[… N chars cut]`, `MAX_READ_CHARS` (100,000) stops a call at the last line that fits (always at least one) with the usual `continue with offset=` footer, and a NUL in the first 8 KB raises "binary file (N bytes); not shown".
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`publish.pr` rig는 hand를 돌리기 전에 `gh`·로그인·remote 확인**: `publish.py` `publish`는 shift가 끝난 뒤에야
+- [x] **`publish.pr` rig는 hand를 돌리기 전에 `gh`·로그인·remote 확인**: `publish.py` `publish`는 shift가 끝난 뒤에야
   `git push`와 `gh pr create`를 실행해서, `gh`가 없거나(`run_cmd`의 "gh not found") 로그인이 안 됐거나 `publish.remote`
   (기본 `origin`)가 없으면 shift 비용을 다 쓴 뒤 "couldn't open a PR"/"push failed"로 끝납니다(README Windows 표에 이 경우의
   수동 복구 방법이 있을 정도로 흔함). `publish.py`에 `preflight(repos, policy, run=run_cmd) -> list[str]`을 두어 각 저장소에서
@@ -329,6 +324,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   않게 하세요. `rig check`에서는 경고로만 표시. 완료 기준: `tests/test_publish.py`에 가짜 `run`으로 gh 없음(127)·로그인
   안 됨·remote 없음이 각각 메시지를 내고 모두 정상이면 빈 목록인지, `tests/test_cli.py`에 preflight가 실패하면 `rig run`이
   worker를 부르기 전에 종료하고 `--dry`에서는 확인하지 않는지 테스트.
+  Note: `publish.check_rig(rig, root)` finds each workspace's repo and calls `preflight` (`gh auth status` once, `git remote get-url <publish.remote>` per repo, each with a 15 s timeout via `run_cmd(timeout=)`); `rig run` (also `--resume`) exits with the list before any worktree or hand, `App.start` raises it as a 400, both skip it with `--dry`, and `rig check` prints `⚠ publish.pr: …` warnings.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **YAML 문법 오류가 있는 rig 파일이 `rig serve` 목록에서 사라지지 않게**: `serve.py` `App.rig_files`는
   `yaml.safe_load`가 `YAMLError`를 내면 `continue`로 건너뛰어, 들여쓰기 하나 틀린 `rig.yaml`이 페이지에서 오류 표시 없이
   그냥 없어집니다(검증 오류나 UTF-8이 아닌 파일은 `rigs()`가 `error`와 함께 보여 주는 것과 다름). 파싱이 안 되는 파일 중
