@@ -351,6 +351,8 @@ The foreman gets a `delegate(hand, instructions)` tool and sees its crew's roles
 Each delegation starts the hand fresh with `<task>` + `<instructions from="foreman">`;
 several delegations in one turn run in parallel. A rig uses either `foreman` or `lines`.
 Delegated runs are logged as `<hand>-<n>.md` next to `foreman.md`.
+If a hand stops early (e.g. at `max_turns`), the foreman's delegate error keeps the hand's
+last text and lists the files it already changed, so the next delegation can pick up from there.
 
 `require` is enforced by the harness, not just the prompt: each listed hand must
 finish successfully after the last delegation to any other hand. If the foreman tries to

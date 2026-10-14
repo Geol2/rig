@@ -161,6 +161,41 @@ def test_crashing_delegate_is_a_tool_error_for_the_foreman(tmp_path):
     assert (shift.dir / "reviewer-1.md").read_text(encoding="utf-8") == "[error: ValueError: embedded null byte]"
 
 
+class StoppingCoder(ScriptedWorker):
+    """The coder writes `writes` files, then runs out of turns."""
+
+    def __init__(self, script, writes):
+        super().__init__(script)
+        self.writes = writes
+
+    async def run(self, hand, prompt, toolbox, check=None):
+        if hand.name != "coder":
+            return await super().run(hand, prompt, toolbox, check)
+        for path in self.writes:
+            await toolbox.call("write_file", {"path": path, "content": "x"})
+        return HandResult(name=hand.name, output="half done\n\n[stopped after 20 turns]", stop_reason="max_turns", turns=20)
+
+
+@pytest.mark.parametrize("writes, changed", [(["src/a.py", "./src/a.py", "b.txt"], "\nchanged files: src/a.py, b.txt"), ([], None)])
+def test_stopped_delegate_reports_its_output_and_changed_files(tmp_path, writes, changed):
+    errors = []
+
+    async def script(tb):
+        with pytest.raises(ToolError) as e:
+            await tb.call("delegate", {"hand": "coder", "instructions": "write x"})
+        errors.append(str(e.value))
+        return "done anyway"
+
+    rig = make(hands={"coder": {"role": "Code.", "tools": ["write_file"]}, "reviewer": {"role": "Review."}})
+    asyncio.run(run_shift(rig, "build it", StoppingCoder(script, writes), root=tmp_path, on_event=lambda _: None))
+    [error] = errors
+    assert error.startswith("coder did not finish cleanly (max_turns): half done\n\n[stopped after 20 turns]")
+    if changed:
+        assert error.endswith(changed)
+    else:
+        assert "changed files" not in error
+
+
 def test_crashing_foreman_still_writes_shift_json(tmp_path):
     async def script(tb):
         await tb.call("delegate", {"hand": "coder", "instructions": "write x"})

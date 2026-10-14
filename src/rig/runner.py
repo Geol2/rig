@@ -852,12 +852,16 @@ async def _run_foreman(rig, task, worker, shift, record, on_event, tools: ToolFa
 
         hand = rig.resolve(name, shift.inputs)
         on_event(f"  ↳ {key}  {instructions.strip().splitlines()[0][:70] if instructions.strip() else ''}")
+        toolbox = tools(hand.tools, key)
         res = await _guarded_run(worker, hand, key, build_prompt(task, {}, instructions, inputs=shift.inputs),
-                                 tools(hand.tools, key), on_event)
+                                 toolbox, on_event)
         on_event(f"  ■ {key}  {_done(res, shift.meter)}")
         record(key, res)
         if not res.ok:
-            raise ToolError(f"{name} did not finish cleanly ({res.stop_reason}): {res.output}")
+            raise ToolError(
+                f"{name} did not finish cleanly ({res.stop_reason}): {res.output}"
+                + (f"\nchanged files: {', '.join(toolbox.changed)}" if toolbox.changed else "")
+            )
         seq += 1
         if name in foreman.require:
             last_required[name] = seq

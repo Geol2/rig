@@ -158,6 +158,7 @@ class ClaudeWorker:
         self, hand: ResolvedHand, params: dict[str, Any], messages: list[dict[str, Any]], result: HandResult,
         toolbox: Toolbox, check: FinishCheck | None,
     ) -> HandResult:
+        last_text = ""
         while result.turns < hand.max_turns:
             if self.meter and self.meter.stop_reason:
                 result.stop_reason = self.meter.stop_reason
@@ -185,6 +186,10 @@ class ClaudeWorker:
                     response.usage.cache_read_input_tokens or 0, response.usage.cache_creation_input_tokens or 0,
                 ))
             messages.append({"role": "assistant", "content": response.content})
+            # The last turn is often pure tool_use, so keep the latest text as the record of what it did.
+            text = "".join(b.text for b in response.content if b.type == "text")
+            if text.strip():
+                last_text = text
             result.stop_reason = response.stop_reason or ""
 
             if response.stop_reason == "refusal":
@@ -207,7 +212,8 @@ class ClaudeWorker:
             messages.append({"role": "user", "content": list(tool_results)})
 
         result.stop_reason = "max_turns"
-        result.output = f"[stopped after {hand.max_turns} turns]"
+        stopped = f"[stopped after {hand.max_turns} turns]"
+        result.output = f"{last_text}\n\n{stopped}" if last_text else stopped
         return result
 
 

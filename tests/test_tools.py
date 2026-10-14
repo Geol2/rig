@@ -334,6 +334,32 @@ def test_write_and_edit_near_git_still_allowed(tmp_path, path):
     assert (tmp_path / path).read_text(encoding="utf-8") == "a = 2\n"
 
 
+def test_changed_records_successful_writes_and_edits_once(tmp_path):
+    tb = Toolbox(tmp_path, ALL)
+    tb.run("write_file", {"path": "./a.txt", "content": "a = 1\n"})
+    tb.run("edit_file", {"path": "a.txt", "old": "1", "new": "2"})
+    tb.run("write_file", {"path": "src/b.py", "content": "x"})
+    tb.run("read_file", {"path": "src/b.py"})
+    with pytest.raises(ToolError):
+        tb.run("edit_file", {"path": "src/b.py", "old": "missing", "new": "y"})
+    with pytest.raises(ToolError):
+        tb.run("edit_file", {"path": "c.txt", "old": "a", "new": "b"})
+    with pytest.raises(ToolError):
+        tb.run("write_file", {"path": ".git/config", "content": "evil"})
+    assert tb.changed == ["a.txt", "src/b.py"]
+
+
+def test_changed_ignores_reads_and_failures(tmp_path):
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+    tb = Toolbox(tmp_path, ALL)
+    tb.run("read_file", {"path": "a.txt"})
+    with pytest.raises(ToolError):
+        tb.run("edit_file", {"path": "a.txt", "old": "zzz", "new": "b"})
+    with pytest.raises(ToolError):
+        tb.run("write_file", {"path": ".git/x", "content": "evil"})
+    assert tb.changed == []
+
+
 def test_write_in_workspace_under_rig_worktrees(tmp_path):
     # --worktree mode: the workspace itself lives in .rig/worktrees/<id>.
     ws = tmp_path / ".rig" / "worktrees" / "abc"

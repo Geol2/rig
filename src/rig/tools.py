@@ -327,6 +327,8 @@ class Toolbox:
         self.env = env
         # Progress callback: one line per built-in tool call (run-time tools log themselves).
         self.on_call = on_call
+        # Paths this hand changed with write_file/edit_file, in first-change order, for reporting when it stops early.
+        self.changed: list[str] = []
 
     @property
     def definitions(self) -> list[dict[str, Any]]:
@@ -419,6 +421,11 @@ class Toolbox:
                 return name if rel == "." else f"{name}/{rel}"
         return p.as_posix()
 
+    def _changed(self, p: Path) -> None:
+        rel = self._rel(p)
+        if rel not in self.changed:
+            self.changed.append(rel)
+
     def _files(self, root: Path) -> Iterator[Path]:
         """Files under root (or root itself), skipping ignored directories, in sorted order."""
         if root.is_file():
@@ -443,9 +450,12 @@ class Toolbox:
             if "\r" not in content and p.is_file() and crlf(p.read_bytes()):
                 content = content.replace("\n", "\r\n")
             p.write_bytes(content.encode("utf-8"))
+            self._changed(p)
             return f"wrote {len(args['content'])} chars to {args['path']}"
         if name == "edit_file":
-            return self._edit(args["path"], args["old"], args["new"], bool(args.get("replace_all")))
+            out = self._edit(args["path"], args["old"], args["new"], bool(args.get("replace_all")))
+            self._changed(self._writable(args["path"]))
+            return out
         if name == "list_dir":
             if self._top(args["path"]):
                 return "\n".join(f"{n}/" for n in self.roots)
