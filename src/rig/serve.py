@@ -25,8 +25,9 @@ from pydantic import ValidationError
 from rig import report
 from rig.cost import Meter, usd
 from rig.graph import layers
-from rig.runner import PROGRESS_LOG, ShiftEvent, live
+from rig.runner import PROGRESS_LOG, Resume, ShiftEvent, live, load_resume
 from rig.spec import InputError, RigFileError, load, parse_yaml, read_rig_text
+from rig.worktree import GitError
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 
@@ -163,26 +164,38 @@ class App:
     # --- runs ------------------------------------------------------------------------------------
 
     def start(self, name: str, task: str, inputs: dict[str, str], dry: bool, use_worktree: bool,
-              max_cost: float | None = None) -> Run:
+              max_cost: float | None = None, resume: str | None = None) -> Run:
+        """Start a run in the background; with `resume` (`last` or a shift id), continue that
+        stopped shift like `rig run --resume`: its task and inputs, always in a worktree."""
+        if resume and (task.strip() or any(v != "" for v in inputs.values())):
+            raise ValueError("resume reuses the old shift's task and inputs; don't send a task or inputs")
         with self._lock:
             if self.run and self.run.status == "running":
                 raise ValueError("a run is already in progress")
-            if not task.strip():
+            if not resume and not task.strip():
                 raise ValueError("enter a task")
             path = self._rig_path(name)
             rig = load(path)
             missing = [n for n, d in rig.workspace_dirs(path.parent).items() if not d.is_dir()]
             if missing:
                 raise ValueError("project folder not found; fix it first" + ("" if missing == ["."] else f": {', '.join(missing)}"))
-            rig.resolve_inputs({k: v for k, v in inputs.items() if v != ""})  # raises InputError
             if max_cost is not None and max_cost <= 0:
                 raise ValueError("the cost limit must be more than 0")
+            res = None
+            if resume:
+                try:
+                    res = load_resume(path.parent, rig, resume)  # ResumeError is a ValueError: shown as 400
+                except GitError as e:
+                    raise ValueError(str(e)) from None
+                task, inputs, use_worktree = res.task, res.inputs, True
+            rig.resolve_inputs({k: v for k, v in inputs.items() if v != ""})  # raises InputError
             run = Run(file=name, task=task, dry=dry, meter=Meter(max_cost))
             self.run = run
-            threading.Thread(target=self._work, args=(run, path, inputs, use_worktree), daemon=True).start()
+            threading.Thread(target=self._work, args=(run, path, inputs, use_worktree, res), daemon=True).start()
             return run
 
-    def _work(self, run: Run, path: Path, inputs: dict[str, str], use_worktree: bool) -> None:
+    def _work(self, run: Run, path: Path, inputs: dict[str, str], use_worktree: bool,
+              resume: Resume | None = None) -> None:
         from rig.hand import ClaudeWorker, EchoWorker
         from rig.runner import run_shift
 
@@ -192,6 +205,7 @@ class App:
             shift = asyncio.run(run_shift(
                 rig, run.task, worker, root=path.parent, on_event=run.log, use_worktree=use_worktree,
                 inputs={k: v for k, v in inputs.items() if v != ""}, meter=run.meter, on_status=run.status_event,
+                resume=resume,
             ))
             run.shift_id = shift.id
             for wt, _ in shift.committed():
@@ -230,6 +244,7 @@ class App:
         if not self.shifts_dir.is_dir():
             return []
         out = []
+        to_resume: list[tuple[dict[str, Any], Any]] = []  # resumable rows and their shift.json `rig`
         for d in sorted(self.shifts_dir.iterdir(), reverse=True):
             if not d.is_dir():
                 continue
@@ -241,6 +256,7 @@ class App:
             findings = s.get("findings")
             if not isinstance(findings, int):  # older shift.json: count from the outputs
                 findings = sum(len(h["findings"] or []) for h in report.collect(d)["hands"]) if s else 0
+            resumable = not running and status in ("error", "stopped", "incomplete") and _committed(s)
             out.append({
                 "id": d.name, "rig": s.get("rig") or (info or {}).get("rig", ""), "ok": s.get("ok"),
                 "task": task[0] if task else "",
@@ -249,7 +265,21 @@ class App:
                 "log": (d / PROGRESS_LOG).exists(),
                 "prs": _prs(s),
                 "workspaces": _workspaces(s) or _workspaces(info or {}),
+                "resumable": resumable, "resume_file": None, "resume_problem": None,
+                "resume_task": (s.get("task") or "").strip() if resumable else "",
             })
+            if resumable:
+                to_resume.append((out[-1], s.get("rig")))
+        # The rig file to resume with: the one with the shift's rig name. rigs() loads every rig
+        # file and the page polls this every 5s, so only when some row needs it.
+        if to_resume:
+            names = [(r["file"], r.get("name")) for r in self.rigs() if "error" not in r]
+            for row, rig_name in to_resume:
+                files = [f for f, n in names if n == rig_name]
+                if len(files) == 1:
+                    row["resume_file"] = files[0]
+                else:
+                    row["resume_problem"] = "many_rigs" if files else "no_rig"
         return out
 
     # --- folder picker -----------------------------------------------------------------------
@@ -345,6 +375,13 @@ def _workspaces(summary: dict[str, Any]) -> list[dict[str, str]]:
         return []
     return [{"name": w.get("name") if isinstance(w.get("name"), str) else "", "dir": w["dir"]}
             for w in recorded if isinstance(w, dict) and isinstance(w.get("dir"), str)]
+
+
+def _committed(summary: dict[str, Any]) -> bool:
+    """Whether shift.json records a committed worktree branch (what `load_resume` continues from)."""
+    entries = summary.get("worktrees")
+    return isinstance(entries, list) and any(
+        isinstance(w, dict) and w.get("changed") and w.get("commit") for w in entries)
 
 
 DIR_LIMIT = 500
@@ -449,7 +486,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     limit = body.get("max_cost")
                     run = app.start(body["file"], body.get("task", ""), body.get("inputs") or {},
                                     bool(body.get("dry")), bool(body.get("worktree")),
-                                    float(limit) if limit not in (None, "") else None)
+                                    float(limit) if limit not in (None, "") else None, body.get("resume") or None)
                     return self._json(200, {"ok": True, "file": run.file})
             except (ValueError, KeyError, InputError, ValidationError, yaml.YAMLError) as e:
                 return self._json(400, {"error": str(e)})
@@ -547,6 +584,7 @@ th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px
 td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}tr:last-child td{border-bottom:0}
 td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .table-wrap{overflow-x:auto}
+button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>
 </head>
@@ -570,7 +608,7 @@ td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-alig
     </section>
     <section class="panel" aria-labelledby="run-h">
       <h2 id="run-h">2. 요구사항 입력 후 실행</h2>
-      <div class="notice" id="fix-box" hidden>
+      <div class="notice" id="fix-box" tabindex="-1" hidden>
         <p id="fix-msg"></p>
         <div class="row" id="fix-actions"></div>
       </div>
@@ -670,13 +708,18 @@ async function loadRigs() {
   renderSelected();
   renderShifts();  // the history filter follows the selected rig
 }
-function select(file) { selected = file; try { localStorage.setItem('rig.selected', file); } catch (e) {} loadRigs(); }
+function select(file) {
+  if (resume && file !== resume.file) endResume();
+  selected = file; try { localStorage.setItem('rig.selected', file); } catch (e) {}
+  return loadRigs();
+}
 function sameFolders(a, b) {
   const key = ws => JSON.stringify(ws.map(w => [w.name || '', w.dir || w.path]).sort());
   return key(a) === key(b);
 }
 function renderFix(r) {
   const box = $('fix-box'), actions = $('fix-actions');
+  if (resume) { renderResume(); return; }
   if (!fix) { box.hidden = true; return; }
   box.hidden = false; actions.textContent = '';
   const writer = r && !r.error && r.writes;
@@ -709,6 +752,39 @@ function renderFix(r) {
   }
   $('fix-msg').textContent = '리뷰에서 수정 요청을 가져왔습니다. 아래 내용을 확인하고 실행을 누르세요. 수정은 별도 브랜치(worktree)에 하는 것을 권합니다.';
   button('닫기', () => { fix = null; renderFix(r); });
+}
+// Resume mode: continue a stopped run from the history table (like rig run --resume). The old
+// task and inputs are used as they were, and the worktree is always on.
+function renderResume() {
+  const box = $('fix-box'), actions = $('fix-actions');
+  box.hidden = false; actions.textContent = '';
+  $('fix-msg').textContent = `중단된 실행 ${resume.id}(${LABEL[resume.status] || resume.status}${resume.why ? ' · ' + resume.why : ''})에 이어서 실행합니다. `
+    + '그 실행의 브랜치 끝에서 새 실행으로 이어 가며, 요구사항과 입력값은 그때 것을 그대로 쓰고 별도 브랜치(worktree)는 항상 켜집니다.'
+    + (resume.reason === 'budget' ? ' 비용 상한 때문에 멈췄으니 아래에서 상한을 올린 뒤 실행하세요.' : '');
+  actions.append(el('button', {type: 'button', class: 'secondary', onclick: () => { endResume(); $('task').focus(); }}, '이어 하기 취소'));
+  $('task').value = resume.task; $('task').readOnly = true;
+  $('inputs').hidden = true;
+  $('worktree').checked = true; $('worktree').disabled = true;
+  $('go').textContent = '이어서 실행';
+}
+async function startResume(s) {
+  // Clicking another run's button while in resume mode keeps what was typed before the first one.
+  const saved = resume ? resume.saved : {task: $('task').value, worktree: $('worktree').checked};
+  resume = {id: s.id, file: s.resume_file, task: s.resume_task, status: s.status, why: reasonText(s), reason: s.reason, saved};
+  fix = null;
+  await select(resume.file).catch(e => { $('run-error').textContent = e.message; });
+  $('run-h').scrollIntoView({behavior: 'smooth'});
+  $('fix-box').focus({preventScroll: true});
+}
+function endResume() {
+  if (!resume) return;
+  const saved = resume.saved;
+  resume = null;
+  $('task').value = saved.task; $('task').readOnly = false;
+  $('worktree').checked = saved.worktree; $('worktree').disabled = false;
+  $('inputs').hidden = false;
+  $('go').textContent = '실행';
+  renderFix(rigs.find(x => x.file === selected));
 }
 function renderSelected() {
   const r = rigs.find(x => x.file === selected);
@@ -779,9 +855,13 @@ $('go').addEventListener('click', async () => {
   $('run-error').textContent = '';
   const inputs = {};
   for (const i of document.querySelectorAll('#inputs input')) inputs[i.dataset.name] = i.value;
+  // Resuming sends only the old run's id: the server takes its task and inputs and turns the worktree on.
+  const body = resume ? {file: selected, resume: resume.id, dry: $('dry').checked, max_cost: $('max-cost').value}
+    : {file: selected, task: $('task').value, inputs, dry: $('dry').checked, worktree: $('worktree').checked,
+       max_cost: $('max-cost').value};
   try {
-    await api('/api/run', {file: selected, task: $('task').value, inputs, dry: $('dry').checked, worktree: $('worktree').checked,
-                           max_cost: $('max-cost').value});
+    await api('/api/run', body);
+    endResume();
     since = 0; $('log').textContent = ''; poll();
   } catch (e) { $('run-error').textContent = e.message; }
 });
@@ -816,7 +896,7 @@ async function poll() {
   }
   if (s.shift_id) ownShift = s.shift_id;
   if (ownRunning && s.status !== 'running') finished(s.shift_id || '', s.status === 'done' ? 'done' : s.status);
-  ownRunning = s.status === 'running';
+  if (ownRunning !== (s.status === 'running')) { ownRunning = s.status === 'running'; renderShifts(); }  // the resume buttons
   if (s.status === 'running') polling = setTimeout(poll, 1000); else loadShifts();
 }
 let ownShift = null, ownRunning = false;
@@ -830,6 +910,7 @@ async function loadShifts() {
 // A folder's last path segment, for a project without a name.
 const baseName = dir => dir.split(/[\\/]/).filter(Boolean).pop() || dir;
 const dirSet = ws => JSON.stringify([...new Set(ws.map(w => w.dir))].sort());
+const RESUME_PROBLEM = {no_rig: '이어 하기 불가 · 같은 이름의 설정 파일이 없음', many_rigs: '이어 하기 불가 · 같은 이름의 설정 파일이 여러 개'};
 function renderShifts() {
   if (!shiftRows) return;
   const r = rigs.find(x => x.file === selected);
@@ -849,6 +930,13 @@ function renderShifts() {
     const links = el('span', {class: 'row'});
     if (s.log) links.append(el('a', {href: '#viewer', onclick: e => { e.preventDefault(); openLog(s.id); }}, '로그'));
     if (!s.running) links.append(el('a', {href: '/shifts/' + encodeURIComponent(s.id) + '/report', target: '_blank'}, '리포트'));
+    if (s.resumable && s.resume_file) {
+      const b = el('button', {type: 'button', class: 'secondary resume', 'aria-label': `실행 ${s.id} 이어 하기`, onclick: () => startResume(s)}, '이어 하기');
+      if (ownRunning) { b.disabled = true; b.title = '실행 중에는 이어 할 수 없습니다'; }
+      links.append(b);
+    } else if (s.resume_problem) {
+      links.append(el('span', {class: 'small muted'}, RESUME_PROBLEM[s.resume_problem] || ''));
+    }
     const setting = el('td', {}, s.rig);
     if (s.workspaces.length) {
       setting.append(el('div', {class: 'small muted', title: s.workspaces.map(w => w.dir).join('\n')},
@@ -940,7 +1028,7 @@ $('notify').addEventListener('click', async () => {
 notifyButton();
 $('v-close').addEventListener('click', () => { viewing = null; clearTimeout(vTimer); $('viewer').hidden = true; });
 
-let fix = null;
+let fix = null, resume = null;  // resume: the stopped run being continued (startResume), or null
 async function start() {
   const params = new URLSearchParams(location.search);
   if (params.has('fix')) {

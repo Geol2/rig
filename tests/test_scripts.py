@@ -368,7 +368,8 @@ def next_sh(tmp_path, resume_id):
                       'exit 0'), encoding="utf-8")
     log = tmp_path / "uv.log"
     out = subprocess.run(["bash", "scripts/next.sh"], cwd=tmp_path, capture_output=True, text=True, encoding="utf-8",
-                         env={**os.environ, "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
+                         env={**{k: v for k, v in os.environ.items() if k not in ("RIG_COPY_OF", "RIG_ROOT")},
+                              "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
                               "ANTHROPIC_API_KEY": "x", "UV_LOG": str(log), "MAX_COST": "3"})
     assert out.returncode == 0, out.stderr
     calls, call = [], []

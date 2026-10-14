@@ -1,5 +1,6 @@
 """rig serve against a real local server on a free port."""
 
+import asyncio
 import json
 import threading
 import time
@@ -11,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from rig.runner import ShiftEvent
+from rig import spec
+from rig.runner import ResumeError, ShiftEvent, run_shift
 from rig.serve import App, Run, make_handler
 
 RIG = """\
@@ -407,3 +409,129 @@ def test_folder_picker_errors(server, tmp_path):
     assert status == 404 and "not a folder" in d["error"]
     status, d = call(base + "/api/dirs?path=" + urllib.parse.quote(str(tmp_path / "missing")))
     assert status == 404 and "not a folder" in d["error"]
+
+
+# --- resuming a stopped shift ------------------------------------------------------------------
+
+TASK = "build the app\nwith a second line"
+
+
+class Interrupting:
+    """Each hand writes `files` through the toolbox, then is interrupted (Ctrl-C)."""
+
+    def __init__(self, files):
+        self.files = files
+
+    async def run(self, hand, prompt, toolbox, check=None):
+        for path, content in self.files.items():
+            await toolbox.call("write_file", {"path": path, "content": content})
+        raise KeyboardInterrupt
+
+
+def write_rig(root, repo, file="t.rig.yaml", name="t"):
+    root.mkdir(exist_ok=True)
+    (root / file).write_text(f"name: {name}\nworkspace: {json.dumps(repo.as_posix())}\n"
+                             "hands:\n  coder: {role: Code., tools: [write_file]}\n", encoding="utf-8")
+
+
+def interrupted_shift(root, files=None):
+    """A shift of t.rig.yaml that wrote app/partial.py (or `files`), then was interrupted; returns its id."""
+    worker = Interrupting({"app/partial.py": "x = 1\n"} if files is None else files)
+    with pytest.raises(KeyboardInterrupt):
+        asyncio.run(run_shift(spec.load(root / "t.rig.yaml"), TASK, worker, root=root,
+                              on_event=lambda _: None, use_worktree=True))
+    return sorted(d.name for d in (root / ".rig" / "shifts").iterdir())[-1]
+
+
+def finish(run):
+    for _ in range(200):
+        if run.status != "running":
+            break
+        time.sleep(0.05)
+    return run
+
+
+@pytest.fixture
+def stopped(repo, tmp_path):
+    root = tmp_path / "root"
+    write_rig(root, repo)
+    return root, interrupted_shift(root)
+
+
+def test_start_resumes_a_stopped_shift(stopped):
+    root, old = stopped
+    app = App(root)
+    run = finish(app.start("t.rig.yaml", "", {}, dry=True, use_worktree=False, resume=old))
+    assert run.status == "done" and run.shift_id != old and run.task == TASK
+    summary = json.loads((app.shifts_dir / run.shift_id / "shift.json").read_text(encoding="utf-8"))
+    assert summary["resumed_from"] == old and summary["task"] == TASK
+
+
+def test_start_refuses_bad_resumes(stopped):
+    root, old = stopped
+    app = App(root)
+    with pytest.raises(ValueError, match="don't send a task or inputs"):
+        app.start("t.rig.yaml", "more work", {}, dry=True, use_worktree=False, resume=old)
+    with pytest.raises(ValueError, match="don't send a task or inputs"):
+        app.start("t.rig.yaml", "", {"x": "1"}, dry=True, use_worktree=False, resume=old)
+    with pytest.raises(ResumeError, match="no shift 'nope'"):
+        app.start("t.rig.yaml", "", {}, dry=True, use_worktree=False, resume="nope")
+    ok = finish(app.start("t.rig.yaml", "plain", {}, dry=True, use_worktree=False)).shift_id
+    with pytest.raises(ResumeError, match="finished ok"):
+        app.start("t.rig.yaml", "", {}, dry=True, use_worktree=False, resume=ok)
+
+
+def test_history_says_which_shifts_can_be_resumed(stopped, repo):
+    root, old = stopped
+    app = App(root)
+    unchanged = interrupted_shift(root, files={})
+    ok = finish(app.start("t.rig.yaml", "plain", {}, dry=True, use_worktree=False)).shift_id
+    rows = {r["id"]: r for r in app.shifts()}
+    assert {k: rows[old][k] for k in ("resumable", "resume_file", "resume_problem", "resume_task")} == {
+        "resumable": True, "resume_file": "t.rig.yaml", "resume_problem": None, "resume_task": TASK}
+    assert rows[old]["task"] == "build the app"  # the table keeps the first line
+    for shift in (unchanged, ok):
+        assert {k: rows[shift][k] for k in ("resumable", "resume_file", "resume_problem", "resume_task")} == {
+            "resumable": False, "resume_file": None, "resume_problem": None, "resume_task": ""}
+
+    write_rig(root, repo, file="copy.rig.yaml")
+    row = next(r for r in app.shifts() if r["id"] == old)
+    assert row["resumable"] and row["resume_file"] is None and row["resume_problem"] == "many_rigs"
+    write_rig(root, repo, file="copy.rig.yaml", name="other")
+    write_rig(root, repo, name="renamed")
+    row = next(r for r in app.shifts() if r["id"] == old)
+    assert row["resumable"] and row["resume_file"] is None and row["resume_problem"] == "no_rig"
+
+
+def test_history_loads_rig_files_only_for_resumable_shifts(tmp_path, monkeypatch):
+    app = App(tmp_path)
+    d = app.shifts_dir / "20261009-120000"
+    d.mkdir(parents=True)
+    (d / "shift.json").write_text(json.dumps({"rig": "review", "task": "t", "ok": False, "error": "boom"}), encoding="utf-8")
+    monkeypatch.setattr(App, "rigs", lambda self: pytest.fail("rigs() loaded"))
+    assert not app.shifts()[0]["resumable"]
+
+
+def test_run_api_passes_resume(server, monkeypatch):
+    app, base = server
+    got = {}
+
+    def start(name, task, inputs, dry, use_worktree, max_cost=None, resume=None):
+        got.update(name=name, task=task, resume=resume, max_cost=max_cost)
+        if resume == "bad":
+            raise ResumeError("shift bad finished ok; nothing to resume")
+        return Run(file=name, task="old task", dry=dry)
+
+    monkeypatch.setattr(app, "start", start)
+    status, data = call(base + "/api/run", {"file": "review.rig.yaml", "resume": "20261009-120000", "dry": True, "max_cost": "2"})
+    assert status == 200 and got == {"name": "review.rig.yaml", "task": "", "resume": "20261009-120000", "max_cost": 2.0}
+    status, data = call(base + "/api/run", {"file": "review.rig.yaml", "resume": "bad"})
+    assert status == 400 and data["error"] == "shift bad finished ok; nothing to resume"
+    call(base + "/api/run", {"file": "review.rig.yaml", "task": "x", "resume": ""})
+    assert got["resume"] is None
+
+
+def test_page_has_resume_mode(server):
+    _, base = server
+    page = call(base + "/")[1]
+    assert "이어서 실행" in page and "endResume" in page and "이어 하기 취소" in page
