@@ -3,7 +3,6 @@
 import asyncio
 import json
 
-from anthropic.types.beta import BetaTextBlock, BetaToolUseBlock
 
 from rig.hand import ClaudeWorker, HandResult
 from rig.runner import run_shift
@@ -22,6 +21,8 @@ def transcript(shift, stem):
 
 
 def test_sdk_blocks_become_plain_json():
+    from anthropic.types.beta import BetaTextBlock, BetaToolUseBlock  # here: a second to import
+
     res = HandResult("coder", "", "end_turn", 1, transcript=[
         {"role": "user", "content": "go"},
         {"role": "assistant", "content": [
