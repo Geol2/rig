@@ -28,5 +28,7 @@ packages = ["src/rig"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Spread the tests over all CPU cores (pytest-xdist); `-n 0` runs them in one process.
-addopts = "-n auto"
+# Spread the tests over worker processes (pytest-xdist); `-n 0` runs them in one process.
+# Twice the CPU cores: most tests wait on git or other subprocesses, not on the CPU. worksteal
+# moves queued tests to idle workers, so a few slow ones don't hold the end of the run.
+addopts = "-n auto --dist worksteal"  # auto: see pytest_xdist_auto_num_workers in tests/conftest.py

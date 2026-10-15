@@ -11,6 +11,11 @@ import pytest
 from rig.worktree import git
 
 
+def pytest_xdist_auto_num_workers(config):
+    """`-n auto`: twice the CPU cores, since most tests wait on git or other subprocesses."""
+    return 2 * (os.cpu_count() or 1)
+
+
 def _annotate(path: str, line: int, title: str, text: str) -> None:
     # The end of the failure (assertion and its values) is the useful part; workflow commands
     # need newlines and '%' escaped.
@@ -83,12 +88,20 @@ def copy_of(factory, name: str, make) -> Callable[[Path], Path]:
     return copy
 
 
+def no_background_git(repo: Path) -> None:
+    """Turn off git's automatic maintenance, which can still be writing in .git (a lock file
+    that comes and goes) while copy_of copies the template."""
+    git("config", "maintenance.auto", "false", cwd=repo)
+    git("config", "gc.auto", "0", cwd=repo)
+
+
 def _make_repo(repo: Path) -> None:
     (repo / "app").mkdir()
     (repo / "app" / "main.py").write_text("print('v1')\n", encoding="utf-8")
     git("init", "-q", "-b", "main", cwd=repo)
     git("config", "user.email", "test@example.com", cwd=repo)
     git("config", "user.name", "test", cwd=repo)
+    no_background_git(repo)
     git("add", "-A", cwd=repo)
     git("commit", "-q", "-m", "init", cwd=repo)
 

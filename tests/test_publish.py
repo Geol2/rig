@@ -356,7 +356,7 @@ def _make_repo(repo):
     (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
     # A relative remote, so it still points at the copy's remote.git (conftest.copy_of).
     for args in (["init", "-q", "-b", "main"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"],
-                 ["add", "-A"], ["commit", "-q", "-m", "init"], ["remote", "add", "origin", "../remote.git"]):
+                 ["config", "maintenance.auto", "false"], ["config", "gc.auto", "0"], ["add", "-A"], ["commit", "-q", "-m", "init"], ["remote", "add", "origin", "../remote.git"]):
         git(*args, cwd=repo)
 
 
