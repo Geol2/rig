@@ -219,6 +219,31 @@ def test_trusting_env_appends_to_existing_git_config():
     assert (env["GIT_CONFIG_KEY_2"], env["GIT_CONFIG_VALUE_2"]) == ("core.longpaths", "true")
 
 
+def test_identity_problem_when_git_has_no_user(anonymous_repo):
+    from rig.worktree import identity_problem
+
+    problem = identity_problem(anonymous_repo)
+    assert problem.startswith("anon: git doesn't know who you are")
+    assert 'git config --global user.name "Your Name"' in problem
+    assert 'git config --global user.email "you@example.com"' in problem
+
+
+def test_identity_problem_none_when_user_is_set(repo):
+    from rig.worktree import identity_problem
+
+    assert identity_problem(repo) is None
+
+
+def test_identity_problems_once_per_repo_and_skips_non_git(anonymous_repo, tmp_path):
+    from rig.worktree import identity_problem, identity_problems
+
+    (anonymous_repo / "sub").mkdir()
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    problems = identity_problems([anonymous_repo, anonymous_repo / "sub", plain])
+    assert problems == [identity_problem(anonymous_repo)]
+
+
 def test_commit_failure_keeps_worktree(repo, tmp_path, monkeypatch):
     import rig.worktree as wtmod
 

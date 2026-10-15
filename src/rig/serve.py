@@ -28,7 +28,7 @@ from rig.graph import layers
 from rig.runner import PROGRESS_LOG, Resume, ShiftEvent, live, load_resume
 from rig.spec import InputError, RigFileError, check_yaml_syntax, load, parse_yaml, read_rig_text
 from rig.tools import crlf
-from rig.worktree import GitError
+from rig.worktree import GitError, identity_problems
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
 
@@ -205,6 +205,11 @@ class App:
                 except GitError as e:
                     raise ValueError(str(e)) from None
                 task, inputs, use_worktree = res.task, res.inputs, True
+            if not dry and (use_worktree or rig.publish.pr):
+                # The worktree is committed only after the shift; make sure git can do it.
+                problems = identity_problems(rig.workspace_dirs(path.parent).values())
+                if problems:
+                    raise ValueError("git can't commit the shift's changes:\n" + "\n".join(f"- {p}" for p in problems))
             rig.resolve_inputs({k: v for k, v in inputs.items() if v != ""})  # raises InputError
             run = Run(file=name, task=task, dry=dry, meter=Meter(max_cost))
             self.run = run
