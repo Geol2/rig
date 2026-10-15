@@ -366,7 +366,7 @@ def test_history_project_folders(server):
     (old / "shift.json").write_text(json.dumps({"rig": "review", "ok": True, "findings": 0}), encoding="utf-8")
     rows = call(base + "/api/shifts")[1]
     assert [r["workspaces"] for r in rows] == [folders, []]  # malformed entries dropped; older shift.json: none
-    assert 'id="hist-mine"' in call(base + "/")[1]
+    assert 'id="hist-tabs"' in call(base + "/")[1]
 
 
 def test_history_folders_prefer_shift_json(tmp_path):
@@ -659,3 +659,12 @@ def test_start_refuses_when_prs_cant_be_opened(tmp_path, monkeypatch):
     checked.clear()
     app.start("pr.rig.yaml", "x", {}, dry=True, use_worktree=False)  # --dry doesn't check
     assert checked == [] and app.run is not None
+
+
+def test_icons_are_served(server):
+    _, base = server
+    for path, ctype in [("/favicon.ico", "image/x-icon"), ("/favicon.svg", "image/svg+xml")]:
+        with urllib.request.urlopen(base + path) as r:
+            assert r.status == 200 and r.headers["Content-Type"] == ctype and len(r.read()) > 100
+    page = call(base + "/")[1]
+    assert 'rel="icon" href="/favicon.svg"' in page and 'id="hist-tabs"' in page
