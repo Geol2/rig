@@ -27,15 +27,9 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e  # v6.8.0
         with:
           python-version: ${{ matrix.python }}
-      # Exactly the versions in uv.lock, wheels only.
-      - run: uv sync --locked --no-build --no-install-project
-      - if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          foreach ($v in @("python -c pass", "uv run --no-sync python -c pass", "uv run --no-sync python -c 'import rig.serve'", "uv run --no-sync pytest -q --collect-only -n 0 -m 'not git_e2e'", "uv run --no-sync pytest -q -n 0 -m 'not git_e2e' -p no:cacheprovider", "uv run --no-sync pytest -q -n 2 -m 'not git_e2e'", "uv run --no-sync pytest -q -n 4 -m 'not git_e2e'")) {
-            $t = Measure-Command { Invoke-Expression $v | Out-Null }
-            Write-Output ("::notice title=timing::{0:N1}s  {1}" -f $t.TotalSeconds, $v)
-          }
+      # Exactly the versions in uv.lock, wheels only. --compile-bytecode: once here, instead of
+      # every pytest worker compiling the same packages on first import (seconds on Windows).
+      - run: uv sync --locked --no-build --no-install-project --compile-bytecode
       # Windows PR checks skip the git end-to-end tests (see GIT_E2E in tests/conftest.py) to
       # answer in seconds; Linux runs them on every PR and Windows on every push to main.
       - run: uv run --locked --no-build --no-sync pytest -q ${{ (runner.os == 'Windows' && github.event_name == 'pull_request') && '-m "not git_e2e"' || '' }}
