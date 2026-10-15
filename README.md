@@ -393,6 +393,10 @@ review:  git diff ecf0f25..rig/20261008-163910
 merge:   git merge rig/20261008-163910    discard: git branch -D rig/20261008-163910
 ```
 
+Worktree runs (`--worktree`, `--resume`, `publish.pr`) first check that git has
+`user.name`/`user.email` to commit with, and stop before any hand runs if not
+(`rig check` warns about it for `publish.pr` rigs).
+
 Uncommitted changes in your working tree are not carried into the worktree (rig warns).
 Unless `publish` says otherwise (below), rig never merges or pushes; that's left to you.
 `rig logs` lists each shift's branch and status, so you can find it again later.
@@ -523,15 +527,21 @@ On Windows, from PowerShell or cmd (it runs auto.sh with Git Bash): `scripts\aut
 **처음 한 번만 준비**
 
 1. [Git for Windows](https://git-scm.com/download/win)를 설치합니다(Git Bash가 같이 깔립니다).
-2. [uv](https://docs.astral.sh/uv/)를 설치합니다.
-3. GitHub CLI를 설치하고 로그인합니다. PR을 열고 병합하는 데 필요합니다.
+2. Git에 이름과 이메일을 등록합니다. 작업 결과를 커밋할 때 필요합니다.
+   ```powershell
+   git config --global user.name "홍길동"
+   git config --global user.email "you@example.com"
+   ```
+   `git config user.email`에 이메일이 나오면 됩니다.
+3. [uv](https://docs.astral.sh/uv/)를 설치합니다.
+4. GitHub CLI를 설치하고 로그인합니다. PR을 열고 병합하는 데 필요합니다.
    ```powershell
    winget install --id GitHub.cli
    gh auth login
    gh auth status
    ```
    `gh auth status`에 "Logged in"이 나오면 됩니다.
-4. API 키를 등록하고 **터미널을 새로 엽니다**. 키는 채팅이나 파일에 붙여 넣지 마세요.
+5. API 키를 등록하고 **터미널을 새로 엽니다**. 키는 채팅이나 파일에 붙여 넣지 마세요.
    ```powershell
    setx ANTHROPIC_API_KEY "sk-ant-..."
    ```
@@ -554,9 +564,9 @@ scripts\auto.cmd 5 10     # 한 번에 $5까지, 최대 10번
 | 화면에 나온 것 | 원인과 해결 |
 |---|---|
 | `'MAX_COST=5' 용어는 cmdlet ... 인식되지 않습니다` | PowerShell에서 bash 문법을 썼습니다. `scripts\auto.cmd 5`로 실행하세요. |
-| `ANTHROPIC_API_KEY가 없습니다` | 4번처럼 `setx`로 등록한 뒤 터미널을 새로 여세요. |
+| `ANTHROPIC_API_KEY가 없습니다` | 5번처럼 `setx`로 등록한 뒤 터미널을 새로 여세요. |
 | `can't open PRs (publish.pr)` | PR을 열 수 없어서 아무것도 실행하지 않았습니다(비용 없음). 아래 `-` 줄마다 적힌 것을 고치세요: GitHub CLI 설치, `gh auth login`, 또는 `git remote add origin <url>`. 그런 다음 다시 실행하세요. |
-| `couldn't open a PR: gh not found` | 3번처럼 GitHub CLI를 설치하고 `gh auth login` 하세요. 브랜치는 이미 올라가 있으니 `gh pr create --head <브랜치> --base main`으로 PR만 열면 됩니다. |
+| `couldn't open a PR: gh not found` | 4번처럼 GitHub CLI를 설치하고 `gh auth login` 하세요. 브랜치는 이미 올라가 있으니 `gh pr create --head <브랜치> --base main`으로 PR만 열면 됩니다. |
 | `rig.exe ... 다른 프로세스가 파일을 사용 중` | 다른 창에서 rig가 돌고 있습니다. 그 창을 닫거나 `taskkill /F /IM rig.exe` 후 다시 실행하세요. |
 | 웹 페이지가 예전 모습 그대로 | 예전에 켠 `rig serve`가 아직 돌고 있습니다. `taskkill /F /IM rig.exe`로 끄고 다시 실행한 뒤 브라우저에서 Ctrl+F5. |
 | `uv run rig ...`이 `program not found` | rig 폴더가 아닌 곳에서 실행했습니다. rig 폴더로 가거나 `uv run --project <rig 경로> rig ...`로 실행하세요. |

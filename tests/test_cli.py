@@ -559,3 +559,58 @@ def test_check_warns_when_prs_cant_be_opened(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "✓ t: 1 hands, 0 lines" in out
     assert f"⚠ publish.pr: {PROBLEMS[0]}\n⚠ publish.pr: {PROBLEMS[1]}\n" in out
+
+
+def _fake_shift(monkeypatch):
+    """Replace run_shift; returns the use_worktree of each shift started."""
+    started = []
+
+    class Shift:
+        finals, worktrees, prs, ok = [], [], [], True
+
+        def committed(self):
+            return []
+
+    async def fake_shift(rig, task, worker, **kwargs):
+        started.append(kwargs["use_worktree"])
+        return Shift()
+
+    monkeypatch.setattr("rig.runner.run_shift", fake_shift)
+    return started
+
+
+def test_run_worktree_stops_before_any_hand_when_git_has_no_user(anonymous_repo, monkeypatch):
+    from rig import publish
+    from rig.worktree import git
+
+    (anonymous_repo / "rig.yaml").write_text("name: t\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    monkeypatch.setattr(publish, "check_rig", lambda rig, root: [])
+    monkeypatch.setattr("rig.hand.ClaudeWorker", lambda *a, **k: pytest.fail("worker created"))
+    with pytest.raises(SystemExit) as excinfo:
+        main(["-f", str(anonymous_repo / "rig.yaml"), "run", "--worktree", "task"])
+    msg = _exit_message(excinfo)
+    assert msg.startswith("rig: git can't commit the shift's changes, so nothing ran:\n  - anon: git doesn't know who you are")
+    assert not (anonymous_repo / ".rig" / "worktrees").exists()
+    assert git("branch", "--list", "rig/*", cwd=anonymous_repo).strip() == ""
+
+
+def test_run_without_worktree_or_dry_isnt_stopped_by_missing_git_user(anonymous_repo, monkeypatch):
+    from rig import publish
+
+    path = anonymous_repo / "rig.yaml"
+    path.write_text("name: t\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    monkeypatch.setattr(publish, "check_rig", lambda rig, root: [])
+    monkeypatch.setattr("rig.hand.ClaudeWorker", lambda *a, **k: object())
+    started = _fake_shift(monkeypatch)
+    main(["-f", str(path), "run", "task"])  # nothing to commit without a worktree
+    main(["-f", str(path), "run", "--worktree", "--dry", "task"])  # a dry run writes nothing
+    assert started == [False, True]
+
+
+def test_check_warns_when_git_has_no_user_for_prs(anonymous_repo, monkeypatch, capsys):
+    from rig import publish
+
+    (anonymous_repo / "rig.yaml").write_text(PR_RIG, encoding="utf-8")
+    monkeypatch.setattr(publish, "check_rig", lambda rig, root: [])
+    main(["-f", str(anonymous_repo / "rig.yaml"), "check"])
+    assert "⚠ git: anon: git doesn't know who you are" in capsys.readouterr().out
