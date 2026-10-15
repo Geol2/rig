@@ -28,5 +28,7 @@ packages = ["src/rig"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Spread the tests over all CPU cores (pytest-xdist); `-n 0` runs them in one process.
-addopts = "-n auto"
+# Spread the tests over the CPU cores (pytest-xdist); `-n 0` runs them in one process.
+# worksteal moves queued tests to idle workers, so a few slow ones don't hold up the end.
+addopts = "-n auto --dist worksteal"
+markers = ["git_e2e: whole shifts on real git repos (tests/conftest.py GIT_E2E)"]

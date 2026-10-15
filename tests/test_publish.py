@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from conftest import copy_of
 from rig import publish
 from rig.hand import HandResult
 from rig.runner import run_shift
@@ -350,17 +351,23 @@ def test_run_cmd_timeout():
 
 # --- end to end: a real repo and a real (local, bare) remote; gh is faked ------------------------
 
-@pytest.fixture
-def repo(tmp_path):
-    remote = tmp_path / "remote.git"
-    git("init", "-q", "--bare", "-b", "main", str(remote), cwd=tmp_path)
-    repo = tmp_path / "repo"
-    repo.mkdir()
+def _make_repo(repo):
+    git("init", "-q", "--bare", "-b", "main", "remote.git", cwd=repo.parent)
     (repo / "a.py").write_text("x = 1\n", encoding="utf-8")
+    # A relative remote, so it still points at the copy's remote.git (conftest.copy_of).
     for args in (["init", "-q", "-b", "main"], ["config", "user.email", "t@example.com"], ["config", "user.name", "t"],
-                 ["add", "-A"], ["commit", "-q", "-m", "init"], ["remote", "add", "origin", str(remote)]):
+                 ["config", "maintenance.auto", "false"], ["config", "gc.auto", "0"], ["add", "-A"], ["commit", "-q", "-m", "init"], ["remote", "add", "origin", "../remote.git"]):
         git(*args, cwd=repo)
-    return repo, remote
+
+
+@pytest.fixture(scope="session")
+def _publish_repo_copy(tmp_path_factory):
+    return copy_of(tmp_path_factory, "repo", _make_repo)
+
+
+@pytest.fixture
+def repo(tmp_path, _publish_repo_copy):
+    return _publish_repo_copy(tmp_path), tmp_path / "remote.git"
 
 
 class Crew:

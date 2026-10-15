@@ -37,7 +37,8 @@ def server(tmp_path):
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
     # A short poll so shutdown() doesn't wait the default half second in every test's teardown.
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
-    yield app, f"http://localhost:{srv.server_address[1]}"
+    # 127.0.0.1, not localhost: on Windows urllib tries ::1 first and waits ~2s before IPv4.
+    yield app, f"http://127.0.0.1:{srv.server_address[1]}"
     srv.shutdown()
     srv.server_close()
 
