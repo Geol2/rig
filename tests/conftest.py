@@ -11,11 +11,6 @@ import pytest
 from rig.worktree import git
 
 
-def pytest_xdist_auto_num_workers(config):
-    """`-n auto`: twice the CPU cores, since most tests wait on git or other subprocesses."""
-    return 2 * (os.cpu_count() or 1)
-
-
 def _annotate(path: str, line: int, title: str, text: str) -> None:
     # The end of the failure (assertion and its values) is the useful part; workflow commands
     # need newlines and '%' escaped.

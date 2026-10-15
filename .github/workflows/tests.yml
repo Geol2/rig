@@ -29,4 +29,8 @@ jobs:
           python-version: ${{ matrix.python }}
       # Exactly the versions in uv.lock, wheels only.
       - run: uv sync --locked --no-build --no-install-project
+      # Git for Windows' git.exe on PATH (cmd\git.exe) only starts mingw64\bin\git.exe: two
+      # processes per git command, and the tests run hundreds of them.
+      - if: runner.os == 'Windows'
+        run: Add-Content $env:GITHUB_PATH "C:\Program Files\Git\mingw64\bin"
       - run: uv run --locked --no-build --no-sync pytest -q
