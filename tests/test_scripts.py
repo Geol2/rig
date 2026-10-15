@@ -1,12 +1,16 @@
 """scripts/sync-main.sh against real repositories: a bare remote and a clone of it; auto.sh,
 next-task.sh, resume-target.py and next.sh."""
 
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -245,12 +249,24 @@ def stopped_shift(repo, shift_id, task=TASK, resumed_from=None, branch=True, **s
     (folder / "shift.json").write_text(json.dumps(data), encoding="utf-8")
 
 
+def _load_resume_target():
+    spec = importlib.util.spec_from_file_location("resume_target", RESUME_TARGET)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_resume_target = _load_resume_target()
+
+
 def resume_target(repo, task=TASK):
-    out = subprocess.run([sys.executable, str(RESUME_TARGET), "rig.yaml", task], cwd=repo,
-                         capture_output=True, text=True, encoding="utf-8",
-                         env={**os.environ, "PYTHONPATH": str(SCRIPTS.parent / "src")})
-    assert out.returncode == 0, out.stderr
-    return out.stdout, out.stderr
+    """Runs resume-target.py's main() in this process (a new python per test cost a second each:
+    importing rig.runner); test_resume_target_takes_only_a_rig_file_in_the_folder runs the file."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.chdir(repo), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err), \
+            mock.patch.object(sys, "argv", [str(RESUME_TARGET), "rig.yaml", task]):
+        _resume_target.main()
+    return out.getvalue(), err.getvalue()
 
 
 def test_resume_target_picks_up_a_stopped_shift(rig_repo):

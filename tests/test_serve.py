@@ -35,7 +35,8 @@ def server(tmp_path):
     (tmp_path / "other.yaml").write_text("services: {}\n", encoding="utf-8")  # not a rig: ignored
     app = App(tmp_path)
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    # A short poll so shutdown() doesn't wait the default half second in every test's teardown.
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True).start()
     yield app, f"http://localhost:{srv.server_address[1]}"
     srv.shutdown()
     srv.server_close()
