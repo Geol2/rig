@@ -377,6 +377,26 @@ uv run rig --version
 Credentials come from `ANTHROPIC_API_KEY` or an `ant auth login` profile.
 `rig run --dry` runs the whole shift without API calls.
 
+### Claude Code worker (subscription)
+
+`rig run --worker claude-code` (or **실행 방식 → Claude Code 구독** on the web page) runs each
+hand with the locally installed [Claude Code](https://code.claude.com/docs/en/setup) instead of
+the API, signed in with your own Claude subscription (`claude`, then `/login`), so no API credit
+is used and no API key is needed. Only the model loop moves: Claude Code's built-in tools are
+turned off, and the hand gets rig's own tools (workspace limits, `run` allow list, `delegate`,
+...) through a small MCP server (`src/rig/ccbridge.py`). Worktrees, PRs, reports and the web
+page's log work as with the API.
+
+- `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from Claude Code's environment,
+  since an API key always wins over the subscription login.
+- `--max-cost` / `max_cost_usd` don't apply; the report still shows tokens and what they would
+  have cost on the API. The subscription's own usage limits do apply.
+- Each hand is one `claude -p` session with the hand's `role` as its system prompt and its
+  `model`, `effort` and `max_turns`; a foreman `require` objection resumes the same session.
+- Meant for running rig yourself on your own machine and account. A tool used by other people
+  should use API keys (see Claude Code's
+  [legal and compliance](https://code.claude.com/docs/en/legal-and-compliance) page).
+
 ## Worktree mode
 
 `rig run --worktree "task"` keeps the hands' changes off your working tree:
@@ -547,6 +567,11 @@ On Windows, from PowerShell or cmd (it runs auto.sh with Git Bash): `scripts\aut
    ```powershell
    setx ANTHROPIC_API_KEY "sk-ant-..."
    ```
+   **API 키 대신 Claude 구독으로 돌리려면** 이 단계 대신 Claude Code를 설치하고 로그인합니다.
+   ```powershell
+   irm https://claude.ai/install.ps1 | iex
+   claude        # 처음 한 번: /login 으로 구독 계정에 로그인한 뒤 /exit
+   ```
 
 **실행 (PowerShell 또는 cmd, rig 폴더에서)**
 
@@ -554,7 +579,12 @@ On Windows, from PowerShell or cmd (it runs auto.sh with Git Bash): `scripts\aut
 scripts\auto.cmd          # 한 번에 self.rig.yaml의 max_cost_usd($5)까지, 최대 5번
 scripts\auto.cmd 8        # 이번만 한 번에 $8까지
 scripts\auto.cmd 8 10     # 이번만 한 번에 $8까지, 최대 10번
+scripts\auto.cmd sub      # API 키 대신 Claude Code 구독으로, 최대 5번 (API 크레딧 안 씀)
+scripts\auto.cmd sub 10   # 구독으로, 최대 10번
 ```
+
+웹 페이지에서는 **실행 방식**에서 `Claude Code 구독`을 고르면 됩니다(브라우저가 기억합니다).
+구독에도 사용량 한도가 있어서 많이 돌리면 잠시 기다려야 할 수 있습니다.
 
 - 진행 상황은 http://localhost:8000 에서 봅니다(**지난 실행 → 로그**).
 - 멈추려면 Git Bash에서 `touch .rig/stop`을 실행합니다. 지금 실행이 끝나면 멈춥니다.
@@ -566,7 +596,8 @@ scripts\auto.cmd 8 10     # 이번만 한 번에 $8까지, 최대 10번
 | 화면에 나온 것 | 원인과 해결 |
 |---|---|
 | `'MAX_COST=5' 용어는 cmdlet ... 인식되지 않습니다` | PowerShell에서 bash 문법을 썼습니다. `scripts\auto.cmd 5`로 실행하세요. |
-| `ANTHROPIC_API_KEY가 없습니다` | 5번처럼 `setx`로 등록한 뒤 터미널을 새로 여세요. |
+| `ANTHROPIC_API_KEY가 없습니다` | 5번처럼 `setx`로 등록한 뒤 터미널을 새로 여세요. 구독으로 돌리려면 `scripts\auto.cmd sub`. |
+| `Claude Code(claude)가 없습니다` / 구독 선택지가 회색 | 5번의 Claude Code 설치와 `/login`을 하고 터미널(웹 페이지는 `scripts\auto.cmd`로 다시 켜기)을 새로 여세요. |
 | `can't open PRs (publish.pr)` | PR을 열 수 없어서 아무것도 실행하지 않았습니다(비용 없음). 아래 `-` 줄마다 적힌 것을 고치세요: GitHub CLI 설치, `gh auth login`, 또는 `git remote add origin <url>`. 그런 다음 다시 실행하세요. |
 | `couldn't open a PR: gh not found` | 4번처럼 GitHub CLI를 설치하고 `gh auth login` 하세요. 브랜치는 이미 올라가 있으니 `gh pr create --head <브랜치> --base main`으로 PR만 열면 됩니다. |
 | `rig.exe ... 다른 프로세스가 파일을 사용 중` | 다른 창에서 rig가 돌고 있습니다. 그 창을 닫거나 `taskkill /F /IM rig.exe` 후 다시 실행하세요. |

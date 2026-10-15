@@ -3,6 +3,7 @@
 #
 #   scripts/auto.sh                  # up to 5 runs, $10 in total
 #   RUNS=10 BUDGET=20 scripts/auto.sh
+#   WORKER=claude-code scripts/auto.sh  # on the installed Claude Code (subscription): BUDGET doesn't apply
 #   touch .rig/stop                  # (another terminal) stop after the current run
 #
 # Stops when any of these happens:
@@ -86,7 +87,8 @@ for ((i = 1; i <= runs; i++)); do
     echo "■ 두 번 연속 병합된 PR이 없어서 멈춥니다. 웹 페이지의 로그나 'rig logs last'로 이유를 확인하세요."
     break
   fi
-  if py -c "import sys; sys.exit(0 if $spent >= $budget else 1)"; then
+  # On the subscription the shifts' cost is only what the API would have charged: no budget.
+  if [[ "${WORKER:-api}" != claude-code ]] && py -c "import sys; sys.exit(0 if $spent >= $budget else 1)"; then
     echo "■ 예산 \$${budget}을 다 써서 멈춥니다."
     break
   fi

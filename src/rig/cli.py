@@ -135,7 +135,16 @@ def cmd_run(args: argparse.Namespace) -> None:
                 sys.exit("rig: git can't commit the shift's changes, so nothing ran:\n"
                          + "\n".join(f"  - {p}" for p in problems))
 
-    worker = EchoWorker() if args.dry else ClaudeWorker()
+    if args.dry:
+        worker = EchoWorker()
+    elif args.worker == "claude-code":
+        from rig.claude_code import INSTALL_HELP, ClaudeCodeWorker
+
+        worker = ClaudeCodeWorker()
+        if not worker.command:
+            sys.exit(f"rig: {INSTALL_HELP}")
+    else:
+        worker = ClaudeWorker()
     try:
         shift = asyncio.run(run_shift(rig, task, worker, root=path.resolve().parent,
                                       use_worktree=args.worktree or resume is not None, verbose=not args.quiet,
@@ -269,6 +278,9 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("-q", "--quiet", action="store_true", help="don't show individual tool calls")
     s.add_argument("--max-cost", type=float, metavar="USD",
                    help="stop once the shift's estimated cost reaches this (overrides max_cost_usd)")
+    s.add_argument("--worker", choices=["api", "claude-code"], default="api",
+                   help="api: the API (ANTHROPIC_API_KEY); claude-code: the installed Claude Code on your "
+                        "subscription, with rig's tools (no API credit used; --max-cost doesn't apply)")
     s.add_argument("-i", "--input", action="append", default=[], metavar="NAME=VALUE",
                    help="value for an input declared under `inputs` (repeatable)")
     s.add_argument("--resume", metavar="SHIFT",

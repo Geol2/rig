@@ -623,19 +623,20 @@ def test_run_api_passes_resume(server, monkeypatch):
     app, base = server
     got = {}
 
-    def start(name, task, inputs, dry, use_worktree, max_cost=None, resume=None):
-        got.update(name=name, task=task, resume=resume, max_cost=max_cost)
+    def start(name, task, inputs, dry, use_worktree, max_cost=None, resume=None, worker="api"):
+        got.update(name=name, task=task, resume=resume, max_cost=max_cost, worker=worker)
         if resume == "bad":
             raise ResumeError("shift bad finished ok; nothing to resume")
         return Run(file=name, task="old task", dry=dry)
 
     monkeypatch.setattr(app, "start", start)
     status, data = call(base + "/api/run", {"file": "review.rig.yaml", "resume": "20261009-120000", "dry": True, "max_cost": "2"})
-    assert status == 200 and got == {"name": "review.rig.yaml", "task": "", "resume": "20261009-120000", "max_cost": 2.0}
+    assert status == 200 and got == {"name": "review.rig.yaml", "task": "", "resume": "20261009-120000", "max_cost": 2.0,
+                                     "worker": "api"}
     status, data = call(base + "/api/run", {"file": "review.rig.yaml", "resume": "bad"})
     assert status == 400 and data["error"] == "shift bad finished ok; nothing to resume"
-    call(base + "/api/run", {"file": "review.rig.yaml", "task": "x", "resume": ""})
-    assert got["resume"] is None
+    call(base + "/api/run", {"file": "review.rig.yaml", "task": "x", "resume": "", "worker": "claude-code"})
+    assert got["resume"] is None and got["worker"] == "claude-code"
 
 
 def test_page_has_resume_mode(server):
@@ -680,3 +681,46 @@ def test_icons_are_served(server):
             assert r.status == 200 and r.headers["Content-Type"] == ctype and len(r.read()) > 100
     page = call(base + "/")[1]
     assert 'rel="icon" href="/favicon.svg"' in page and 'id="hist-tabs"' in page
+
+
+def test_workers_api_says_whether_claude_code_is_installed(server, monkeypatch):
+    from rig import claude_code
+
+    _, base = server
+    monkeypatch.setattr(claude_code, "find_claude", lambda: "/usr/bin/claude")
+    assert call(base + "/api/workers")[1] == {"claude_code": True}
+    monkeypatch.setattr(claude_code, "find_claude", lambda: None)
+    assert call(base + "/api/workers")[1] == {"claude_code": False}
+
+
+def test_run_with_claude_code_needs_it_installed(server, monkeypatch):
+    from rig import claude_code
+
+    _, base = server
+    monkeypatch.setattr(claude_code, "find_claude", lambda: None)
+    status, data = call(base + "/api/run", {"file": "review.rig.yaml", "task": "x", "worker": "claude-code"})
+    assert status == 400 and data["error"] == claude_code.INSTALL_HELP
+    status, data = call(base + "/api/run", {"file": "review.rig.yaml", "task": "x", "worker": "gpt"})
+    assert status == 400 and "unknown worker 'gpt'" in data["error"]
+
+
+def test_dry_run_with_claude_code_needs_no_claude(server, monkeypatch):
+    from rig import claude_code
+
+    app, base = server
+    monkeypatch.setattr(claude_code, "find_claude", lambda: None)
+    status, body = call(base + "/api/run", {"file": "review.rig.yaml", "task": "x", "inputs": {"module": "orders"},
+                                            "dry": True, "worker": "claude-code"})
+    assert status == 200, body
+    for _ in range(100):
+        state = call(base + "/api/run")[1]
+        if state["status"] != "running":
+            break
+        time.sleep(0.05)
+    assert state["status"] == "done" and state["worker"] == "claude-code"
+
+
+def test_page_has_the_worker_choice(server):
+    _, base = server
+    page = call(base + "/")[1]
+    assert 'name="worker" value="claude-code"' in page and "/api/workers" in page
