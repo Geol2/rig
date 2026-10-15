@@ -14,6 +14,41 @@ from typing import Any, Callable
 
 from rig.cost import usd
 
+TITLE_CHARS = 72
+# A final reply may open with "TITLE: <what changed>" (or "제목: …"); that names the commit and
+# the PR instead of the task, which is often just "do the next item" or a chat message.
+TITLE_LINE = re.compile(r"^[#>*_\s]*(?:title|제목)[*_\s]*[:：][*_\s]*(.+)$", re.IGNORECASE)
+
+
+def stated_title(output: str) -> str | None:
+    """The TITLE line a reply opens with, cut to TITLE_CHARS; None without one."""
+    lines = output.strip().splitlines()
+    m = TITLE_LINE.match(lines[0]) if lines else None
+    if not m:
+        return None
+    title = m.group(1).rstrip("*_ \t")
+    if len(title) > TITLE_CHARS:
+        title = title[: TITLE_CHARS - 1].rstrip() + "…"
+    return title or None
+
+
+def title_of(shift_dir: Path, summary: dict[str, Any]) -> str | None:
+    """What a shift changed, in a line: shift.json's `title`, or for shifts recorded before it
+    was kept, the TITLE line of a final hand's reply (<key>.md, only its start is read)."""
+    if "title" in summary:
+        return summary["title"] if isinstance(summary["title"], str) else None
+    for key in summary.get("final") or []:
+        if not isinstance(key, str) or not re.fullmatch(r"[\w-]+(?:#\d+)?", key):
+            continue  # hand names only: never a path out of the shift folder
+        try:
+            with open(shift_dir / f"{str(key).replace('#', '-')}.md", encoding="utf-8", errors="replace") as f:
+                title = stated_title(f.read(2000))
+        except OSError:
+            continue
+        if title:
+            return title
+    return None
+
 SEVERITIES = ["critical", "high", "medium", "low", "info"]
 
 

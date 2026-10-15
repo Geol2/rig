@@ -589,6 +589,8 @@ def test_title_line_names_the_commit_and_pr(repo, monkeypatch, tmp_path, first_l
     message = git("log", "-1", "--format=%B", f"rig/{shift.id}", cwd=remote)
     assert message.startswith("rig: config: 기본값 x를 2로 변경\n\nChecked a.py.\nLGTM")
     assert "bump x" not in message  # the task isn't the title any more
+    # Kept in shift.json for the web page's history (report.title_of).
+    assert json.loads((shift.dir / "shift.json").read_text(encoding="utf-8"))["title"] == "config: 기본값 x를 2로 변경"
 
 
 def test_change_title_falls_back_to_the_task_and_is_cut():
