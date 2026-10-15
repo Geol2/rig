@@ -54,8 +54,13 @@ def pytest_sessionfinish(session):
         return
     top = sorted(_durations.items(), key=lambda kv: -kv[1])[:SLOWEST]
     total = sum(_durations.values())
-    text = f"total {total:.0f}s over {len(_durations)} tests (summed across workers)%0A" + "%0A".join(
-        f"{secs:.2f}s {nodeid}".replace("%", "%25") for nodeid, secs in top)
+    files: dict[str, float] = {}
+    for nodeid, secs in _durations.items():
+        files[nodeid.split("::")[0]] = files.get(nodeid.split("::")[0], 0.0) + secs
+    lines = [f"total {total:.0f}s over {len(_durations)} tests (summed across workers)", "by file:"]
+    lines += [f"{secs:.1f}s {f}" for f, secs in sorted(files.items(), key=lambda kv: -kv[1])]
+    lines += ["slowest:"] + [f"{secs:.2f}s {nodeid}" for nodeid, secs in top]
+    text = "%0A".join(line.replace("%", "%25") for line in lines)
     title = f"slowest tests ({sys.platform})"
     out = f"\n::notice title={title}::{text}\n"
     stream = getattr(sys.__stdout__, "buffer", None)
