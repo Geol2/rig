@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
-
-import anthropic
+from typing import TYPE_CHECKING, Any, Callable, Protocol
 
 from rig import cost
 from rig.spec import ResolvedHand
 from rig.tools import Toolbox, ToolError
+
+if TYPE_CHECKING:
+    # Imported where it's used: the SDK takes about a second to import, which every `rig`
+    # command (and the Claude Code worker, which never calls the API) would otherwise pay.
+    import anthropic
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 CONTEXT_EDITING_BETA = "context-management-2025-06-27"
@@ -112,7 +115,11 @@ class Worker(Protocol):
 
 class ClaudeWorker:
     def __init__(self, client: anthropic.AsyncAnthropic | None = None, meter: cost.Meter | None = None):
-        self.client = client or anthropic.AsyncAnthropic()
+        if client is None:
+            import anthropic
+
+            client = anthropic.AsyncAnthropic()
+        self.client = client
         # Shared by every hand of a shift: running cost, limit, stop request. run_shift sets it.
         self.meter = meter
 
@@ -158,6 +165,8 @@ class ClaudeWorker:
         self, hand: ResolvedHand, params: dict[str, Any], messages: list[dict[str, Any]], result: HandResult,
         toolbox: Toolbox, check: FinishCheck | None,
     ) -> HandResult:
+        import anthropic
+
         last_text = ""
         while result.turns < hand.max_turns:
             if self.meter and self.meter.stop_reason:

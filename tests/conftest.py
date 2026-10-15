@@ -14,12 +14,16 @@ from rig.worktree import git
 # Whole shifts on real git repos (worktrees, PRs against a local remote, resuming). The same on
 # every OS and slow on Windows, where each of their hundreds of git commands costs a new
 # process; Windows PR checks skip them (-m "not git_e2e"), pushes to main run everything.
-GIT_E2E = {"tests/test_resume.py", "tests/test_publish.py", "tests/test_multi_worktree.py"}
+GIT_E2E = {"tests/test_resume.py", "tests/test_publish.py", "tests/test_multi_worktree.py", "tests/test_worktree.py"}
+
+
+# Fixtures that build git repositories: tests using them count as git_e2e wherever they are.
+GIT_FIXTURES = {"repo", "rig_repo", "anonymous_repo"}
 
 
 def pytest_collection_modifyitems(config, items):
     for item in items:
-        if item.nodeid.split("::")[0] in GIT_E2E:
+        if item.nodeid.split("::")[0] in GIT_E2E or GIT_FIXTURES & set(getattr(item, "fixturenames", ())):
             item.add_marker("git_e2e")
 
 

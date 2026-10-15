@@ -495,6 +495,10 @@ class Toolbox:
         if win.drive and not Path(value).is_absolute():
             # A drive or UNC path ('C:/...', '\\\\server\\share') on a host that doesn't have drives.
             return True
+        if win.drive.startswith("\\\\") and not PureWindowsPath(self.workspace).drive.startswith("\\\\"):
+            # A UNC path when the workspace isn't on a share: outside, and resolve() on Windows
+            # would try to reach the server first (seconds for a name that doesn't answer).
+            return True
         return not (self.workspace / value).resolve().is_relative_to(self.workspace)
 
     def _run(self, command: str) -> str:

@@ -438,13 +438,18 @@ def test_scripts_run_from_a_copy(tmp_path):
     assert (tmp_path / ".rig" / "run" / "next" / "next.sh").exists()
 
 
-@pytest.mark.parametrize("name", ["../rig.yaml", "sub/rig.yaml", "missing.yaml", "notes.txt"])
-def test_resume_target_takes_only_a_rig_file_in_the_folder(rig_repo, name):
+def test_resume_target_takes_only_a_rig_file_in_the_folder(rig_repo):
     # The name is never turned into a path: anything but a .yaml file right here is ignored.
     (rig_repo / "sub").mkdir(exist_ok=True)
     shutil.copy(rig_repo / "rig.yaml", rig_repo / "sub" / "rig.yaml")
     (rig_repo / "notes.txt").write_text("x", encoding="utf-8")
-    out = subprocess.run([sys.executable, str(RESUME_TARGET), name, TASK], cwd=rig_repo,
+    stopped_shift(rig_repo, "20260101-000000")  # resumable with rig.yaml itself
+    with contextlib.chdir(rig_repo), contextlib.redirect_stderr(io.StringIO()):
+        assert _resume_target.target("rig.yaml", TASK) == "20260101-000000"
+        for name in ["../rig.yaml", "sub/rig.yaml", "missing.yaml", "notes.txt"]:
+            assert _resume_target.target(name, TASK) is None, name
+    # Once as a real script, as next.sh runs it.
+    out = subprocess.run([sys.executable, str(RESUME_TARGET), "../rig.yaml", TASK], cwd=rig_repo,
                          capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(SCRIPTS.parent / "src")})
     assert out.returncode == 0 and out.stdout == ""
 
