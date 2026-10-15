@@ -385,6 +385,10 @@ class App:
         return path.name
 
 
+# The page's icon: a foreman joined to two hands (src/rig/favicon.svg, and .ico for older browsers).
+ICONS = {"/favicon.ico": ("favicon.ico", "image/x-icon"), "/favicon.svg": ("favicon.svg", "image/svg+xml")}
+
+
 def _workspaces(summary: dict[str, Any]) -> list[dict[str, str]]:
     """The project folders a shift worked on (shift.json / running.json `workspaces`); [] for older shifts."""
     recorded = summary.get("workspaces")
@@ -462,6 +466,9 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
             try:
                 if url.path == "/":
                     return self._send(200, PAGE, "text/html; charset=utf-8")
+                if url.path in ICONS:
+                    name, ctype = ICONS[url.path]
+                    return self._send(200, resources.files("rig").joinpath(name).read_bytes(), ctype)
                 if url.path == "/api/dirs":
                     return self._json(200, app.dirs(parse_qs(url.query).get("path", [""])[0]))
                 if url.path == "/api/rigs":
@@ -537,6 +544,8 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rig</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="any">
 <style>
 :root{--bg:#f6f7f5;--surface:#fff;--fg:#1c2420;--muted:#5f6a64;--line:#dde2dc;--accent:#2e6b5a;--accent-fg:#fff;--soft:#e2eee9;
 --ok:#2e6b5a;--warn:#a06b0b;--bad:#b3401c;--code:#eef0ec;
@@ -602,13 +611,21 @@ th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px
 td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}tr:last-child td{border-bottom:0}
 td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .table-wrap{overflow-x:auto}
+header.row h1{margin:0}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:8px}
+.tab{font:inherit;font-size:13px;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:transparent;color:var(--fg);border-radius:999px;padding:4px 12px 4px 6px;cursor:pointer;max-width:100%}
+.tab:first-child{padding-left:12px}
+.tab[aria-selected=true]{border-color:var(--accent);background:var(--soft);font-weight:600}
+.tab .count{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.tab .dot{width:7px;height:7px;border-radius:50%;background:var(--warn)}
+.badge{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;color:#fff;font-size:11px;font-weight:700;flex:none}
 button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </style>
 </head>
 <body>
 <main>
-  <header><h1>rig</h1></header>
+  <header class="row"><img src="/favicon.svg" alt="" width="28" height="28"><h1>rig</h1></header>
   <div class="grid">
     <section class="panel" aria-labelledby="rigs-h">
       <h2 id="rigs-h">1. 설정 선택</h2>
@@ -649,7 +666,8 @@ button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
     </section>
   </div>
   <section class="panel" aria-labelledby="hist-h">
-    <div class="row"><h2 id="hist-h">지난 실행</h2><label class="small"><input type="checkbox" id="hist-mine"> 선택한 설정의 프로젝트만 보기</label></div>
+    <h2 id="hist-h">지난 실행</h2>
+    <div class="tabs" role="tablist" aria-label="프로젝트별 실행" id="hist-tabs"></div>
     <div class="table-wrap"><table>
       <thead><tr><th>실행</th><th>설정</th><th>요구사항</th><th>상태</th><th>PR</th><th class="num">발견</th><th class="num">비용</th><th></th></tr></thead>
       <tbody id="shifts"></tbody>
@@ -682,7 +700,8 @@ button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
 const $ = id => document.getElementById(id);
 let rigs = [], selected = null, since = 0, polling = null;
 try { selected = localStorage.getItem('rig.selected'); } catch (e) {}
-try { $('hist-mine').checked = localStorage.getItem('rig.histMine') === '1'; } catch (e) {}
+let histTab = 'all';  // 'all', or a project key (its sorted folder list)
+try { histTab = localStorage.getItem('rig.histTab') || 'all'; } catch (e) {}
 
 async function api(path, body) {
   const opts = body ? {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Rig': '1'}, body: JSON.stringify(body)} : {};
@@ -932,16 +951,12 @@ const dirSet = ws => JSON.stringify([...new Set(ws.map(w => w.dir))].sort());
 const RESUME_PROBLEM = {no_rig: '이어 하기 불가 · 같은 이름의 설정 파일이 없음', many_rigs: '이어 하기 불가 · 같은 이름의 설정 파일이 여러 개'};
 function renderShifts() {
   if (!shiftRows) return;
-  const r = rigs.find(x => x.file === selected);
-  const box = $('hist-mine');
-  box.disabled = !r || !!r.error;
-  const mine = box.checked && !box.disabled;
   const body = $('shifts'); body.textContent = '';
   const empty = text => body.append(el('tr', {}, el('td', {colspan: '8', class: 'muted small'}, text)));
+  renderTabs();
   if (!shiftRows.length) { empty('아직 실행 기록이 없습니다.'); return; }
-  // Shown with the filter on: runs on exactly the selected rig's folders (names ignored).
-  const rows = mine ? shiftRows.filter(s => s.workspaces.length && dirSet(s.workspaces) === dirSet(r.workspaces)) : shiftRows;
-  if (!rows.length) { empty('선택한 설정(' + r.name + ')의 프로젝트로 실행한 기록이 없습니다. 체크를 끄면 모든 실행을 볼 수 있습니다.'); return; }
+  const rows = histTab === 'all' ? shiftRows : shiftRows.filter(s => projectKey(s) === histTab);
+  if (!rows.length) { empty('이 프로젝트의 실행 기록이 없습니다.'); return; }
   for (const s of rows) {
     const state = el('td', {}, LABEL[s.status] || s.status);
     const why = reasonText(s);
@@ -966,9 +981,43 @@ function renderShifts() {
       state, el('td', {}, prLinks(s.prs)), el('td', {class: 'num'}, String(s.findings || '')), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
   }
 }
-$('hist-mine').addEventListener('change', () => {
-  try { localStorage.setItem('rig.histMine', $('hist-mine').checked ? '1' : '0'); } catch (e) {}
-  renderShifts();
+// One tab per project (the set of folders a run worked on), newest first, plus 전체.
+// Runs from before folders were recorded go under 기타.
+const projectKey = s => s.workspaces.length ? dirSet(s.workspaces) : 'other';
+const projectLabel = s => s.workspaces.length ? s.workspaces.map(w => w.name || baseName(w.dir)).join(' · ') : '기타';
+// A small colored badge with the project's first letter, the same color every time.
+function badge(label) {
+  let h = 0;
+  for (const ch of label) h = (h * 31 + ch.codePointAt(0)) % 360;
+  return el('span', {class: 'badge', style: `background:hsl(${h} 45% 42%)`, 'aria-hidden': 'true'}, [...label][0].toUpperCase());
+}
+function renderTabs() {
+  const tabs = new Map([['all', {label: '전체', count: 0, running: false}]]);
+  for (const s of shiftRows || []) {
+    const key = projectKey(s);
+    if (!tabs.has(key)) tabs.set(key, {label: projectLabel(s), count: 0, running: false, title: s.workspaces.map(w => w.dir).join('\n')});
+    for (const k of ['all', key]) { tabs.get(k).count++; tabs.get(k).running ||= s.running; }
+  }
+  if (!tabs.has(histTab)) histTab = 'all';
+  const box = $('hist-tabs'); box.textContent = '';
+  for (const [key, t] of tabs) {
+    const b = el('button', {type: 'button', role: 'tab', class: 'tab', 'aria-selected': String(key === histTab),
+                            tabindex: key === histTab ? '0' : '-1', title: t.title || '',
+                            onclick: () => { histTab = key; try { localStorage.setItem('rig.histTab', key); } catch (e) {} renderShifts(); }});
+    if (key !== 'all') b.append(badge(t.label));
+    b.append(t.label, el('span', {class: 'count'}, String(t.count)));
+    if (t.running) b.append(el('span', {class: 'dot', title: '실행 중'}));
+    box.append(b);
+  }
+  return tabs;
+}
+// Arrow keys move between tabs.
+$('hist-tabs').addEventListener('keydown', e => {
+  if (!['ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+  const all = [...$('hist-tabs').querySelectorAll('.tab')];
+  const i = all.indexOf(document.activeElement);
+  const next = all[(i + (e.key === 'ArrowRight' ? 1 : -1) + all.length) % all.length];
+  if (next) { next.click(); $('hist-tabs').querySelectorAll('.tab')[all.indexOf(next)].focus(); }
 });
 // "#56 병합됨" links to each of a shift's PRs.
 const PR_STATE = {merged: '병합됨', closed: '닫힘', open: '열림'};

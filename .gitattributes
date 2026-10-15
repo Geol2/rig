@@ -3,3 +3,4 @@
 * text=auto eol=lf
 # cmd.exe needs CRLF line endings.
 *.cmd text eol=crlf
+*.ico binary
