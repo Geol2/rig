@@ -17,9 +17,13 @@ from rig.worktree import git
 GIT_E2E = {"tests/test_resume.py", "tests/test_publish.py", "tests/test_multi_worktree.py", "tests/test_worktree.py"}
 
 
+# Fixtures that build git repositories: tests using them count as git_e2e wherever they are.
+GIT_FIXTURES = {"repo", "rig_repo", "anonymous_repo"}
+
+
 def pytest_collection_modifyitems(config, items):
     for item in items:
-        if item.nodeid.split("::")[0] in GIT_E2E:
+        if item.nodeid.split("::")[0] in GIT_E2E or GIT_FIXTURES & set(getattr(item, "fixturenames", ())):
             item.add_marker("git_e2e")
 
 
