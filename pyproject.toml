@@ -28,5 +28,5 @@ packages = ["src/rig"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Spread the tests over all CPU cores (pytest-xdist); `-p no:xdist` or `-n 0` runs them in one process.
+# Spread the tests over all CPU cores (pytest-xdist); `-n 0` runs them in one process.
 addopts = "-n auto"

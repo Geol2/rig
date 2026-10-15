@@ -169,6 +169,12 @@ def test_auto_stops_at_the_budget(tmp_path):
     assert calls == 2 and "예산 $3을 다 써서 멈춥니다" in out
 
 
+def test_auto_has_no_budget_on_the_subscription(tmp_path):
+    # WORKER=claude-code: the shifts' cost is only what the API would have charged.
+    code, out, calls = auto(tmp_path, ["2 true true"] * 5, BUDGET="3", RUNS="3", WORKER="claude-code")
+    assert code == 0 and calls == 3 and "다 써서 멈춥니다" not in out
+
+
 def test_auto_stops_after_two_runs_without_a_merge(tmp_path):
     code, out, calls = auto(tmp_path, ["0.1 false false", "0.1 true true", "0.1 false false", "0.1 false true", "0.1 true true"])
     assert calls == 4 and "두 번 연속 병합된 PR이 없어서" in out
@@ -363,7 +369,7 @@ exit 0
 """
 
 
-def next_sh(tmp_path, resume_id, max_cost="3"):
+def next_sh(tmp_path, resume_id, max_cost="3", **env):
     """Runs scripts/next.sh with fake sync-main/next-task/resume-target, uv and curl; returns
     (stdout, each uv call's argument list). The fake uv logs one argument per line and `--`
     after each call (TASK has no newline)."""
@@ -371,7 +377,8 @@ def next_sh(tmp_path, resume_id, max_cost="3"):
     shutil.copy(SCRIPTS / "next.sh", tmp_path / "scripts" / "next.sh")
     fakes = {"scripts/sync-main.sh": "#!/usr/bin/env bash\nexit 0\n",
              "scripts/next-task.sh": f"#!/usr/bin/env bash\necho '{TASK}'\n",
-             "bin/uv": FAKE_UV, "bin/curl": "#!/usr/bin/env bash\nexit 0\n"}
+             "bin/uv": FAKE_UV, "bin/curl": "#!/usr/bin/env bash\nexit 0\n",
+             "bin/claude": "#!/usr/bin/env bash\nexit 0\n"}
     for name, text in fakes.items():
         path = tmp_path / name
         path.parent.mkdir(exist_ok=True)
@@ -387,7 +394,7 @@ def next_sh(tmp_path, resume_id, max_cost="3"):
                          env={**{k: v for k, v in os.environ.items() if k not in ("RIG_COPY_OF", "RIG_ROOT")},
                               "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
                               "ANTHROPIC_API_KEY": "x", "UV_LOG": str(log),
-                              **({"MAX_COST": max_cost} if max_cost else {})})
+                              **({"MAX_COST": max_cost} if max_cost else {}), **env})
     assert out.returncode == 0, out.stderr
     calls, call = [], []
     for line in log.read_text(encoding="utf-8").splitlines():
@@ -447,3 +454,11 @@ def test_next_sh_leaves_the_cost_limit_to_the_rig_file_without_max_cost(tmp_path
     monkeypatch.delenv("MAX_COST", raising=False)
     _, calls = next_sh(tmp_path, None, max_cost=None)
     assert calls[-1][-2:] == ["run", TASK] and "--max-cost" not in calls[-1]
+
+
+def test_next_sh_with_claude_code_needs_no_api_key_or_cost_limit(tmp_path, monkeypatch):
+    # WORKER=claude-code: the subscription; no API key needed and MAX_COST doesn't apply.
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    _, calls = next_sh(tmp_path, "20260101-000000", WORKER="claude-code", ANTHROPIC_API_KEY="")
+    assert calls[-1][-4:] == ["--worker", "claude-code", "--resume", "20260101-000000"]
+    assert "--max-cost" not in calls[-1]

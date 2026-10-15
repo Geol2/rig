@@ -614,3 +614,15 @@ def test_check_warns_when_git_has_no_user_for_prs(anonymous_repo, monkeypatch, c
     monkeypatch.setattr(publish, "check_rig", lambda rig, root: [])
     main(["-f", str(anonymous_repo / "rig.yaml"), "check"])
     assert "⚠ git: anon: git doesn't know who you are" in capsys.readouterr().out
+
+
+def test_run_with_claude_code_worker_needs_claude(tmp_path, monkeypatch):
+    from rig import claude_code
+
+    (tmp_path / "rig.yaml").write_text("name: ok\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(claude_code, "find_claude", lambda: None)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "x", "--worker", "claude-code"])
+    assert _exit_message(excinfo) == f"rig: {claude_code.INSTALL_HELP}"
+    assert not (tmp_path / ".rig").exists()  # nothing ran

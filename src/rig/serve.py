@@ -31,6 +31,9 @@ from rig.tools import crlf
 from rig.worktree import GitError, identity_problems
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+# How hands talk to Claude: the API (ANTHROPIC_API_KEY, billed per use) or the locally installed
+# Claude Code signed in with the user's subscription (rig.claude_code).
+WORKERS = ("api", "claude-code")
 
 
 @dataclass
@@ -38,6 +41,7 @@ class Run:
     file: str
     task: str
     dry: bool
+    worker: str = "api"  # api | claude-code (WORKERS)
     status: str = "running"  # running | done | stopped | incomplete | failed
     shift_id: str | None = None
     lines: list[str] = field(default_factory=list)
@@ -177,9 +181,16 @@ class App:
     # --- runs ------------------------------------------------------------------------------------
 
     def start(self, name: str, task: str, inputs: dict[str, str], dry: bool, use_worktree: bool,
-              max_cost: float | None = None, resume: str | None = None) -> Run:
+              max_cost: float | None = None, resume: str | None = None, worker: str = "api") -> Run:
         """Start a run in the background; with `resume` (`last` or a shift id), continue that
-        stopped shift like `rig run --resume`: its task and inputs, always in a worktree."""
+        stopped shift like `rig run --resume`: its task and inputs, always in a worktree.
+        `worker` is one of WORKERS."""
+        from rig.claude_code import INSTALL_HELP, find_claude
+
+        if worker not in WORKERS:
+            raise ValueError(f"unknown worker {worker!r}; use one of: {', '.join(WORKERS)}")
+        if worker == "claude-code" and not dry and not find_claude():
+            raise ValueError(INSTALL_HELP)
         if resume and (task.strip() or any(v != "" for v in inputs.values())):
             raise ValueError("resume reuses the old shift's task and inputs; don't send a task or inputs")
         with self._lock:
@@ -211,19 +222,20 @@ class App:
                 if problems:
                     raise ValueError("git can't commit the shift's changes:\n" + "\n".join(f"- {p}" for p in problems))
             rig.resolve_inputs({k: v for k, v in inputs.items() if v != ""})  # raises InputError
-            run = Run(file=name, task=task, dry=dry, meter=Meter(max_cost))
+            run = Run(file=name, task=task, dry=dry, worker=worker, meter=Meter(max_cost))
             self.run = run
             threading.Thread(target=self._work, args=(run, path, inputs, use_worktree, res), daemon=True).start()
             return run
 
     def _work(self, run: Run, path: Path, inputs: dict[str, str], use_worktree: bool,
               resume: Resume | None = None) -> None:
+        from rig.claude_code import ClaudeCodeWorker
         from rig.hand import ClaudeWorker, EchoWorker
         from rig.runner import run_shift
 
         try:
             rig = load(path)
-            worker = EchoWorker() if run.dry else ClaudeWorker()
+            worker = EchoWorker() if run.dry else ClaudeCodeWorker() if run.worker == "claude-code" else ClaudeWorker()
             shift = asyncio.run(run_shift(
                 rig, run.task, worker, root=path.parent, on_event=run.log, use_worktree=use_worktree,
                 inputs={k: v for k, v in inputs.items() if v != ""}, meter=run.meter, on_status=run.status_event,
@@ -255,7 +267,7 @@ class App:
             return {"status": "idle"}
         m = run.meter
         with run.lock:
-            return {"status": run.status, "file": run.file, "task": run.task, "dry": run.dry,
+            return {"status": run.status, "file": run.file, "task": run.task, "dry": run.dry, "worker": run.worker,
                     "shift_id": run.shift_id, "lines": run.lines[since:], "total": len(run.lines),
                     "cost": {"spent": usd(m.spent), "limit": usd(m.limit) if m.limit is not None else None,
                              "unpriced": m.unpriced, "stopping": m.stop_reason}}
@@ -476,6 +488,10 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     return self._send(200, resources.files("rig").joinpath(name).read_bytes(), ctype)
                 if url.path == "/api/dirs":
                     return self._json(200, app.dirs(parse_qs(url.query).get("path", [""])[0]))
+                if url.path == "/api/workers":
+                    from rig.claude_code import find_claude
+
+                    return self._json(200, {"claude_code": find_claude() is not None})
                 if url.path == "/api/rigs":
                     return self._json(200, app.rigs())
                 if url.path == "/api/run":
@@ -515,7 +531,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     limit = body.get("max_cost")
                     run = app.start(body["file"], body.get("task", ""), body.get("inputs") or {},
                                     bool(body.get("dry")), bool(body.get("worktree")),
-                                    float(limit) if limit not in (None, "") else None, body.get("resume") or None)
+                                    float(limit) if limit not in (None, "") else None, body.get("resume") or None,
+                                    worker=body.get("worker") or "api")
                     return self._json(200, {"ok": True, "file": run.file})
             except (ValueError, KeyError, InputError, ValidationError, yaml.YAMLError) as e:
                 return self._json(400, {"error": str(e)})
@@ -601,7 +618,9 @@ button.secondary{background:transparent;color:var(--accent)}
 button:disabled{opacity:.5;cursor:not-allowed}
 .notice{border:1px solid var(--accent);background:var(--soft);border-radius:8px;padding:12px 14px;display:grid;gap:8px;font-size:14px}
 .notice[hidden]{display:none}.notice p{margin:0}
-.cost-field input{max-width:160px}
+.cost-field input{max-width:160px}.cost-field[hidden]{display:none}
+.worker{border:0;padding:0;margin:0 0 10px}
+.worker legend{font-size:14px;padding:0;margin-bottom:4px}
 .cost{font-variant-numeric:tabular-nums;font-size:13px;font-weight:600}
 button.danger{font:inherit;font-size:14px;border-radius:6px;padding:7px 16px;cursor:pointer;border:1px solid var(--bad);background:transparent;color:var(--bad)}
 .error{color:var(--bad);font-size:14px;white-space:pre-wrap}
@@ -656,6 +675,12 @@ button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
         <textarea id="task" placeholder="예: 이 프로젝트를 리뷰해줘 / 주문 목록에 기간 검색 조건을 추가해줘"></textarea>
       </label>
       <div id="inputs"></div>
+      <fieldset class="opts worker" id="worker-box">
+        <legend>실행 방식</legend>
+        <label><input type="radio" name="worker" value="api" checked> API 키 (쓴 만큼 API 크레딧 차감)</label>
+        <label><input type="radio" name="worker" value="claude-code" id="worker-cc"> Claude Code 구독 (설치된 claude 사용, API 크레딧 안 씀)</label>
+        <span class="small muted" id="worker-note"></span>
+      </fieldset>
       <label class="field cost-field" for="max-cost">비용 상한 (USD, 넘으면 자동으로 멈춤)
         <input type="number" id="max-cost" min="0.01" step="0.5" placeholder="없음">
       </label>
@@ -899,9 +924,11 @@ $('go').addEventListener('click', async () => {
   const inputs = {};
   for (const i of document.querySelectorAll('#inputs input')) inputs[i.dataset.name] = i.value;
   // Resuming sends only the old run's id: the server takes its task and inputs and turns the worktree on.
-  const body = resume ? {file: selected, resume: resume.id, dry: $('dry').checked, max_cost: $('max-cost').value}
+  const worker = workerChoice();
+  const max_cost = worker === 'claude-code' ? '' : $('max-cost').value;  // no per-call billing to limit
+  const body = resume ? {file: selected, resume: resume.id, dry: $('dry').checked, max_cost, worker}
     : {file: selected, task: $('task').value, inputs, dry: $('dry').checked, worktree: $('worktree').checked,
-       max_cost: $('max-cost').value};
+       max_cost, worker};
   try {
     await api('/api/run', body);
     endResume();
@@ -924,7 +951,8 @@ async function poll() {
   if (!s || s.status === 'idle') return;
   $('progress').hidden = false;
   $('pill').className = 'pill ' + s.status; $('pill').textContent = LABEL[s.status] || s.status;
-  $('run-title').textContent = s.file + ' · ' + s.task.split('\n')[0].slice(0, 80) + (s.dry ? ' (dry)' : '');
+  $('run-title').textContent = s.file + ' · ' + s.task.split('\n')[0].slice(0, 80) + (s.dry ? ' (dry)' : '')
+    + (s.worker === 'claude-code' && !s.dry ? ' · Claude Code 구독' : '');
   if (s.lines.length) { const log = $('log'); log.textContent += s.lines.join('\n') + '\n'; log.scrollTop = log.scrollHeight; since = s.total; }
   const link = $('report-link');
   link.hidden = !(s.shift_id && s.status !== 'running');
@@ -932,7 +960,9 @@ async function poll() {
   $('go').disabled = s.status === 'running';
   $('stop').hidden = s.status !== 'running';
   $('stop').disabled = !!(s.cost && s.cost.stopping);
-  if (s.cost) {
+  if (s.worker === 'claude-code' && !s.dry) {
+    $('run-cost').textContent = 'API 크레딧 안 씀' + (s.cost && s.cost.stopping ? (s.status === 'running' ? ' · 중지 중' : ' · 중지됨') : '');
+  } else if (s.cost) {
     const c = s.cost;
     $('run-cost').textContent = '비용 ' + (c.unpriced ? '≥' : '') + c.spent + (c.limit ? ' / 상한 ' + c.limit : '')
       + (c.stopping === 'budget' ? ' · 상한 도달' : c.stopping ? (s.status === 'running' ? ' · 중지 중' : ' · 중지됨') : '');
@@ -1101,6 +1131,27 @@ $('notify').addEventListener('click', async () => {
 notifyButton();
 $('v-close').addEventListener('click', () => { viewing = null; clearTimeout(vTimer); $('viewer').hidden = true; });
 
+// Worker: the API, or the local Claude Code on the user's subscription. Remembered per browser.
+const workerChoice = () => document.querySelector('input[name=worker]:checked').value;
+function workerChanged() {
+  const cc = workerChoice() === 'claude-code';
+  // The subscription isn't billed per call, so the cost limit doesn't apply there.
+  document.querySelector('.cost-field').hidden = cc;
+  try { localStorage.setItem('rig.worker', workerChoice()); } catch (e) {}
+}
+for (const r of document.querySelectorAll('input[name=worker]')) r.addEventListener('change', workerChanged);
+async function loadWorkers() {
+  let saved = null;
+  try { saved = localStorage.getItem('rig.worker'); } catch (e) {}
+  const w = await api('/api/workers').catch(() => ({claude_code: false}));
+  $('worker-cc').disabled = !w.claude_code;
+  $('worker-note').textContent = w.claude_code ? ''
+    : 'Claude Code(claude)가 설치돼 있지 않아 구독 방식을 쓸 수 없습니다. 설치 후 터미널에서 claude → /login 으로 로그인하세요.';
+  const pick = document.querySelector(`input[name=worker][value="${saved === 'claude-code' && w.claude_code ? 'claude-code' : 'api'}"]`);
+  pick.checked = true;
+  workerChanged();
+}
+
 let fix = null, resume = null;  // resume: the stopped run being continued (startResume), or null
 async function start() {
   const params = new URLSearchParams(location.search);
@@ -1116,6 +1167,7 @@ async function start() {
   await loadRigs().catch(e => { $('rigs').textContent = e.message; });
 }
 start();
+loadWorkers();
 loadShifts();
 poll();
 </script>

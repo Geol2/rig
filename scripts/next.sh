@@ -5,6 +5,8 @@
 #   scripts/next.sh "fix the typo in README"
 #   MAX_COST=8 scripts/next.sh         # cost limit in USD (default: max_cost_usd in self.rig.yaml)
 #   PORT=8001 scripts/next.sh          # rig serve port (default 8000)
+#   WORKER=claude-code scripts/next.sh # hands run on the installed Claude Code (your subscription,
+#                                      # no API credit and no API key needed; MAX_COST doesn't apply)
 #   같은 task의 최근 shift가 중단됐으면 이어 받음(최대 두 번; scripts/resume-target.py)
 set -euo pipefail
 
@@ -22,10 +24,18 @@ cd "$RIG_ROOT"
 port="${PORT:-8000}"
 log=".rig/serve.log"
 
-if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+worker="${WORKER:-api}"
+if [[ "$worker" == claude-code ]]; then
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "✗ Claude Code(claude)가 없습니다. 설치 후 터미널에서 claude → /login 으로 구독 계정에 로그인하세요." >&2
+    echo "  설치: https://code.claude.com/docs/en/setup" >&2
+    exit 1
+  fi
+elif [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
   echo "✗ ANTHROPIC_API_KEY가 없습니다. 등록한 뒤 새 터미널에서 다시 실행하세요." >&2
   echo "  macOS(zsh): echo 'export ANTHROPIC_API_KEY=\"sk-ant-...\"' >> ~/.zshrc" >&2
   echo "  Windows: setx ANTHROPIC_API_KEY \"sk-ant-...\"  (Git Bash만이면 ~/.bashrc에 export)" >&2
+  echo "  API 키 없이 Claude Code 구독으로 돌리려면: WORKER=claude-code scripts/next.sh" >&2
   exit 1
 fi
 
@@ -77,7 +87,8 @@ fi
 # 3. Run. rig makes a branch, opens the PR, and merges it when the review and CI pass.
 # Cost limit: MAX_COST if given, else max_cost_usd from self.rig.yaml (the web page uses that too).
 cost=()
-if [[ -n "${MAX_COST:-}" ]]; then cost=(--max-cost "$MAX_COST"); fi
+if [[ "$worker" == claude-code ]]; then cost=(--worker claude-code)  # no per-call billing to limit
+elif [[ -n "${MAX_COST:-}" ]]; then cost=(--max-cost "$MAX_COST"); fi
 echo "▶ $(head -n 1 <<<"$task")"
 # A stopped shift of the same task, or one whose PR CI failed, is continued instead (`--resume`
 # takes no task). resume-target.py says "↻ …" on stderr, which goes straight to the terminal.
