@@ -148,7 +148,7 @@ def test_read_non_utf8_adds_note(tmp_path):
     assert rows[0].startswith("1\thi �")
     assert len(rows) == 2
     assert note == (
-        "[note: kr.txt isn't valid UTF-8 (first bad byte at offset 3); "
+        "[note: kr.txt isn't valid UTF-8 (first bad byte at byte offset 3); "
         "bad bytes are shown as �, and write_file/edit_file won't overwrite it]"
     )
 
@@ -157,7 +157,7 @@ def test_read_non_utf8_note_after_footer(tmp_path):
     (tmp_path / "kr.txt").write_bytes("a\nb\n안녕\nd\n".encode("cp949"))
     out = Toolbox(tmp_path, ["read_file"]).run("read_file", {"path": "kr.txt", "offset": 1, "limit": 2})
     assert out.splitlines()[:3] == ["1\ta", "2\tb", "[lines 1-2 of 4; continue with offset=3]"]
-    assert out.splitlines()[3].startswith("[note: kr.txt isn't valid UTF-8 (first bad byte at offset 4);")
+    assert out.splitlines()[3].startswith("[note: kr.txt isn't valid UTF-8 (first bad byte at byte offset 4);")
 
 
 def test_read_utf8_korean_has_no_note(tmp_path):

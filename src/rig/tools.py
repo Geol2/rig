@@ -570,7 +570,7 @@ class Toolbox:
         except UnicodeDecodeError as e:
             text = data.decode("utf-8", errors="replace")
             note = (
-                f"\n[note: {rel} isn't valid UTF-8 (first bad byte at offset {e.start}); "
+                f"\n[note: {rel} isn't valid UTF-8 (first bad byte at byte offset {e.start}); "
                 "bad bytes are shown as �, and write_file/edit_file won't overwrite it]"
             )
         lines = text.splitlines()
