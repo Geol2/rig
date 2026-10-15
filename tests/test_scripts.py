@@ -347,7 +347,7 @@ exit 0
 """
 
 
-def next_sh(tmp_path, resume_id):
+def next_sh(tmp_path, resume_id, max_cost="3"):
     """Runs scripts/next.sh with fake sync-main/next-task/resume-target, uv and curl; returns
     (stdout, each uv call's argument list). The fake uv logs one argument per line and `--`
     after each call (TASK has no newline)."""
@@ -370,7 +370,8 @@ def next_sh(tmp_path, resume_id):
     out = subprocess.run(["bash", "scripts/next.sh"], cwd=tmp_path, capture_output=True, text=True, encoding="utf-8",
                          env={**{k: v for k, v in os.environ.items() if k not in ("RIG_COPY_OF", "RIG_ROOT")},
                               "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}",
-                              "ANTHROPIC_API_KEY": "x", "UV_LOG": str(log), "MAX_COST": "3"})
+                              "ANTHROPIC_API_KEY": "x", "UV_LOG": str(log),
+                              **({"MAX_COST": max_cost} if max_cost else {})})
     assert out.returncode == 0, out.stderr
     calls, call = [], []
     for line in log.read_text(encoding="utf-8").splitlines():
@@ -423,3 +424,10 @@ def test_resume_target_takes_only_a_rig_file_in_the_folder(rig_repo, name):
     out = subprocess.run([sys.executable, str(RESUME_TARGET), name, TASK], cwd=rig_repo,
                          capture_output=True, text=True, env={**os.environ, "PYTHONPATH": str(SCRIPTS.parent / "src")})
     assert out.returncode == 0 and out.stdout == ""
+
+
+def test_next_sh_leaves_the_cost_limit_to_the_rig_file_without_max_cost(tmp_path, monkeypatch):
+    # No MAX_COST: no --max-cost, so max_cost_usd in self.rig.yaml applies (as on the web page).
+    monkeypatch.delenv("MAX_COST", raising=False)
+    _, calls = next_sh(tmp_path, None, max_cost=None)
+    assert calls[-1][-2:] == ["run", TASK] and "--max-cost" not in calls[-1]

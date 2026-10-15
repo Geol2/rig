@@ -3,7 +3,7 @@
 #
 #   scripts/next.sh                    # the next item in TODO.md, by name (scripts/next-task.sh)
 #   scripts/next.sh "fix the typo in README"
-#   MAX_COST=5 scripts/next.sh         # cost limit in USD (default 3)
+#   MAX_COST=8 scripts/next.sh         # cost limit in USD (default: max_cost_usd in self.rig.yaml)
 #   PORT=8001 scripts/next.sh          # rig serve port (default 8000)
 #   같은 task의 최근 shift가 중단됐으면 이어 받음(최대 두 번; scripts/resume-target.py)
 set -euo pipefail
@@ -75,11 +75,14 @@ else
 fi
 
 # 3. Run. rig makes a branch, opens the PR, and merges it when the review and CI pass.
+# Cost limit: MAX_COST if given, else max_cost_usd from self.rig.yaml (the web page uses that too).
+cost=()
+if [[ -n "${MAX_COST:-}" ]]; then cost=(--max-cost "$MAX_COST"); fi
 echo "▶ $(head -n 1 <<<"$task")"
 # A stopped shift of the same task, or one whose PR CI failed, is continued instead (`--resume`
 # takes no task). resume-target.py says "↻ …" on stderr, which goes straight to the terminal.
 resume="$(uv run -q --no-sync python scripts/resume-target.py self.rig.yaml "$task" || true)"
 if [[ -n "$resume" ]]; then
-  exec uv run -q --no-sync python -m rig -f self.rig.yaml run --max-cost "${MAX_COST:-3}" --resume "$resume"
+  exec uv run -q --no-sync python -m rig -f self.rig.yaml run ${cost[@]+"${cost[@]}"} --resume "$resume"
 fi
-exec uv run -q --no-sync python -m rig -f self.rig.yaml run --max-cost "${MAX_COST:-3}" "$task"
+exec uv run -q --no-sync python -m rig -f self.rig.yaml run ${cost[@]+"${cost[@]}"} "$task"

@@ -489,7 +489,7 @@ The worktree starts from `HEAD`, so commit TODO.md changes before running.
 
 `scripts/next.sh` does the whole routine in one command (macOS/Linux): update main with
 `scripts/sync-main.sh`, start `rig serve` in the background if it isn't up (to watch the run under "Log"), then
-run the next TODO item with a $3 cost limit. The task names that item
+run the next TODO item with the cost limit from `max_cost_usd` in `self.rig.yaml` ($5; the web page uses the same default). The task names that item
 (`scripts/next-task.sh`: "TODO 항목 처리: <title>", or a request for new items when the
 Backlog is empty), so the run, its PR title and the web page's history say what it's doing. Pass a task to run something else; set
 `MAX_COST` or `PORT` to change the defaults. If the newest shift ran the same task and was
@@ -539,9 +539,9 @@ On Windows, from PowerShell or cmd (it runs auto.sh with Git Bash): `scripts\aut
 **실행 (PowerShell 또는 cmd, rig 폴더에서)**
 
 ```powershell
-scripts\auto.cmd          # 한 번에 $3까지, 최대 5번
-scripts\auto.cmd 5        # 한 번에 $5까지
-scripts\auto.cmd 5 10     # 한 번에 $5까지, 최대 10번
+scripts\auto.cmd          # 한 번에 self.rig.yaml의 max_cost_usd($5)까지, 최대 5번
+scripts\auto.cmd 8        # 이번만 한 번에 $8까지
+scripts\auto.cmd 8 10     # 이번만 한 번에 $8까지, 최대 10번
 ```
 
 - 진행 상황은 http://localhost:8000 에서 봅니다(**지난 실행 → 로그**).

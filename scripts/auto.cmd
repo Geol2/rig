@@ -1,6 +1,6 @@
 @echo off
 rem Run scripts\auto.sh from PowerShell or cmd:  scripts\auto.cmd [MAX_COST] [RUNS]
-rem   scripts\auto.cmd          -> $3 per run, 5 runs
+rem   scripts\auto.cmd          -> max_cost_usd from self.rig.yaml per run, 5 runs
 rem   scripts\auto.cmd 5 10     -> $5 per run, 10 runs
 setlocal
 set "BASH=%ProgramFiles%\Git\bin\bash.exe"
