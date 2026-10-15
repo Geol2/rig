@@ -12,6 +12,7 @@ import json
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +32,62 @@ from rig.tools import crlf
 from rig.worktree import GitError, identity_problems
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+# How long a PR state read from GitHub is trusted before it's asked again.
+PR_STATE_TTL = 120
+PR_URL = re.compile(r"https://[\w.-]+/[\w.-]+/[\w.-]+/pull/\d+")
+
+
+class PrStates:
+    """Current state of PRs that shift.json recorded as open: they may have been merged or
+    closed since (by hand, or by a later shift). Read with `gh pr view` in a background thread,
+    so the history (polled every few seconds) never waits on GitHub; until then, and when gh
+    isn't there, the recorded state is shown."""
+
+    def __init__(self, cwd: Path):
+        self.cwd = cwd
+        self.known: dict[str, tuple[str, float]] = {}  # url -> (merged | closed | open, when read)
+        self.lock = threading.Lock()
+        self.pending: set[str] = set()
+        self.busy = False
+
+    def state(self, url: str) -> str | None:
+        with self.lock:
+            hit = self.known.get(url)
+            return hit[0] if hit else None
+
+    def refresh(self, urls: list[str]) -> None:
+        """Queue the stale ones; one background thread asks GitHub until the queue is empty."""
+        now = time.monotonic()
+        with self.lock:
+            for u in urls:
+                hit = self.known.get(u)
+                if hit is None or (hit[0] == "open" and now - hit[1] > PR_STATE_TTL):
+                    self.pending.add(u)
+            if not self.pending or self.busy:
+                return
+            self.busy = True
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self) -> None:
+        while True:
+            with self.lock:
+                if not self.pending:
+                    self.busy = False
+                    return
+                url = self.pending.pop()
+            try:
+                state = self.fetch(url)
+            except Exception:
+                state = None
+            with self.lock:
+                # Unknown (no gh, offline, ...): remembered as "open" too, so it's asked again only after the TTL.
+                self.known[url] = (state or "open", time.monotonic())
+
+    def fetch(self, url: str) -> str | None:
+        code, out = publish.run_cmd(["gh", "pr", "view", url, "--json", "state", "--jq", ".state"], self.cwd, timeout=20)
+        return {"MERGED": "merged", "CLOSED": "closed", "OPEN": "open"}.get(out.strip()) if code == 0 else None
+
+
 # How hands talk to Claude: the API (ANTHROPIC_API_KEY, billed per use) or the locally installed
 # Claude Code signed in with the user's subscription (rig.claude_code).
 WORKERS = ("api", "claude-code")
@@ -64,6 +121,7 @@ class App:
         self.run: Run | None = None
         # Held from the "already running" check until the new run is started, so two POSTs can't both start one.
         self._lock = threading.Lock()
+        self.pr_states = PrStates(self.root)
 
     @property
     def shifts_dir(self) -> Path:
@@ -261,6 +319,15 @@ class App:
             run.meter.stop()
             run.log("■ stop requested; hands finish the request they're on, then stop")
 
+    def _prs(self, summary: dict[str, Any]) -> list[dict[str, Any]]:
+        """_prs, with PRs recorded as open shown as they are on GitHub now (PrStates)."""
+        prs = _prs(summary)
+        self.pr_states.refresh([p["url"] for p in prs if p["state"] == "open"])
+        for p in prs:
+            if p["state"] == "open":
+                p["state"] = self.pr_states.state(p["url"]) or "open"
+        return prs
+
     def run_state(self, since: int) -> dict[str, Any]:
         run = self.run
         if not run:
@@ -298,7 +365,7 @@ class App:
                 "cost": usd(s["totals"].get("cost_usd")) if "totals" in s else "", "findings": findings,
                 "running": running, "status": status, "reason": report.status_reason(status, s, unreadable),
                 "log": (d / PROGRESS_LOG).exists(),
-                "prs": _prs(s),
+                "prs": self._prs(s),
                 "workspaces": _workspaces(s) or _workspaces(info or {}),
                 "resumable": resumable, "resume_file": None, "resume_problem": None,
                 "resume_task": (s.get("task") or "").strip() if resumable else "",
@@ -360,7 +427,7 @@ class App:
         summary, unreadable = report.read_summary(d)
         ok = None if running else summary.get("ok")
         status = report.status(summary, running, unreadable is not None)
-        return {"lines": lines[since:], "total": len(lines), "running": running, "ok": ok, "prs": _prs(summary),
+        return {"lines": lines[since:], "total": len(lines), "running": running, "ok": ok, "prs": self._prs(summary),
                 "status": status, "reason": report.status_reason(status, summary, unreadable)}
 
     def report_html(self, shift_id: str) -> str:
@@ -446,7 +513,8 @@ def _prs(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """The shift's pull requests from shift.json: number, url and merged / closed / open."""
     out = []
     for pr in summary.get("prs") or []:
-        if isinstance(pr, dict) and pr.get("url"):
+        # Only a PR link: it's shown as a link and passed to `gh pr view`.
+        if isinstance(pr, dict) and isinstance(pr.get("url"), str) and PR_URL.fullmatch(pr["url"]):
             state = "merged" if pr.get("merged") else "closed" if pr.get("closed") else "open"
             out.append({"number": pr.get("number"), "url": pr["url"], "state": state})
     return out

@@ -14,7 +14,7 @@ import pytest
 
 from rig import spec
 from rig.runner import ResumeError, ShiftEvent, run_shift
-from rig.serve import App, Run, make_handler
+from rig.serve import App, PrStates, Run, make_handler
 
 RIG = """\
 name: review
@@ -26,6 +26,14 @@ hands:
   b: {role: B}
 lines: ["a -> b"]
 """
+
+
+@pytest.fixture(autouse=True)
+def no_github(monkeypatch):
+    """The history asks GitHub for the state of open PRs; tests answer for it (default: unknown)."""
+    states = {}
+    monkeypatch.setattr(PrStates, "fetch", lambda self, url: states.get(url))
+    return states
 
 
 @pytest.fixture
@@ -751,3 +759,24 @@ def test_history_shows_what_a_shift_changed(server):
     assert rows["20261015-000001"]["title"] == "tools: CP949 파일 보호"
     assert rows["20261015-000000"]["title"] == ""
     assert "function taskCell" in call(base + "/")[1]
+
+
+def test_history_shows_the_current_state_of_open_prs(server, no_github):
+    app, base = server
+    for i, merged in enumerate([False, False, False, True]):
+        d = app.shifts_dir / f"20261015-00000{i}"
+        d.mkdir(parents=True)
+        (d / "shift.json").write_text(json.dumps({"rig": "r", "task": "t", "ok": True, "prs": [
+            {"url": f"https://github.com/o/r/pull/{i}", "number": i, "merged": merged}]}), encoding="utf-8")
+    no_github.update({"https://github.com/o/r/pull/0": "merged", "https://github.com/o/r/pull/1": "closed"})
+
+    def states():
+        return {r["prs"][0]["number"]: r["prs"][0]["state"] for r in call(base + "/api/shifts")[1]}
+
+    for _ in range(100):  # GitHub is asked in the background
+        if states() == {0: "merged", 1: "closed", 2: "open", 3: "merged"}:
+            break
+        time.sleep(0.02)
+    # Merged or closed since the shift; #2 still unknown (no gh, say); #3 was recorded merged: never asked.
+    assert states() == {0: "merged", 1: "closed", 2: "open", 3: "merged"}
+    assert "https://github.com/o/r/pull/3" not in app.pr_states.known
