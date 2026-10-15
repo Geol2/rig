@@ -342,12 +342,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   tool_use를 함께 내는 가짜 응답으로 `max_turns`에 걸렸을 때 output에 그 텍스트와 표시가 모두 있는지, `tests/test_foreman.py`에
   파일을 쓴 뒤 턴이 다 된 delegate의 오류에 그 경로가 들어 있는지 테스트.
   Note: `ClaudeWorker._loop` keeps the most recent non-empty assistant text before `[stopped after N turns]`; `Toolbox.changed` lists paths changed by successful `write_file`/`edit_file` (normalized, deduped), and the foreman's `delegate` error adds `changed files: …` when the hand changed any.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **git 사용자 정보(user.name/email)가 없으면 worktree shift를 시작하기 전에 멈추기**: `worktree.py` `finish`는
+- [x] **git 사용자 정보(user.name/email)가 없으면 worktree shift를 시작하기 전에 멈추기**: `worktree.py` `finish`는
   shift가 끝난 뒤에야 `git commit`을 실행하는데, 커밋할 사람 정보가 설정되지 않은 PC(README Windows 안내의 "처음 한 번만
   준비" 1~4단계에는 `git config` 단계가 없음)에서는 "Author identity unknown"으로 실패합니다. 그러면 비용을 다 쓴 뒤
   `runner.py` `_report_worktree`가 "couldn't commit … worktree kept at"만 출력하고, `publish.pr`이면 PR도 안 열리며
@@ -362,6 +357,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   저장소에서 `None`을 돌려주는지; `tests/test_cli.py`에 그 저장소로 `rig run --worktree`가 worker를 부르기 전에 종료하고
   `.rig/worktrees`·`rig/` 브랜치가 생기지 않는지; `tests/test_serve.py`에 `App.start(..., use_worktree=True)`가 `ValueError`를
   내는지 테스트.
+  Note: done in shift `20261015-093054` (stopped at its $3 limit before the review); finished by Claude.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **`rig serve`를 Ctrl+C로 끌 때 실행 중인 shift의 작업을 잃지 않게**: `serve.py` `App.start`는 shift를
   `daemon=True` 스레드로 돌리고, `serve()`는 `KeyboardInterrupt`를 `pass`로 넘긴 뒤 바로 종료합니다. 그래서 페이지로
   실행 중에 터미널에서 Ctrl+C를 누르거나 창을 닫으면 스레드가 그대로 죽어 `run_shift`의 `finally`(worktree 커밋,
