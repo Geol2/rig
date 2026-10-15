@@ -366,7 +366,7 @@ def test_history_project_folders(server):
     (old / "shift.json").write_text(json.dumps({"rig": "review", "ok": True, "findings": 0}), encoding="utf-8")
     rows = call(base + "/api/shifts")[1]
     assert [r["workspaces"] for r in rows] == [folders, []]  # malformed entries dropped; older shift.json: none
-    assert 'id="hist-mine"' in call(base + "/")[1]
+    assert 'id="hist-tabs"' in call(base + "/")[1]
 
 
 def test_history_folders_prefer_shift_json(tmp_path):
@@ -670,3 +670,12 @@ def test_start_refuses_worktree_run_when_git_has_no_user(anonymous_repo):
         app.start("rig.yaml", "x", {}, dry=False, use_worktree=True)
     assert str(excinfo.value).startswith("git can't commit the shift's changes:\n- anon: git doesn't know who you are")
     assert app.run is None and worked == []
+    
+    
+def test_icons_are_served(server):
+    _, base = server
+    for path, ctype in [("/favicon.ico", "image/x-icon"), ("/favicon.svg", "image/svg+xml")]:
+        with urllib.request.urlopen(base + path) as r:
+            assert r.status == 200 and r.headers["Content-Type"] == ctype and len(r.read()) > 100
+    page = call(base + "/")[1]
+    assert 'rel="icon" href="/favicon.svg"' in page and 'id="hist-tabs"' in page

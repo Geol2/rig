@@ -8,7 +8,8 @@ version: 1
 name: rig-self-dev
 description: Pick a TODO.md item, implement it with tests, get it reviewed.
 
-workspace: .
+workspaces:
+  self-dev: "."
 
 defaults:
   model: claude-opus-5-5
