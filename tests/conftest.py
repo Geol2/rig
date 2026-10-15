@@ -49,3 +49,22 @@ def repo(tmp_path):
     git("add", "-A", cwd=repo)
     git("commit", "-q", "-m", "init", cwd=repo)
     return repo
+
+
+@pytest.fixture
+def anonymous_repo(tmp_path, monkeypatch):
+    """A git repo with one commit where git has no user.name/user.email, whatever the host's config."""
+    empty = tmp_path / "gitconfig"
+    empty.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "EMAIL"):
+        monkeypatch.delenv(name, raising=False)
+    repo = tmp_path / "anon"
+    repo.mkdir()
+    (repo / "README.md").write_text("hi\n", encoding="utf-8")
+    git("init", "-q", "-b", "main", cwd=repo)
+    git("config", "user.useConfigOnly", "true", cwd=repo)  # don't guess a name from the hostname
+    git("add", "-A", cwd=repo)
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init", cwd=repo)
+    return repo

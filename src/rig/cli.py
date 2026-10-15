@@ -50,6 +50,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 def cmd_check(args: argparse.Namespace) -> None:
     from rig import publish
+    from rig.worktree import identity_problems
 
     rig = _load_or_exit(Path(args.file))
     _check_workspace(rig, Path(args.file))
@@ -73,6 +74,9 @@ def cmd_check(args: argparse.Namespace) -> None:
         print(line)
     for p in publish.check_rig(rig, Path(args.file).resolve().parent):
         print(f"⚠ publish.pr: {p}")
+    if rig.publish.pr:
+        for p in identity_problems(rig.workspace_dirs(Path(args.file).resolve().parent).values()):
+            print(f"⚠ git: {p}")
 
 
 def _parse_inputs(pairs: list[str]) -> dict[str, str]:
@@ -92,7 +96,7 @@ def cmd_run(args: argparse.Namespace) -> None:
     from rig import publish
     from rig.hand import ClaudeWorker, EchoWorker
     from rig.runner import ResumeError, load_resume, run_shift
-    from rig.worktree import GitError
+    from rig.worktree import GitError, identity_problems
 
     if args.resume and (args.task is not None or args.input):
         sys.exit("rig: --resume reuses the old shift's task and inputs; don't pass a task or -i")
@@ -124,6 +128,12 @@ def cmd_run(args: argparse.Namespace) -> None:
         problems = publish.check_rig(rig, path.resolve().parent)  # before any hand spends money
         if problems:
             sys.exit("rig: can't open PRs (publish.pr), so nothing ran:\n" + "\n".join(f"  - {p}" for p in problems))
+        if args.worktree or resume is not None or rig.publish.pr:
+            # The worktree is committed only after the shift; make sure git can do it.
+            problems = identity_problems(rig.workspace_dirs(path.resolve().parent).values())
+            if problems:
+                sys.exit("rig: git can't commit the shift's changes, so nothing ran:\n"
+                         + "\n".join(f"  - {p}" for p in problems))
 
     worker = EchoWorker() if args.dry else ClaudeWorker()
     try:

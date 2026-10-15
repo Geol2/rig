@@ -342,12 +342,23 @@ Keep items small enough for one reviewed change. Add context under an item when 
   tool_use를 함께 내는 가짜 응답으로 `max_turns`에 걸렸을 때 output에 그 텍스트와 표시가 모두 있는지, `tests/test_foreman.py`에
   파일을 쓴 뒤 턴이 다 된 delegate의 오류에 그 경로가 들어 있는지 테스트.
   Note: `ClaudeWorker._loop` keeps the most recent non-empty assistant text before `[stopped after N turns]`; `Toolbox.changed` lists paths changed by successful `write_file`/`edit_file` (normalized, deduped), and the foreman's `delegate` error adds `changed files: …` when the hand changed any.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **UTF-8이 아닌 파일(CP949 등)을 `write_file`이 조용히 망가뜨리지 않게**: `tools.py` `Toolbox._read`는
+- [x] **git 사용자 정보(user.name/email)가 없으면 worktree shift를 시작하기 전에 멈추기**: `worktree.py` `finish`는
+  shift가 끝난 뒤에야 `git commit`을 실행하는데, 커밋할 사람 정보가 설정되지 않은 PC(README Windows 안내의 "처음 한 번만
+  준비" 1~4단계에는 `git config` 단계가 없음)에서는 "Author identity unknown"으로 실패합니다. 그러면 비용을 다 쓴 뒤
+  `runner.py` `_report_worktree`가 "couldn't commit … worktree kept at"만 출력하고, `publish.pr`이면 PR도 안 열리며
+  (`shift.committed()`가 비어 있음), `load_resume`은 "kept its worktree … commit or remove it first"로 이어 하기도 거부합니다.
+  `worktree.py`에 `identity_problem(repo) -> str | None`을 두어 `git var GIT_COMMITTER_IDENT`가 실패하면 "git에 이름과
+  이메일이 없어 커밋할 수 없음: `git config --global user.name "…"`, `git config --global user.email "…"`"을 돌려주고,
+  worktree를 쓰는 실행(`--worktree`, `publish.pr`, `--resume`)이면 `cli.py` `cmd_run`과 `serve.py` `App.start`가 worktree를
+  만들기 전에 rig의 각 저장소(`rig.workspace_dirs`의 `repo_of`)를 확인해 문제가 있으면 시작하지 않게 하세요(serve는 400).
+  `rig check`는 `publish.pr`일 때 경고로 표시. README Windows "처음 한 번만 준비"에 `git config --global` 두 줄 추가.
+  완료 기준: `tests/test_worktree.py`에 user.name/email이 없는 저장소(`GIT_CONFIG_GLOBAL`을 빈 파일로, `GIT_CONFIG_NOSYSTEM=1`,
+  저장소에 `user.useConfigOnly true`를 설정해 호스트 이름으로 추측하지 않게)에서 `identity_problem`이 안내 문구를, 설정된
+  저장소에서 `None`을 돌려주는지; `tests/test_cli.py`에 그 저장소로 `rig run --worktree`가 worker를 부르기 전에 종료하고
+  `.rig/worktrees`·`rig/` 브랜치가 생기지 않는지; `tests/test_serve.py`에 `App.start(..., use_worktree=True)`가 `ValueError`를
+  내는지 테스트.
+  Note: done in shift `20261015-093054` (stopped at its $3 limit before the review); finished by Claude.
+- [x] **UTF-8이 아닌 파일(CP949 등)을 `write_file`이 조용히 망가뜨리지 않게**: `tools.py` `Toolbox._read`는
   `data.decode("utf-8", errors="replace")`로 읽어 CP949 같은 파일의 한글을 아무 표시 없이 `�`로 보여 주고, `_edit`는
   엄격하게 디코딩해 "isn't valid UTF-8; edit_file can't edit it safely"로 거부합니다. 그러면 hand는 `write_file`로
   넘어가고, `Toolbox.run`의 `write_file` 분기는 기존 파일을 확인하지 않고 `content.encode("utf-8")`로 덮어써서, 읽을 때
@@ -360,6 +371,43 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   표에 한 줄. 완료 기준: `tests/test_tools.py`에 CP949로 인코딩한 한글 파일을 `read_file`하면 안내가 붙는지(UTF-8 파일엔 없음),
   같은 파일에 `write_file`하면 ToolError이고 bytes가 그대로인지, UTF-8 파일 덮어쓰기와 새 파일 쓰기는 여전히 되는지,
   `Toolbox.changed`에 거부된 경로가 없는지 테스트.
+  Note: done in shift `20261015-095116` (stopped when the API credit ran out, before the review); finished by Claude.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
+- [ ] **`rig serve`를 Ctrl+C로 끌 때 실행 중인 shift의 작업을 잃지 않게**: `serve.py` `App.start`는 shift를
+  `daemon=True` 스레드로 돌리고, `serve()`는 `KeyboardInterrupt`를 `pass`로 넘긴 뒤 바로 종료합니다. 그래서 페이지로
+  실행 중에 터미널에서 Ctrl+C를 누르거나 창을 닫으면 스레드가 그대로 죽어 `run_shift`의 `finally`(worktree 커밋,
+  `_write_summary`)가 돌지 않습니다. hand가 쓴 내용은 `.rig/worktrees/<id>`에 커밋 없이 남고, `shift.json`이 없어 `rig logs`는
+  `incomplete`, `load_resume`은 "cannot read …/shift.json (missing)"으로 이어 하기를 거부합니다. `App`이 실행 스레드를 기억하고
+  `App.shutdown(timeout: float | None) -> bool`을 두어 실행 중이면 `stop()`(meter 중지)을 부른 뒤 스레드가 끝나길 기다리게
+  하세요. `serve()`의 `except KeyboardInterrupt`에서 실행 중이면 "실행 중인 shift를 멈추는 중입니다(진행 중인 요청이 끝나면
+  종료, 바로 끝내려면 Ctrl+C 한 번 더)"를 출력하고 `shutdown(None)`을 부르며, 두 번째 Ctrl+C는 지금처럼 바로 끝냅니다.
+  README Web page 절에 한 줄. 완료 기준: `tests/test_serve.py`에 `write_file` 뒤 `meter.stop_reason`이 생길 때까지 기다리는
+  가짜 worker(`rig.hand.EchoWorker`를 monkeypatch, `tests/conftest.py`의 `repo` fixture, `use_worktree=True`)로 실행을
+  시작하고 `app.shutdown(10)`이 `True`를 돌려준 뒤 `shift.json`의 `stopped`가 `"stopped"`이고, `running.json`이 없고,
+  `rig/<id>` 브랜치에 그 파일이 커밋돼 있는지; 실행 중이 아닐 때 `shutdown`이 바로 `True`인지 테스트.
+- [ ] **`search`가 workspace 밖을 가리키는 심볼릭 링크 파일을 읽지 않게**: `tools.py` `Toolbox._files`는 `os.walk`의
+  `filenames`를 그대로 내보내고 `_search`는 각 파일을 `p.read_bytes()`로 읽습니다. 그래서 프로젝트 안에 `creds ->
+  ~/.aws/credentials`나 `/etc/...`를 가리키는 링크 파일이 있으면, `read_file`(`_locate`가 resolve 후 거부)로는 못 읽는 workspace
+  밖 내용이 `search` 결과(`creds:1: aws_secret_access_key=…`)로 hand에게 그대로 전달됩니다(리뷰 템플릿처럼 남의 프로젝트를
+  분석할 때 특히). `glob`도 그런 파일을 나열해 hand가 읽으려다 "path escapes workspace" 오류만 받습니다. `_files`(또는 그
+  호출부)에서 각 파일의 `resolve()`가 그 파일이 속한 root(단일 workspace면 `self.workspace`, `workspaces` 모드면 해당
+  프로젝트 root) 밖이면 건너뛰고, workspace 안을 가리키는 링크는 지금처럼 다루세요. 완료 기준: `tests/test_tools.py`에
+  workspace 밖 파일을 가리키는 링크가 있을 때 `search`가 그 내용을 돌려주지 않고 `glob`에도 나오지 않는지, workspace 안 파일을
+  가리키는 링크는 여전히 검색되는지, `workspaces` 모드에서 다른 프로젝트 밖을 가리키는 링크도 건너뛰는지 테스트(링크를 만들 수
+  없는 환경은 기존 `test_write_refuses_symlink_into_git`처럼 skip).
+- [ ] **`rig run`을 Ctrl+C로 멈추면 traceback 대신 이어 하는 방법 안내**: `cli.py` `cmd_run`은 `asyncio.run(run_shift(...))`의
+  `KeyboardInterrupt`를 잡지 않아, Ctrl+C를 누르면 `run_shift`의 `finally`가 브랜치 커밋과 `shift.json`(`error: "interrupted"`)을
+  다 남긴 뒤에도 사용자에게는 Python traceback만 보이고 shift id나 `rig run --resume`은 안내되지 않습니다(`main`에도 처리 없음).
+  `cmd_run`이 `on_status`로 `"started"` 이벤트의 shift id를 받아 두고, `KeyboardInterrupt`면 "✗ interrupted: shift <id>"와
+  함께 그 shift의 `shift.json`에 커밋된 worktree가 있으면(`serve.py` `_committed`와 같은 조건) "continue with: rig run --resume
+  <id>"를, 없으면 "see: rig logs <id>"를 stderr에 출력하고 종료 코드 130으로 끝내세요(shift가 시작되기 전이면 "✗ interrupted"만).
+  완료 기준: `tests/test_cli.py`에 `rig.hand.EchoWorker`를 `write_file` 뒤 `KeyboardInterrupt`를 내는 가짜 worker로 바꿔
+  `main(["run", "-f", …, "--dry", "--worktree", "task"])`가 `SystemExit(130)`으로 끝나고 출력에 shift id와 `--resume`이 있고
+  `Traceback`이 없는지, 아무것도 쓰지 않고 끊긴 경우엔 `rig logs <id>` 안내가 나오는지 테스트.
 - [ ] **`tools`·`foreman.crew`·`foreman.require`의 중복 이름을 `rig check`에서 거부**: `spec.py` `Hand._known_tools`는 알 수
   없는 도구만 거르고 `tools: [read_file, read_file]` 같은 중복은 통과시킵니다. 그러면 `tools.py` `Toolbox.definitions`가 같은
   이름의 도구 정의를 두 번 보내 API가 첫 호출에서 오류를 내고, hand는 shift가 시작된 뒤에야 `api_error`로 끝납니다.
@@ -413,6 +461,7 @@ items once its design is decided.
 - **Per-hand budgets and fallback settings**: `max_cost_usd` per hand; `fallbacks` per hand.
 - **MCP servers and web tools** for hands.
 - **crews**: reusable groups of hands.
-- **병렬 hand의 파일 충돌 막기**: foreman이 한 턴에 여러 delegate를 병렬로 부르거나 lines의 같은 stage가 같은 workspace를
-  쓸 때, 같은 파일을 동시에 바꾸는 것을 감지하거나 막는 방법(파일별 잠금, 나중 쓰기가 앞 변경을 덮으면 ToolError, hand별
-  worktree 후 병합 등)을 정해야 합니다. 위 Backlog의 경고는 lines 모드의 정적 경고일 뿐입니다.
+- **병렬 hand의 파일 충돌 막기**: foreman이 한 턴에 여러 delegate를 부르거나 lines의 한 stage에 hand가 여럿이면 모두 같은
+  workspace에서 `write_file`/`edit_file`을 쓰고(`runner.py` `_run_foreman` `delegate`, `_run_lines`), `tools.py`에는 잠금이나
+  충돌 감지가 없어 나중에 쓴 쪽이 앞의 변경을 조용히 덮어씁니다. 파일별 잠금, 나중 쓰기가 앞 변경을 덮으면 ToolError, hand별
+  worktree 후 병합 중 무엇으로 할지 정해야 합니다. 위 Backlog의 경고는 lines 모드의 정적 경고일 뿐입니다.

@@ -661,6 +661,17 @@ def test_start_refuses_when_prs_cant_be_opened(tmp_path, monkeypatch):
     assert checked == [] and app.run is not None
 
 
+def test_start_refuses_worktree_run_when_git_has_no_user(anonymous_repo):
+    (anonymous_repo / "rig.yaml").write_text("name: t\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    app = App(anonymous_repo)
+    worked = []
+    app._work = lambda *args: worked.append(args)
+    with pytest.raises(ValueError) as excinfo:
+        app.start("rig.yaml", "x", {}, dry=False, use_worktree=True)
+    assert str(excinfo.value).startswith("git can't commit the shift's changes:\n- anon: git doesn't know who you are")
+    assert app.run is None and worked == []
+    
+    
 def test_icons_are_served(server):
     _, base = server
     for path, ctype in [("/favicon.ico", "image/x-icon"), ("/favicon.svg", "image/svg+xml")]:

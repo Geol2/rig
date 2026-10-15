@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping
+from typing import Iterable, Mapping
 
 
 class GitError(RuntimeError):
@@ -83,6 +83,39 @@ def repo_of(workspace: Path) -> Path:
         return Path(git("rev-parse", "--show-toplevel", cwd=workspace).strip()).resolve()
     except (GitError, FileNotFoundError, NotADirectoryError) as e:
         raise GitError(f"--worktree needs the workspace to be in a git repository: {workspace}") from e
+
+
+def identity_problem(repo: Path) -> str | None:
+    """Why git can't commit in `repo` (no user.name/user.email), or None if it can.
+
+    `finish` commits only after the whole shift ran, so this is checked before it starts.
+    """
+    try:
+        for var in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
+            git("var", var, cwd=repo, env=trusting(repo))
+    except GitError:
+        return (
+            f"{repo.name}: git doesn't know who you are (user.name/user.email aren't set); "
+            'run `git config --global user.name "Your Name"` and '
+            '`git config --global user.email "you@example.com"`'
+        )
+    return None
+
+
+def identity_problems(folders: Iterable[Path]) -> list[str]:
+    """`identity_problem` for each repo holding one of `folders` (once per repo).
+
+    Folders outside a git repository are skipped; creating the worktree reports those.
+    """
+    repos: list[Path] = []
+    for folder in folders:
+        try:
+            repo = repo_of(folder)
+        except GitError:
+            continue
+        if repo not in repos:
+            repos.append(repo)
+    return [p for p in map(identity_problem, repos) if p]
 
 
 MAX_BRANCH_TRIES = 100
