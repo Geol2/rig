@@ -11,6 +11,18 @@ import pytest
 from rig.worktree import git
 
 
+# Whole shifts on real git repos (worktrees, PRs against a local remote, resuming). The same on
+# every OS and slow on Windows, where each of their hundreds of git commands costs a new
+# process; Windows PR checks skip them (-m "not git_e2e"), pushes to main run everything.
+GIT_E2E = {"tests/test_resume.py", "tests/test_publish.py", "tests/test_multi_worktree.py"}
+
+
+def pytest_collection_modifyitems(config, items):
+    for item in items:
+        if item.nodeid.split("::")[0] in GIT_E2E:
+            item.add_marker("git_e2e")
+
+
 def _annotate(path: str, line: int, title: str, text: str) -> None:
     # The end of the failure (assertion and its values) is the useful part; workflow commands
     # need newlines and '%' escaped.

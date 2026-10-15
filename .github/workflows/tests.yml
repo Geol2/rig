@@ -29,4 +29,6 @@ jobs:
           python-version: ${{ matrix.python }}
       # Exactly the versions in uv.lock, wheels only.
       - run: uv sync --locked --no-build --no-install-project
-      - run: uv run --locked --no-build --no-sync pytest -q
+      # Windows PR checks skip the git end-to-end tests (see GIT_E2E in tests/conftest.py) to
+      # answer in seconds; Linux runs them on every PR and Windows on every push to main.
+      - run: uv run --locked --no-build --no-sync pytest -q ${{ (runner.os == 'Windows' && github.event_name == 'pull_request') && '-m "not git_e2e"' || '' }}
