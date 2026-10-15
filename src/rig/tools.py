@@ -47,7 +47,8 @@ DEFINITIONS: dict[str, dict[str, Any]] = {
             f"Returns at most {READ_LIMIT} lines; for large files, use offset/limit to read the part you need "
             "(find it first with `search`). "
             f"Lines longer than {MAX_READ_LINE} chars are cut; each call returns at most {MAX_READ_CHARS} chars "
-            "(continue with the offset it gives). Binary files are refused."
+            "(continue with the offset it gives). Binary files are refused. "
+            "Files that aren't valid UTF-8 show bad bytes as � and end with a note."
         ),
         "input_schema": {
             "type": "object",
@@ -65,7 +66,8 @@ DEFINITIONS: dict[str, dict[str, Any]] = {
         "name": "write_file",
         "description": (
             "Create or overwrite a UTF-8 text file in the workspace. Write plain content, without line numbers. "
-            "Line ends are kept as given; overwriting a CRLF file with \\n-only content keeps it CRLF."
+            "Line ends are kept as given; overwriting a CRLF file with \\n-only content keeps it CRLF. "
+            "Refuses to overwrite an existing file that isn't valid UTF-8."
         ),
         "input_schema": {
             "type": "object",
@@ -445,9 +447,19 @@ class Toolbox:
             p = self._writable(args["path"])
             p.parent.mkdir(parents=True, exist_ok=True)
             content = args["content"]
+            old = p.read_bytes() if p.is_file() else None
+            if old is not None:
+                try:
+                    old.decode("utf-8")
+                except UnicodeDecodeError as e:
+                    # read_file shows bad bytes as �, so a rewrite would lose the file's original text.
+                    raise ToolError(
+                        f"{args['path']} isn't valid UTF-8 (e.g. CP949); rewriting it would replace its "
+                        "non-UTF-8 text with �. Ask the user to convert it to UTF-8 first"
+                    ) from e
             # Written as given (no OS newline translation); read_file shows lines without \r,
             # so content rewritten with plain \n over a CRLF file gets CRLF back, as in edit_file.
-            if "\r" not in content and p.is_file() and crlf(p.read_bytes()):
+            if "\r" not in content and old is not None and crlf(old):
                 content = content.replace("\n", "\r\n")
             p.write_bytes(content.encode("utf-8"))
             self._changed(p)
@@ -550,8 +562,18 @@ class Toolbox:
         data = p.read_bytes()
         if b"\0" in data[:8192]:
             raise ToolError(f"binary file ({len(data)} bytes); not shown")
-        # errors="replace": non-UTF-8 sources (e.g. CP949) still read instead of failing.
-        lines = data.decode("utf-8", errors="replace").splitlines()
+        # Non-UTF-8 sources (e.g. CP949) still read with errors="replace", plus a note saying so,
+        # since writing that text back would corrupt the file.
+        note = ""
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as e:
+            text = data.decode("utf-8", errors="replace")
+            note = (
+                f"\n[note: {rel} isn't valid UTF-8 (first bad byte at byte offset {e.start}); "
+                "bad bytes are shown as �, and write_file/edit_file won't overwrite it]"
+            )
+        lines = text.splitlines()
         if not lines:
             return "(empty file)"
         if offset > len(lines):
@@ -575,7 +597,7 @@ class Toolbox:
         body = "\n".join(rows)
         if offset > 1 or end < len(lines):
             body += f"\n[lines {offset}-{end} of {len(lines)}" + (f"; continue with offset={end + 1}]" if end < len(lines) else "]")
-        return body
+        return body + note
 
     def _edit(self, rel: str, old: str, new: str, replace_all: bool) -> str:
         p = self._writable(rel)

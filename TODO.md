@@ -358,6 +358,20 @@ Keep items small enough for one reviewed change. Add context under an item when 
   `.rig/worktrees`·`rig/` 브랜치가 생기지 않는지; `tests/test_serve.py`에 `App.start(..., use_worktree=True)`가 `ValueError`를
   내는지 테스트.
   Note: done in shift `20261015-093054` (stopped at its $3 limit before the review); finished by Claude.
+- [x] **UTF-8이 아닌 파일(CP949 등)을 `write_file`이 조용히 망가뜨리지 않게**: `tools.py` `Toolbox._read`는
+  `data.decode("utf-8", errors="replace")`로 읽어 CP949 같은 파일의 한글을 아무 표시 없이 `�`로 보여 주고, `_edit`는
+  엄격하게 디코딩해 "isn't valid UTF-8; edit_file can't edit it safely"로 거부합니다. 그러면 hand는 `write_file`로
+  넘어가고, `Toolbox.run`의 `write_file` 분기는 기존 파일을 확인하지 않고 `content.encode("utf-8")`로 덮어써서, 읽을 때
+  `�`로 바뀐 원래 한글(주석·문자열)이 파일 전체에서 영영 사라집니다(diff로도 인코딩이 바뀐 것만 보여 알아채기 어려움).
+  규칙: (1) `_read`는 파일이 UTF-8로 엄격하게 디코딩되지 않으면 결과 끝에 "[note: <path> isn't valid UTF-8 (first bad byte
+  at offset N); bad bytes are shown as �, and write_file/edit_file won't overwrite it]"를 붙입니다. (2) `write_file`은
+  **이미 있는** 파일의 bytes가 UTF-8이 아니면 쓰지 않고 "<path> isn't valid UTF-8 (e.g. CP949); rewriting it would replace
+  its non-UTF-8 text with �. Ask the user to convert it to UTF-8 first"라는 ToolError를 냅니다(새 파일, UTF-8 파일, BOM이
+  있는 UTF-8 파일은 지금처럼 씀; `_changed`에도 기록하지 않음). `write_file`·`read_file` 도구 설명과 README Built-in tools
+  표에 한 줄. 완료 기준: `tests/test_tools.py`에 CP949로 인코딩한 한글 파일을 `read_file`하면 안내가 붙는지(UTF-8 파일엔 없음),
+  같은 파일에 `write_file`하면 ToolError이고 bytes가 그대로인지, UTF-8 파일 덮어쓰기와 새 파일 쓰기는 여전히 되는지,
+  `Toolbox.changed`에 거부된 경로가 없는지 테스트.
+  Note: done in shift `20261015-095116` (stopped when the API credit ran out, before the review); finished by Claude.
 
 ## Backlog
 
@@ -394,16 +408,37 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   완료 기준: `tests/test_cli.py`에 `rig.hand.EchoWorker`를 `write_file` 뒤 `KeyboardInterrupt`를 내는 가짜 worker로 바꿔
   `main(["run", "-f", …, "--dry", "--worktree", "task"])`가 `SystemExit(130)`으로 끝나고 출력에 shift id와 `--resume`이 있고
   `Traceback`이 없는지, 아무것도 쓰지 않고 끊긴 경우엔 `rig logs <id>` 안내가 나오는지 테스트.
-- [ ] **UTF-8이 아닌 파일(CP949 등)을 `write_file`이 깨뜨리지 않게**: `tools.py` `Toolbox._read`는
-  `errors="replace"`로 읽어 CP949로 저장된 한글 소스의 글자를 `�`(U+FFFD)로 보여 주지만 그 사실을 알리지 않습니다.
-  `edit_file`(`_edit`)은 이런 파일을 "isn't valid UTF-8"로 거부하는데, `write_file`은 확인 없이 덮어써서 hand가 읽은 내용을
-  고쳐 다시 쓰면 원래 한글이 모두 `�`로 영구히 바뀝니다. `_read`는 디코딩에 실패한 바이트가 있으면 결과 끝에 "[not valid
-  UTF-8 (e.g. CP949): undecodable bytes are shown as �; write_file and edit_file can't keep them]"를 붙이고, `write_file`은
-  이미 있는 파일이 UTF-8로 디코딩되지 않고 새 내용에 `\ufffd`가 있으면 "원래 바이트를 잃게 되므로 덮어쓸 수 없음"이라는
-  ToolError로 거부하세요(`\ufffd`가 없는 새 내용으로 덮어쓰거나 새 파일을 쓰는 것은 허용). README Built-in tools 표의
-  `read_file`/`write_file` 줄에 반영. 완료 기준: `tests/test_tools.py`에 CP949로 인코딩한 `"한글"` 파일에서 `read_file` 결과에
-  안내가 붙는지, 그 결과의 `�`가 든 내용으로 `write_file`하면 거부되고 파일 bytes가 그대로인지, `�` 없는 내용은 써지는지,
-  평범한 UTF-8 파일의 `read_file` 출력은 그대로인지 테스트.
+- [ ] **`tools`·`foreman.crew`·`foreman.require`의 중복 이름을 `rig check`에서 거부**: `spec.py` `Hand._known_tools`는 알 수
+  없는 도구만 거르고 `tools: [read_file, read_file]` 같은 중복은 통과시킵니다. 그러면 `tools.py` `Toolbox.definitions`가 같은
+  이름의 도구 정의를 두 번 보내 API가 첫 호출에서 오류를 내고, hand는 shift가 시작된 뒤에야 `api_error`로 끝납니다.
+  `foreman.crew: [coder, coder]`는 `runner.py` `_run_foreman`의 `delegate` 도구 `"enum": crew`에 중복 값을 넣고(JSON Schema상
+  enum 값은 유일해야 함), `cli.py` `cmd_check`의 "foreman + N hands"와 `serve.py` `App.rigs`의 단계 표시에도 같은 hand가 두 번
+  나옵니다. `foreman.require`의 중복은 `runner.py`의 "Before you finish, … must run" 문구에 이름이 두 번 들어갑니다.
+  `Hand._known_tools`와 `Rig._check_lines`(foreman 부분)에서 중복을 찾아 "tools lists read_file twice" / "foreman.crew lists
+  coder twice"처럼 필드와 이름을 짚어 거부하세요(foreman의 `tools`도 같은 검사를 받음). 완료 기준: `tests/test_spec.py`
+  (또는 `test_invalid_rigs_rejected`)에 hand `tools`, foreman `tools`, `foreman.crew`, `foreman.require` 각각의 중복이
+  그 이름을 담은 메시지로 거부되는지, 모든 템플릿과 `self.rig.yaml`이 여전히 로드되는지 테스트.
+- [ ] **`rig serve` 포트가 이미 쓰이고 있을 때 분명하게 알리기**: `serve.py` `serve()`는 `ThreadingHTTPServer(("127.0.0.1",
+  port), …)`를 바로 만들어서, 다른 `rig serve`나 다른 개발 서버가 8000을 쓰고 있으면 `OSError`(`EADDRINUSE`, Windows는
+  `WinError 10048`)가 traceback으로 그대로 나옵니다(`cli.py` `cmd_serve`도 잡지 않음). 반대로 `HTTPServer.allow_reuse_address`가
+  켜져 있어 Windows에서는 `SO_REUSEADDR` 때문에 두 번째 서버가 같은 포트에 bind에 **성공**하고, 브라우저 요청이 어느 서버로 갈지
+  알 수 없게 됩니다(다른 폴더의 rig 목록이 보이거나 실행이 엉뚱한 서버에서 시작됨). `serve()`에서 Windows일 때는
+  `allow_reuse_address = False`(가능하면 `SO_EXCLUSIVEADDRUSE`)인 서버 클래스를 쓰고, bind가 `OSError`로 실패하면 traceback
+  대신 "port 8000 is already in use (another `rig serve`?); stop it or use `rig serve --port 8001`"을 출력하고 종료 코드 1로
+  끝나게 하세요(`--port 0`이면 빈 포트를 고르는 지금 동작 유지). 완료 기준: `tests/test_serve.py`에 소켓으로 포트를 먼저 잡아
+  둔 상태에서 `serve(root, port=<그 포트>, open_browser=False)`(또는 `main(["serve", …])`)가 바로 그 메시지로 종료되고
+  traceback이 없는지, 같은 포트로 `rig serve` 서버 두 개를 띄우면 두 번째가 실패하는지(모든 OS) 테스트.
+- [ ] **같은 stage에서 병렬로 파일을 쓰는 hand가 둘 이상이면 경고**: lines 모드에서 `runner.py` `_run_lines`는 `graph.layers`의
+  한 stage에 있는 hand들을 `asyncio.gather`로 동시에 돌리고, 모두 같은 workspace를 씁니다. 두 hand가 `write_file`/`edit_file`을
+  가지고 있으면 같은 파일을 서로 덮어써 한쪽 변경이 조용히 사라질 수 있는데, `spec.py` `Rig.hand_warnings()`는 crew·line에 없는
+  hand만 경고합니다. lines 모드(또는 lines가 없어 모든 hand가 stage 1인 경우)에서 `layers(list(self.hands), self.edges)`의 각
+  stage에 `write_file`이나 `edit_file`을 가진 hand가 둘 이상이면 "⚠ stage N runs these hands in parallel and they can all
+  change files: a, b; they may overwrite each other's changes — put them on one line or keep write tools on one of them"을
+  돌려주세요(이 목록은 `rig check`, `rig run` 시작, `serve.py` `App.rigs`의 `warnings`에 자동으로 나옴). foreman 모드는 런타임
+  병렬 delegate라 정적으로 알 수 없으므로 대상 아님("Needs a design first"의 "병렬 hand의 파일 충돌 막기" 참고). 완료 기준:
+  `tests/test_spec.py`에 같은 stage의 쓰기 hand 둘 → 경고(stage 번호와 이름 포함), 쓰기 hand 하나 + 읽기 전용 hand → 경고 없음,
+  lines가 없는 rig의 쓰기 hand 둘 → 경고, 서로 다른 stage의 쓰기 hand → 경고 없음, foreman 모드 → 경고 없음 테스트, 그리고
+  번들 템플릿과 `self.rig.yaml`에서 새 경고가 나오는지 확인해 필요하면 Note로 남기기.
 
 ## Needs a design first
 
@@ -425,8 +460,8 @@ items once its design is decided.
   isn't enough (server-side compaction or rig's own summary).
 - **Per-hand budgets and fallback settings**: `max_cost_usd` per hand; `fallbacks` per hand.
 - **MCP servers and web tools** for hands.
-- **병렬 hand가 같은 파일을 쓸 때**: foreman이 한 턴에 여러 delegate를 부르거나 lines의 한 stage에 hand가 여럿이면
-  모두 같은 workspace에서 `write_file`/`edit_file`을 쓰고(`runner.py` `_run_foreman` `delegate`, `_run_lines`), `tools.py`에는
-  잠금이나 충돌 감지가 없어 나중에 쓴 쪽이 앞의 변경을 조용히 덮어씁니다. hand별 worktree 후 병합, 파일 단위 잠금, 또는
-  "다른 hand가 이 파일을 바꿨음" 경고 중 무엇으로 할지 정해야 합니다.
 - **crews**: reusable groups of hands.
+- **병렬 hand의 파일 충돌 막기**: foreman이 한 턴에 여러 delegate를 부르거나 lines의 한 stage에 hand가 여럿이면 모두 같은
+  workspace에서 `write_file`/`edit_file`을 쓰고(`runner.py` `_run_foreman` `delegate`, `_run_lines`), `tools.py`에는 잠금이나
+  충돌 감지가 없어 나중에 쓴 쪽이 앞의 변경을 조용히 덮어씁니다. 파일별 잠금, 나중 쓰기가 앞 변경을 덮으면 ToolError, hand별
+  worktree 후 병합 중 무엇으로 할지 정해야 합니다. 위 Backlog의 경고는 lines 모드의 정적 경고일 뿐입니다.

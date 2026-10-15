@@ -141,6 +141,56 @@ def test_read_non_utf8(tmp_path):
     assert Toolbox(tmp_path, ["read_file"]).run("read_file", {"path": "kr.txt"}).startswith("1\t")
 
 
+def test_read_non_utf8_adds_note(tmp_path):
+    (tmp_path / "kr.txt").write_bytes("hi 안녕\n세상\n".encode("cp949"))
+    out = Toolbox(tmp_path, ["read_file"]).run("read_file", {"path": "kr.txt"})
+    *rows, note = out.splitlines()
+    assert rows[0].startswith("1\thi �")
+    assert len(rows) == 2
+    assert note == (
+        "[note: kr.txt isn't valid UTF-8 (first bad byte at byte offset 3); "
+        "bad bytes are shown as �, and write_file/edit_file won't overwrite it]"
+    )
+
+
+def test_read_non_utf8_note_after_footer(tmp_path):
+    (tmp_path / "kr.txt").write_bytes("a\nb\n안녕\nd\n".encode("cp949"))
+    out = Toolbox(tmp_path, ["read_file"]).run("read_file", {"path": "kr.txt", "offset": 1, "limit": 2})
+    assert out.splitlines()[:3] == ["1\ta", "2\tb", "[lines 1-2 of 4; continue with offset=3]"]
+    assert out.splitlines()[3].startswith("[note: kr.txt isn't valid UTF-8 (first bad byte at byte offset 4);")
+
+
+def test_read_utf8_korean_has_no_note(tmp_path):
+    (tmp_path / "kr.txt").write_text("안녕\n세상\n", encoding="utf-8")
+    (tmp_path / "bom.txt").write_bytes("\ufeff안녕\n".encode("utf-8"))
+    tb = Toolbox(tmp_path, ["read_file"])
+    assert tb.run("read_file", {"path": "kr.txt"}) == "1\t안녕\n2\t세상"
+    assert "[note:" not in tb.run("read_file", {"path": "bom.txt"})
+
+
+def test_write_non_utf8_refused(tmp_path):
+    data = "안녕\n세상\n".encode("cp949")
+    (tmp_path / "kr.txt").write_bytes(data)
+    tb = Toolbox(tmp_path, ALL)
+    with pytest.raises(ToolError, match="isn't valid UTF-8"):
+        tb.run("write_file", {"path": "kr.txt", "content": "안녕\n세상\n"})
+    assert (tmp_path / "kr.txt").read_bytes() == data
+    assert tb.changed == []
+
+
+def test_write_over_utf8_and_bom_files(tmp_path):
+    (tmp_path / "u.txt").write_text("안녕\n", encoding="utf-8")
+    (tmp_path / "bom.txt").write_bytes(b"\xef\xbb\xbf" + "안녕\r\n".encode("utf-8"))
+    tb = Toolbox(tmp_path, ALL)
+    tb.run("write_file", {"path": "u.txt", "content": "세상\n"})
+    tb.run("write_file", {"path": "bom.txt", "content": "\ufeff세상\n"})
+    tb.run("write_file", {"path": "new.txt", "content": "새 파일\n"})
+    assert (tmp_path / "u.txt").read_text(encoding="utf-8") == "세상\n"
+    assert (tmp_path / "bom.txt").read_bytes() == b"\xef\xbb\xbf" + "세상\r\n".encode("utf-8")
+    assert (tmp_path / "new.txt").read_text(encoding="utf-8") == "새 파일\n"
+    assert tb.changed == ["u.txt", "bom.txt", "new.txt"]
+
+
 def test_edit_single_replacement(repo):
     out = repo.run("edit_file", {"path": "src/app.py", "old": "    print('hello')", "new": "    print('bye')"})
     assert out == "replaced 1 occurrence(s) in src/app.py"
