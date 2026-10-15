@@ -87,7 +87,7 @@ def test_stop_ends_a_running_session(tmp_path, monkeypatch):
 
     async def go():
         task = asyncio.ensure_future(ClaudeCodeWorker(FAKE, meter=meter).run(hand(), "x", Toolbox(tmp_path, [])))
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.2)
         meter.stop()
         return await asyncio.wait_for(task, 10)
 

@@ -14,7 +14,7 @@ from rig.worktree import git
 # Whole shifts on real git repos (worktrees, PRs against a local remote, resuming). The same on
 # every OS and slow on Windows, where each of their hundreds of git commands costs a new
 # process; Windows PR checks skip them (-m "not git_e2e"), pushes to main run everything.
-GIT_E2E = {"tests/test_resume.py", "tests/test_publish.py", "tests/test_multi_worktree.py"}
+GIT_E2E = {"tests/test_resume.py", "tests/test_publish.py", "tests/test_multi_worktree.py", "tests/test_worktree.py"}
 
 
 def pytest_collection_modifyitems(config, items):

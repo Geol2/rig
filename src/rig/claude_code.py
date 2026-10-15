@@ -133,7 +133,7 @@ class ClaudeCodeWorker:
         )
         talk = asyncio.ensure_future(proc.communicate(prompt.encode("utf-8")))
         while not talk.done():
-            await asyncio.wait({talk}, timeout=1)
+            await asyncio.wait({talk}, timeout=0.2)
             if not talk.done() and self.meter and self.meter.stop_reason:
                 proc.kill()
         out, err = await talk
