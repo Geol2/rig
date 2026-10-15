@@ -1,7 +1,10 @@
 """On GitHub Actions, report each failing test as an annotation on the PR."""
 
 import os
+import shutil
 import sys
+from pathlib import Path
+from typing import Callable
 
 import pytest
 
@@ -63,18 +66,42 @@ def pytest_sessionfinish(session):
         sys.__stdout__.write(out)
 
 
-@pytest.fixture
-def repo(tmp_path):
-    """A git repo on `main` with one commit (app/main.py), for worktree and resume tests."""
-    repo = tmp_path / "repo"
-    (repo / "app").mkdir(parents=True)
+def copy_of(factory, name: str, make) -> Callable[[Path], Path]:
+    """A fixture body that copies a folder `make(folder)` built once per test process: each git
+    command costs a new process, which is slow on Windows, and many tests start from the same repo."""
+    template: list[Path] = []
+
+    def copy(dest: Path) -> Path:
+        if not template:
+            folder = factory.mktemp(f"template-{name}") / name
+            folder.mkdir()
+            make(folder)
+            template.append(folder)
+        shutil.copytree(template[0].parent, dest, dirs_exist_ok=True)
+        return dest / name
+
+    return copy
+
+
+def _make_repo(repo: Path) -> None:
+    (repo / "app").mkdir()
     (repo / "app" / "main.py").write_text("print('v1')\n", encoding="utf-8")
     git("init", "-q", "-b", "main", cwd=repo)
     git("config", "user.email", "test@example.com", cwd=repo)
     git("config", "user.name", "test", cwd=repo)
     git("add", "-A", cwd=repo)
     git("commit", "-q", "-m", "init", cwd=repo)
-    return repo
+
+
+@pytest.fixture(scope="session")
+def _repo_copy(tmp_path_factory):
+    return copy_of(tmp_path_factory, "repo", _make_repo)
+
+
+@pytest.fixture
+def repo(tmp_path, _repo_copy):
+    """A git repo on `main` with one commit (app/main.py), for worktree and resume tests."""
+    return _repo_copy(tmp_path)
 
 
 @pytest.fixture
