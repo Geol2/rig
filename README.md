@@ -114,7 +114,7 @@ Built-in tools (all confined to `workspace`):
 | `list_dir` | List a directory |
 | `glob` | Find files by pattern (`**/*.java`, `src/**/test_*.py`) |
 | `search` | Regex search over file contents, like grep; optional `glob` filter and `ignore_case` |
-| `read_file` | Read a file with line numbers; `offset`/`limit` for large files (max 2000 lines per call); lines over 2000 chars are cut and a call returns at most 100,000 chars (follow the `continue with offset` hint); binary files (NUL in the first 8 KB) are refused |
+| `read_file` | Read a file with line numbers; `offset`/`limit` for large files (max 2000 lines per call); lines over 2000 chars are cut and a call returns at most 100,000 chars (follow the `continue with offset` hint); binary files (NUL in the first 8 KB) are refused; files that aren't valid UTF-8 end with a note (bad bytes shown as `�`) |
 | `write_file` | Create or overwrite a file |
 | `edit_file` | Replace an exact string in a file (`old` → `new`); fails if `old` is missing or appears more than once, unless `replace_all` |
 | `run` | Run an allowed command (tests, linters, `git diff`) and get exit code + output |
@@ -122,6 +122,8 @@ Built-in tools (all confined to `workspace`):
 `write_file` and `edit_file` refuse paths inside `.git` or `.rig` (any depth, any case), so a hand can't plant git hooks or change shift records; reading them still works.
 
 `write_file` writes the content exactly as given (no OS newline translation, so LF stays LF on Windows too); overwriting an existing CRLF file with content that has no `\r` writes it back with CRLF, like `edit_file` does.
+
+`write_file` and `edit_file` refuse to overwrite an existing file that isn't valid UTF-8 (e.g. CP949), since rewriting it would lose its text; convert such files to UTF-8 first.
 
 ### run
 
