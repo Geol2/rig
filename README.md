@@ -558,7 +558,7 @@ scripts\auto.cmd 5 10     # 한 번에 $5까지, 최대 10번
 | `can't open PRs (publish.pr)` | PR을 열 수 없어서 아무것도 실행하지 않았습니다(비용 없음). 아래 `-` 줄마다 적힌 것을 고치세요: GitHub CLI 설치, `gh auth login`, 또는 `git remote add origin <url>`. 그런 다음 다시 실행하세요. |
 | `couldn't open a PR: gh not found` | 3번처럼 GitHub CLI를 설치하고 `gh auth login` 하세요. 브랜치는 이미 올라가 있으니 `gh pr create --head <브랜치> --base main`으로 PR만 열면 됩니다. |
 | `rig.exe ... 다른 프로세스가 파일을 사용 중` | 다른 창에서 rig가 돌고 있습니다. 그 창을 닫거나 `taskkill /F /IM rig.exe` 후 다시 실행하세요. |
-| 웹 페이지가 예전 모습 그대로 | 예전에 켠 `rig serve`가 아직 돌고 있습니다. `taskkill /F /IM rig.exe`로 끄고 다시 실행한 뒤 브라우저에서 Ctrl+F5. |
+| 웹 페이지가 예전 모습 그대로 | `scripts\auto.cmd`가 코드가 바뀌면 웹 페이지를 알아서 다시 켭니다. 그래도 그대로면 8000번 포트의 프로그램을 끄고 다시 실행한 뒤 Ctrl+F5: `Get-NetTCPConnection -LocalPort 8000 -State Listen \| ForEach-Object { Stop-Process -Id $_.OwningProcess -Force }` (웹 페이지는 `rig.exe`가 아니라 `python.exe`라서 `taskkill /IM rig.exe`로는 안 꺼집니다). |
 | `uv run rig ...`이 `program not found` | rig 폴더가 아닌 곳에서 실행했습니다. rig 폴더로 가거나 `uv run --project <rig 경로> rig ...`로 실행하세요. |
 
 `scripts/sync-main.sh` never stops on git trouble: it cancels a merge, rebase or
