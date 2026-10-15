@@ -20,9 +20,10 @@ if os.environ.get("FAKE_RESULT"):
     print(os.environ["FAKE_RESULT"])
     sys.exit(1)
 
-config = json.load(open(args[args.index("--mcp-config") + 1], encoding="utf-8"))
-server = config["mcpServers"]["rig"]
-proc = subprocess.Popen([server["command"], *server["args"]], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+with open(args[args.index("--mcp-config") + 1], encoding="utf-8") as f:  # NOSONAR: a test double, like claude
+    server = json.load(f)["mcpServers"]["rig"]
+proc = subprocess.Popen([server["command"], *server["args"]], env={**os.environ, **server["env"]},  # NOSONAR
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 
 
 def rpc(mid, method, params=None):

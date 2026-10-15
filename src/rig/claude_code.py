@@ -83,10 +83,10 @@ class ClaudeCodeWorker:
         self, hand: ResolvedHand, prompt: str, toolbox: Toolbox, check: FinishCheck | None,
         result: HandResult, tmp: Path, port: int, token: str,
     ) -> HandResult:
-        (tmp / "token").write_text(token, encoding="utf-8")
         (tmp / "role.md").write_text(hand.role, encoding="utf-8")
         (tmp / "mcp.json").write_text(json.dumps({"mcpServers": {SERVER: {
-            "type": "stdio", "command": sys.executable, "args": [str(BRIDGE), str(port), str(tmp / "token")],
+            "type": "stdio", "command": sys.executable, "args": [str(BRIDGE)],
+            "env": {"RIG_BRIDGE_PORT": str(port), "RIG_BRIDGE_TOKEN": token},
         }}}), encoding="utf-8")
         args = [
             *self.command, "-p", "--output-format", "json",

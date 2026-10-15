@@ -5,10 +5,11 @@ tools/list and tools/call is forwarded over a localhost socket to the rig proces
 the hand's own Toolbox (workspace limits, `run` allow list, `delegate`, ...). Standard library
 only, and it doesn't import rig, so it runs with whatever Python started rig.
 
-    python ccbridge.py <port> <token-file>
+    RIG_BRIDGE_PORT=<port> RIG_BRIDGE_TOKEN=<token> python ccbridge.py
 """
 
 import json
+import os
 import socket
 import sys
 import threading
@@ -63,9 +64,10 @@ def handle(msg: dict, port: int, token: str) -> None:
 
 
 def main() -> None:
-    port = int(sys.argv[1])
-    with open(sys.argv[2], encoding="utf-8") as f:
-        token = f.read().strip()
+    # From the environment the MCP config gives this server, not the command line: other
+    # processes can read a command line, and the port and token never name a file.
+    port = int(os.environ["RIG_BRIDGE_PORT"])
+    token = os.environ["RIG_BRIDGE_TOKEN"]
     for raw in sys.stdin.buffer:
         try:
             msg = json.loads(raw.decode("utf-8"))
