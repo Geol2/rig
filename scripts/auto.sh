@@ -11,7 +11,7 @@
 #   - .rig/stop exists (it's removed when auto.sh starts and when it stops on it)
 #   - two runs in a row end without a merged PR (failed, stopped, not approved, CI red,
 #     or nothing to change), so a stuck item doesn't burn money
-# Each run still has its own MAX_COST limit (default 3), as with scripts/next.sh.
+# Each run still has its own cost limit: MAX_COST, else max_cost_usd in self.rig.yaml (as next.sh).
 set -uo pipefail
 
 # Windows can't replace a file that a running script holds open, and sync-main.sh may update

@@ -11,6 +11,10 @@ description: Pick a TODO.md item, implement it with tests, get it reviewed.
 workspaces:
   self-dev: "."
 
+# Cost limit per shift, for runs from the web page and from scripts/next.sh / auto.sh alike
+# (MAX_COST=… or `scripts\auto.cmd <n>` overrides it for one run; so does the page's field).
+max_cost_usd: 5
+
 defaults:
   model: claude-opus-5-5
   effort: medium
