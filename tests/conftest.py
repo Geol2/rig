@@ -26,7 +26,13 @@ def _annotate(path: str, line: int, title: str, text: str) -> None:
         sys.__stdout__.write(out)
 
 
+# Test id -> seconds (setup + call + teardown), for the slowest-tests notice on GitHub Actions.
+_durations: dict[str, float] = {}
+SLOWEST = 15
+
+
 def pytest_runtest_logreport(report):
+    _durations[report.nodeid] = _durations.get(report.nodeid, 0.0) + report.duration
     if report.failed and os.environ.get("GITHUB_ACTIONS"):
         path, line, _ = report.location
         _annotate(path, (line or 0) + 1, f"{report.nodeid} ({report.when})", str(report.longrepr))
@@ -35,6 +41,26 @@ def pytest_runtest_logreport(report):
 def pytest_collectreport(report):
     if report.failed and os.environ.get("GITHUB_ACTIONS"):
         _annotate(report.nodeid.split("::")[0] or "tests", 1, f"collecting {report.nodeid}", str(report.longrepr))
+
+
+def pytest_sessionfinish(session):
+    """On GitHub Actions, list the slowest tests as a notice on the PR (Windows runners are
+    several times slower than Linux, and their logs aren't always at hand). With pytest-xdist
+    the workers' reports reach the controller, which is the one without `workerinput`."""
+    if not os.environ.get("GITHUB_ACTIONS") or hasattr(session.config, "workerinput") or not _durations:
+        return
+    top = sorted(_durations.items(), key=lambda kv: -kv[1])[:SLOWEST]
+    total = sum(_durations.values())
+    text = f"total {total:.0f}s over {len(_durations)} tests (summed across workers)%0A" + "%0A".join(
+        f"{secs:.2f}s {nodeid}".replace("%", "%25") for nodeid, secs in top)
+    title = f"slowest tests ({sys.platform})"
+    out = f"\n::notice title={title}::{text}\n"
+    stream = getattr(sys.__stdout__, "buffer", None)
+    if stream:
+        stream.write(out.encode("utf-8", errors="replace"))
+        stream.flush()
+    else:
+        sys.__stdout__.write(out)
 
 
 @pytest.fixture
