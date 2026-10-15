@@ -294,6 +294,7 @@ class App:
             out.append({
                 "id": d.name, "rig": s.get("rig") or (info or {}).get("rig", ""), "ok": s.get("ok"),
                 "task": task[0] if task else "",
+                "title": report.title_of(d, s) or "",
                 "cost": usd(s["totals"].get("cost_usd")) if "totals" in s else "", "findings": findings,
                 "running": running, "status": status, "reason": report.status_reason(status, s, unreadable),
                 "log": (d / PROGRESS_LOG).exists(),
@@ -633,6 +634,7 @@ a.pr.merged{color:var(--ok)}a.pr.closed{color:var(--muted)}a.pr.open{color:var(-
 table{border-collapse:collapse;width:100%;font-size:14px}
 th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
 td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}tr:last-child td{border-bottom:0}
+.change{font-weight:600}
 td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .table-wrap{overflow-x:auto}
 header.row h1{margin:0}
@@ -1012,9 +1014,15 @@ function renderShifts() {
         s.workspaces.map(w => w.name || baseName(w.dir)).join(' · ')));
     }
     body.append(el('tr', {},
-      el('td', {class: 'id'}, s.id), setting, el('td', {}, s.task),
+      el('td', {class: 'id'}, s.id), setting, taskCell(s),
       state, el('td', {}, prLinks(s.prs)), el('td', {class: 'num'}, String(s.findings || '')), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
   }
+}
+// What a run changed (its TITLE, the PR's title) in bold, with the request under it; the
+// request alone while it runs or when the run named no change.
+function taskCell(s) {
+  if (!s.title) return el('td', {}, s.task);
+  return el('td', {}, el('div', {class: 'change'}, s.title), el('div', {class: 'small muted'}, s.task));
 }
 // One tab per project (the set of folders a run worked on), newest first, plus 전체.
 // Runs from before folders were recorded go under 기타.
@@ -1086,7 +1094,8 @@ setInterval(() => { if (!document.hidden) loadShifts().catch(() => {}); }, 5000)
 let viewing = null, vSince = 0, vTimer = null, vRunning = false;
 function openLog(id, scroll = true) {
   viewing = id; vSince = 0; vRunning = false; $('v-log').textContent = ''; $('v-pr').textContent = '';
-  $('viewer-h').textContent = '실행 로그 · ' + id;
+  const row = (shiftRows || []).find(r => r.id === id);
+  $('viewer-h').textContent = '실행 로그 · ' + id + (row && (row.title || row.task) ? ' · ' + (row.title || row.task) : '');
   $('v-report').href = '/shifts/' + encodeURIComponent(id) + '/report';
   $('viewer').hidden = false;
   if (scroll) $('viewer').scrollIntoView({behavior: 'smooth'});

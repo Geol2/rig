@@ -14,7 +14,7 @@ from typing import Any, Callable
 from rig import cost, publish, worktree
 from rig.graph import layers, upstreams
 from rig.hand import HandResult, Worker
-from rig.report import findings_of, read_summary
+from rig.report import TITLE_CHARS, TITLE_LINE, findings_of, read_summary, stated_title
 from rig.spec import Publish, Rig
 from rig.tools import Toolbox, ToolError
 
@@ -526,6 +526,8 @@ def _write_summary(shift: Shift, rig: Rig, mode: str, task: str, meter: cost.Met
         "workspaces": shift.workspaces,
         "mode": mode,
         "task": task,
+        # The final reply's TITLE line (what the shift changed), or None; see report.title_of.
+        "title": next((t for t in (stated_title(r.output) for r in shift.finals) if t), None),
         "inputs": shift.inputs,
         "ok": shift.ok,
         "error": shift.error,
@@ -587,11 +589,7 @@ def _latest(results: dict[str, HandResult], hand: str | None) -> HandResult | No
     return found[-1] if found else None
 
 
-TITLE_CHARS = 72
 COMMIT_BODY_LINES = 30
-# A final reply may open with "TITLE: <what changed>" (or "제목: …"); that names the commit and
-# the PR instead of the task, which is often just "do the next item" or a chat message.
-_TITLE_LINE = re.compile(r"^[#>*_\s]*(?:title|제목)[*_\s]*[:：][*_\s]*(.+)$", re.IGNORECASE)
 
 
 def change_title(shift: Shift, task: str) -> tuple[str, str]:
@@ -604,9 +602,9 @@ def change_title(shift: Shift, task: str) -> tuple[str, str]:
     parts = []
     for r in finals:
         lines = r.output.strip().splitlines()
-        m = _TITLE_LINE.match(lines[0]) if lines else None
+        m = TITLE_LINE.match(lines[0]) if lines else None
         if m and title is None:
-            title = m.group(1).rstrip("*_ \t")
+            title = stated_title(lines[0])
         text = "\n".join(lines[1:] if m else lines).strip()
         parts.append(f"## {r.name}\n\n{text}" if len(finals) > 1 else text)
     if not title:

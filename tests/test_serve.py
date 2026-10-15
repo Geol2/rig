@@ -725,3 +725,29 @@ def test_page_has_the_worker_choice(server):
     _, base = server
     page = call(base + "/")[1]
     assert 'name="worker" value="claude-code"' in page and "/api/workers" in page
+
+
+def test_history_shows_what_a_shift_changed(server):
+    app, base = server
+    shifts = app.shifts_dir
+    new = shifts / "20261015-000002"
+    new.mkdir(parents=True)
+    (new / "shift.json").write_text(json.dumps({"rig": "r", "task": "TODO 항목 처리: x", "ok": True,
+                                                "title": "serve: 지난 실행에 변경 제목 표시", "final": ["coder"]}), encoding="utf-8")
+    # Recorded before shift.json kept the title: read from the final hand's reply.
+    old = shifts / "20261015-000001"
+    old.mkdir()
+    (old / "shift.json").write_text(json.dumps({"rig": "r", "task": "TODO 항목 처리: y", "ok": True,
+                                                "final": ["foreman"]}), encoding="utf-8")
+    (old / "foreman.md").write_text("**TITLE:** tools: CP949 파일 보호\n\n요약", encoding="utf-8")
+    # No TITLE line, and a final key that would be a path: no title.
+    none = shifts / "20261015-000000"
+    none.mkdir()
+    (none / "shift.json").write_text(json.dumps({"rig": "r", "task": "z", "ok": True,
+                                                 "final": ["../../secret", "coder"]}), encoding="utf-8")
+    (none / "coder.md").write_text("did it", encoding="utf-8")
+    rows = {r["id"]: r for r in call(base + "/api/shifts")[1]}
+    assert rows["20261015-000002"]["title"] == "serve: 지난 실행에 변경 제목 표시"
+    assert rows["20261015-000001"]["title"] == "tools: CP949 파일 보호"
+    assert rows["20261015-000000"]["title"] == ""
+    assert "function taskCell" in call(base + "/")[1]
