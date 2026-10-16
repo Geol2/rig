@@ -560,7 +560,8 @@ class App:
         from rig.spec import Rig
 
         Rig.model_validate(parse_yaml(new))  # never write a file rig can't load
-        path.write_bytes(new.encode("utf-8"))
+        # `path` is one of rig_files(), the folder's own listing (see _rig_path), not built from the request.
+        path.write_bytes(new.encode("utf-8"))  # NOSONAR
 
     def init_fix(self, workspaces: list[dict[str, str]]) -> str:
         """Write fix.rig.yaml from the fix template, pointed at `workspaces`."""
