@@ -256,7 +256,7 @@ def test_concurrent_starts_start_one_run(server):
     for t in threads:
         t.join()
     assert len(started) == 1 and app.run is started[0]
-    assert refused == ["a run is already in progress"] * 7
+    assert refused == ["this setting is already running; stop it or wait for it to finish"] * 7
 
 
 def test_crashed_shift_shows_as_failed(server, monkeypatch):
@@ -780,3 +780,36 @@ def test_history_shows_the_current_state_of_open_prs(server, no_github):
     # Merged or closed since the shift; #2 still unknown (no gh, say); #3 was recorded merged: never asked.
     assert states() == {0: "merged", 1: "closed", 2: "open", 3: "merged"}
     assert "https://github.com/o/r/pull/3" not in app.pr_states.known
+
+
+WRITER = "name: {name}\nworkspace: proj\nhands:\n  c: {{role: C, tools: [write_file]}}\n"
+
+
+def test_each_rig_file_has_its_own_run(server):
+    app, base = server
+    app._work = lambda *args: None  # runs stay "running"
+    for name in ("fix.rig.yaml", "fix2.rig.yaml"):
+        (app.root / name).write_text(WRITER.format(name=name.split(".")[0]), encoding="utf-8")
+    review = app.start("review.rig.yaml", "look", {"module": "m"}, dry=False, use_worktree=False)  # read-only
+    fix = app.start("fix.rig.yaml", "change", {}, dry=False, use_worktree=False)  # writes, same folder: fine with a reader
+    # A second writer straight into the same folder would overwrite the first one's changes.
+    with pytest.raises(ValueError, match="fix.rig.yaml is running in the same project folder"):
+        app.start("fix2.rig.yaml", "change too", {}, dry=False, use_worktree=False)
+    app.start("fix2.rig.yaml", "change too", {}, dry=False, use_worktree=True)  # in its own worktree: fine
+    with pytest.raises(ValueError, match="already running"):
+        app.start("fix.rig.yaml", "again", {}, dry=True, use_worktree=False)
+
+    state = call(base + "/api/run?file=review.rig.yaml&since=0")[1]
+    assert state["task"] == "look" and state["status"] == "running"
+    assert sorted(state["others"]) == ["fix.rig.yaml", "fix2.rig.yaml"]
+    assert call(base + "/api/run?file=other.yaml")[1] == {
+        "status": "idle", "file": "other.yaml", "others": ["review.rig.yaml", "fix.rig.yaml", "fix2.rig.yaml"]}
+    assert call(base + "/api/run")[1]["file"] == "fix2.rig.yaml"  # no file: the last one started
+
+    assert call(base + "/api/stop", {"file": "fix.rig.yaml"})[0] == 200
+    assert fix.meter.stop_reason and not review.meter.stop_reason
+
+
+def test_page_follows_the_selected_rig(server):
+    page = call(server[1] + "/")[1]
+    assert "function showRunOf" in page and "'/api/run?file='" in page and 'id="others"' in page
