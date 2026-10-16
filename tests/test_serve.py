@@ -13,8 +13,11 @@ from pathlib import Path
 import pytest
 
 from rig import spec
+from rig.cost import Meter
+from rig.hand import HandResult
 from rig.runner import ResumeError, ShiftEvent, run_shift
-from rig.serve import KIND_DESCRIPTIONS, App, PrStates, Run, make_handler
+from rig.serve import KIND_DESCRIPTIONS, App, PrStates, Run, _shutdown, make_handler
+from rig.worktree import git
 
 RIG = """\
 name: review
@@ -565,6 +568,96 @@ def finish(run):
             break
         time.sleep(0.05)
     return run
+
+
+class UntilStopped:
+    """Each hand writes `files` through the toolbox, then works until the shift is asked to stop."""
+
+    files: dict[str, str] = {}
+    meter: Meter | None = None
+
+    async def run(self, hand, prompt, toolbox, check=None):
+        for path, content in self.files.items():
+            await toolbox.call("write_file", {"path": path, "content": content})
+        while not self.meter.stop_reason:
+            await asyncio.sleep(0.01)
+        return HandResult(hand.name, f"[{self.meter.message()}]", self.meter.stop_reason, 0)
+
+
+def wait_for(cond):
+    for _ in range(400):
+        if cond():
+            return
+        time.sleep(0.025)
+    raise AssertionError("timed out")
+
+
+def test_shutdown_stops_running_shifts_and_lets_them_save(repo, tmp_path, monkeypatch):
+    root = tmp_path / "root"
+    write_rig(root, repo)
+    monkeypatch.setattr(UntilStopped, "files", {"app/x.py": "x = 1\n"})
+    monkeypatch.setattr("rig.hand.EchoWorker", UntilStopped)
+    app = App(root)
+    run = app.start("t.rig.yaml", "task", {}, dry=True, use_worktree=True)
+    wait_for(lambda: run.shift_id and (root / ".rig" / "worktrees" / run.shift_id / "app" / "x.py").exists())
+    assert app.shutdown(10) is True
+    assert run.status == "stopped" and not app.running()
+    folder = app.shifts_dir / run.shift_id
+    assert json.loads((folder / "shift.json").read_text(encoding="utf-8"))["stopped"] == "stopped"
+    assert not (folder / "running.json").exists()
+    assert git("show", f"rig/{run.shift_id}:app/x.py", cwd=repo).strip() == "x = 1"
+
+
+def test_shutdown_with_nothing_running(tmp_path):
+    assert App(tmp_path).shutdown(0) is True
+
+
+class Stubborn:
+    """Ignores the stop until `release` is set."""
+
+    started = threading.Event()
+    release = threading.Event()
+
+    async def run(self, hand, prompt, toolbox, check=None):
+        self.started.set()
+        while not self.release.is_set():
+            await asyncio.sleep(0.01)
+        return HandResult(hand.name, "done", "end_turn", 0)
+
+
+def test_shutdown_times_out(tmp_path, monkeypatch):
+    (tmp_path / "rig.yaml").write_text("name: t\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    monkeypatch.setattr(Stubborn, "started", threading.Event())
+    monkeypatch.setattr(Stubborn, "release", threading.Event())
+    monkeypatch.setattr("rig.hand.EchoWorker", Stubborn)
+    app = App(tmp_path)
+    run = app.start("rig.yaml", "go", {}, dry=True, use_worktree=False)
+    assert Stubborn.started.wait(10)  # a stop before the hand starts would end the shift at once
+    assert app.shutdown(0.2) is False and run.meter.stop_reason == "stopped"
+    Stubborn.release.set()
+    assert app.shutdown(10) is True and run.status != "running"
+
+
+def test_ctrl_c_messages(tmp_path, monkeypatch):
+    lines = []
+
+    def out(line, flush=False):
+        lines.append(line)
+
+    _shutdown(App(tmp_path), out)
+    assert lines == []  # nothing running: quits silently
+    (tmp_path / "t.rig.yaml").write_text("name: t\nhands:\n  a: {role: A}\n", encoding="utf-8")
+    monkeypatch.setattr("rig.hand.EchoWorker", UntilStopped)
+    app = App(tmp_path)
+    run = app.start("t.rig.yaml", "go", {}, dry=True, use_worktree=False)
+    wait_for(lambda: run.shift_id)
+    _shutdown(app, out)
+    sid = run.shift_id
+    assert lines == [
+        f"rig serve: stopping 1 running shift (t.rig.yaml {sid}): hands finish their current request first; "
+        "Ctrl+C again to quit now",
+        f"rig serve: stopped {sid}: continue with `rig run --resume <id>` or the page's \"이어 하기\" button",
+    ]
 
 
 @pytest.fixture

@@ -110,6 +110,8 @@ class Run:
     # hands or --dry): two runs that both change files in the same folder aren't started together.
     dirs: frozenset[str] = frozenset()
     isolated: bool = True
+    # The thread running the shift: App.shutdown waits for it so the shift can save its work.
+    thread: threading.Thread | None = field(default=None, repr=False, compare=False)
 
     def log(self, line: str) -> None:
         with self.lock:
@@ -317,7 +319,9 @@ class App:
                                      "directly; wait for it, or turn on worktree")
             run = Run(file=name, task=task, dry=dry, worker=worker, meter=Meter(max_cost), dirs=dirs, isolated=isolated)
             self.run = run
-            threading.Thread(target=self._work, args=(run, path, inputs, use_worktree, res), daemon=True).start()
+            # A daemon thread, so a second Ctrl+C in `rig serve` still quits at once (see shutdown).
+            run.thread = threading.Thread(target=self._work, args=(run, path, inputs, use_worktree, res), daemon=True)
+            run.thread.start()
             return run
 
     def _work(self, run: Run, path: Path, inputs: dict[str, str], use_worktree: bool,
@@ -350,9 +354,23 @@ class App:
         run = self._run_of(file)
         if not run or run.status != "running":
             raise ValueError("nothing is running")
-        if not run.meter.stop_reason:
-            run.meter.stop()
-            run.log("■ stop requested; hands finish the request they're on, then stop")
+        _request_stop(run)
+
+    def shutdown(self, timeout: float | None = None) -> bool:
+        """Stop every running shift like the Stop button and wait for their threads, so each one
+        commits its worktree and writes shift.json. False if `timeout` seconds pass first."""
+        runs = self.running()
+        for run in runs:
+            _request_stop(run)
+        deadline = None if timeout is None else time.monotonic() + timeout
+        for run in runs:
+            while run.thread and run.thread.is_alive():
+                if deadline is not None and time.monotonic() >= deadline:
+                    return False
+                # Short joins rather than one blocking join(): a Ctrl+C in the main thread gets
+                # through between them (on Windows a blocking join() can't be interrupted).
+                run.thread.join(0.2 if deadline is None else max(0.0, min(0.2, deadline - time.monotonic())))
+        return True
 
     def _prs(self, summary: dict[str, Any]) -> list[dict[str, Any]]:
         """_prs, with PRs recorded as open shown as they are on GitHub now (PrStates)."""
@@ -774,9 +792,34 @@ def serve(root: Path, port: int = 8000, open_browser: bool = True) -> None:
         # protect and no certificate to serve HTTPS with.
         server.serve_forever()  # NOSONAR
     except KeyboardInterrupt:
-        pass
+        try:
+            _shutdown(app)
+        except KeyboardInterrupt:  # the second Ctrl+C: quit now, the shift threads die with the process
+            print("rig serve: quit without waiting; unfinished shifts may lack their final commit", flush=True)
     finally:
         server.server_close()
+
+
+def _request_stop(run: Run) -> None:
+    if not run.meter.stop_reason:
+        run.meter.stop()
+        run.log("■ stop requested; hands finish the request they're on, then stop")
+
+
+def _shutdown(app: App, out=print) -> None:
+    """After Ctrl+C: stop the running shifts and wait for them to save their work, saying so
+    (nothing when none is running). A KeyboardInterrupt while waiting is left to the caller."""
+    runs = app.running()
+    if not runs:
+        return
+    names = ", ".join(f"{r.file} {r.shift_id}" if r.shift_id else r.file for r in runs)
+    out(f"rig serve: stopping {len(runs)} running {'shift' if len(runs) == 1 else 'shifts'} ({names}): "
+        "hands finish their current request first; Ctrl+C again to quit now", flush=True)
+    app.shutdown(None)
+    ids = [r.shift_id for r in runs if r.status == "stopped" and r.shift_id]
+    if ids:
+        out(f"rig serve: stopped {', '.join(ids)}: continue with `rig run --resume <id>` "
+            "or the page's \"이어 하기\" button", flush=True)
 
 
 PAGE = r"""<!doctype html>
