@@ -104,6 +104,10 @@ class Run:
     lines: list[str] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
     meter: Meter = field(default_factory=Meter)
+    # The project folders it works in, and whether it leaves them alone (a worktree, read-only
+    # hands or --dry): two runs that both change files in the same folder aren't started together.
+    dirs: frozenset[str] = frozenset()
+    isolated: bool = True
 
     def log(self, line: str) -> None:
         with self.lock:
@@ -118,10 +122,29 @@ class Run:
 class App:
     def __init__(self, root: Path):
         self.root = root.resolve()
-        self.run: Run | None = None
+        # One run per rig file: the page shows the selected rig's. `run` is the last one started
+        # (what a request without a file means).
+        self.runs: dict[str, Run] = {}
+        self._last: Run | None = None
         # Held from the "already running" check until the new run is started, so two POSTs can't both start one.
         self._lock = threading.Lock()
         self.pr_states = PrStates(self.root)
+
+    @property
+    def run(self) -> Run | None:
+        return self._last
+
+    @run.setter
+    def run(self, run: Run | None) -> None:
+        if run is not None:
+            self.runs[run.file] = run
+        self._last = run
+
+    def _run_of(self, file: str | None) -> Run | None:
+        return self.runs.get(file) if file else self._last
+
+    def running(self) -> list[Run]:
+        return [r for r in self.runs.values() if r.status == "running"]
 
     @property
     def shifts_dir(self) -> Path:
@@ -252,8 +275,8 @@ class App:
         if resume and (task.strip() or any(v != "" for v in inputs.values())):
             raise ValueError("resume reuses the old shift's task and inputs; don't send a task or inputs")
         with self._lock:
-            if self.run and self.run.status == "running":
-                raise ValueError("a run is already in progress")
+            if name in self.runs and self.runs[name].status == "running":
+                raise ValueError("this setting is already running; stop it or wait for it to finish")
             if not resume and not task.strip():
                 raise ValueError("enter a task")
             path = self._rig_path(name)
@@ -280,7 +303,14 @@ class App:
                 if problems:
                     raise ValueError("git can't commit the shift's changes:\n" + "\n".join(f"- {p}" for p in problems))
             rig.resolve_inputs({k: v for k, v in inputs.items() if v != ""})  # raises InputError
-            run = Run(file=name, task=task, dry=dry, worker=worker, meter=Meter(max_cost))
+            dirs = frozenset(d.resolve().as_posix() for d in rig.workspace_dirs(path.parent).values())
+            writes = any({"write_file", "edit_file"} & set(h.tools) for h in [*rig.hands.values(), rig.foreman] if h)
+            isolated = dry or not writes or use_worktree or rig.publish.pr
+            for other in self.running():
+                if other.dirs & dirs and not other.isolated and not isolated:
+                    raise ValueError(f"{other.file} is running in the same project folder and both change files there "
+                                     "directly; wait for it, or turn on worktree")
+            run = Run(file=name, task=task, dry=dry, worker=worker, meter=Meter(max_cost), dirs=dirs, isolated=isolated)
             self.run = run
             threading.Thread(target=self._work, args=(run, path, inputs, use_worktree, res), daemon=True).start()
             return run
@@ -311,8 +341,8 @@ class App:
             run.log(f"✗ {type(e).__name__}: {e}")
             run.status = "failed"
 
-    def stop(self) -> None:
-        run = self.run
+    def stop(self, file: str | None = None) -> None:
+        run = self._run_of(file)
         if not run or run.status != "running":
             raise ValueError("nothing is running")
         if not run.meter.stop_reason:
@@ -328,13 +358,15 @@ class App:
                 p["state"] = self.pr_states.state(p["url"]) or "open"
         return prs
 
-    def run_state(self, since: int) -> dict[str, Any]:
-        run = self.run
+    def run_state(self, since: int, file: str | None = None) -> dict[str, Any]:
+        """The run of `file` (default: the last one started), and which other rig files are running."""
+        run = self._run_of(file)
+        others = [r.file for r in self.running() if r is not run]
         if not run:
-            return {"status": "idle"}
+            return {"status": "idle", "file": file, "others": others}
         m = run.meter
         with run.lock:
-            return {"status": run.status, "file": run.file, "task": run.task, "dry": run.dry, "worker": run.worker,
+            return {"status": run.status, "file": run.file, "others": others, "task": run.task, "dry": run.dry, "worker": run.worker,
                     "shift_id": run.shift_id, "lines": run.lines[since:], "total": len(run.lines),
                     "cost": {"spent": usd(m.spent), "limit": usd(m.limit) if m.limit is not None else None,
                              "unpriced": m.unpriced, "stopping": m.stop_reason}}
@@ -351,7 +383,7 @@ class App:
                 continue
             s, unreadable = report.read_summary(d)  # a broken shift.json reads as {}: ok None, not a success
             info = live(d)  # started here or by `rig run` in a terminal
-            running = bool(info) or bool(self.run and self.run.status == "running" and self.run.shift_id == d.name)
+            running = bool(info) or any(r.shift_id == d.name for r in self.running())
             status = report.status(s, running, unreadable is not None)
             task = (s.get("task") or (info or {}).get("task") or "").strip().splitlines()
             findings = s.get("findings")
@@ -564,8 +596,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 if url.path == "/api/rigs":
                     return self._json(200, app.rigs())
                 if url.path == "/api/run":
-                    since = int(parse_qs(url.query).get("since", ["0"])[0])
-                    return self._json(200, app.run_state(since))
+                    q = parse_qs(url.query)
+                    return self._json(200, app.run_state(int(q.get("since", ["0"])[0]), q.get("file", [""])[0] or None))
                 if url.path == "/api/shifts":
                     return self._json(200, app.shifts())
                 if url.path == "/api/finding":
@@ -592,7 +624,7 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     app.set_workspaces(body["file"], body["workspaces"])
                     return self._json(200, {"ok": True})
                 if self.path == "/api/stop":
-                    app.stop()
+                    app.stop(body.get("file") or None)
                     return self._json(200, {"ok": True})
                 if self.path == "/api/init-fix":
                     return self._json(200, {"file": app.init_fix(body["workspaces"])})
@@ -685,6 +717,7 @@ button.primary,button.secondary{font:inherit;font-size:14px;border-radius:6px;pa
 button.primary{background:var(--accent);color:var(--accent-fg);font-weight:600}
 button.secondary{background:transparent;color:var(--accent)}
 button:disabled{opacity:.5;cursor:not-allowed}
+#others[hidden]{display:none}#others{margin:0 0 10px}
 .notice{border:1px solid var(--accent);background:var(--soft);border-radius:8px;padding:12px 14px;display:grid;gap:8px;font-size:14px}
 .notice[hidden]{display:none}.notice p{margin:0}
 .cost-field input{max-width:160px}.cost-field[hidden]{display:none}
@@ -737,6 +770,7 @@ button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
     </section>
     <section class="panel" aria-labelledby="run-h">
       <h2 id="run-h">2. 요구사항 입력 후 실행</h2>
+      <p class="small muted" id="others" hidden></p>
       <div class="notice" id="fix-box" tabindex="-1" hidden>
         <p id="fix-msg"></p>
         <div class="row" id="fix-actions"></div>
@@ -848,8 +882,28 @@ async function loadRigs() {
 }
 function select(file) {
   if (resume && file !== resume.file) endResume();
+  const changed = file !== selected;
   selected = file; try { localStorage.setItem('rig.selected', file); } catch (e) {}
+  if (changed) showRunOf(file);
   return loadRigs();
+}
+// Section 2 shows the selected rig's run: start over with its log.
+function showRunOf(file) {
+  since = 0; ownShift = null; ownRunning = false;
+  $('log').textContent = ''; $('progress').hidden = true; $('go').disabled = false; $('stop').hidden = true;
+  $('run-error').textContent = '';
+  poll();
+}
+// Other rig files running now, as links that select them.
+function renderOthers(others) {
+  const box = $('others'); box.textContent = '';
+  box.hidden = !others || !others.length;
+  if (box.hidden) return;
+  box.append('다른 설정 실행 중: ');
+  others.forEach((f, i) => {
+    if (i) box.append(', ');
+    box.append(el('a', {href: '#', onclick: e => { e.preventDefault(); select(f); }}, f));
+  });
 }
 function sameFolders(a, b) {
   const key = ws => JSON.stringify(ws.map(w => [w.name || '', w.dir || w.path]).sort());
@@ -1007,7 +1061,7 @@ $('go').addEventListener('click', async () => {
 });
 
 $('stop').addEventListener('click', async () => {
-  try { await api('/api/stop', {}); poll(); } catch (e) { $('run-error').textContent = e.message; }
+  try { await api('/api/stop', {file: selected}); poll(); } catch (e) { $('run-error').textContent = e.message; }
 });
 
 const LABEL = {running: '실행 중', done: '완료', stopped: '중지됨', incomplete: '미완료', failed: '실패',
@@ -1017,8 +1071,15 @@ const STOP = {budget: '비용 상한 도달', user: '사용자가 중지'};
 const reasonText = s => s.status === 'stopped' ? (STOP[s.reason] || '') : (s.reason || '');
 async function poll() {
   clearTimeout(polling);
-  const s = await api('/api/run?since=' + since).catch(() => null);
-  if (!s || s.status === 'idle') return;
+  const file = selected;
+  const s = await api('/api/run?file=' + encodeURIComponent(file || '') + '&since=' + since).catch(() => null);
+  if (!s || file !== selected) return;  // the selection changed meanwhile: showRunOf polls again
+  renderOthers(s.others);
+  if (s.status === 'idle') {
+    // Nothing of this rig yet; look again while others run (they may finish and free the folder).
+    if (s.others && s.others.length) polling = setTimeout(poll, 3000);
+    return;
+  }
   $('progress').hidden = false;
   $('pill').className = 'pill ' + s.status; $('pill').textContent = LABEL[s.status] || s.status;
   $('run-title').textContent = s.file + ' · ' + s.task.split('\n')[0].slice(0, 80) + (s.dry ? ' (dry)' : '')
