@@ -500,13 +500,12 @@ class App:
         if kind not in KINDS:
             raise ValueError(f"unknown kind {kind!r}; use one of: {', '.join(KINDS)}")
         template, publish_mode = KINDS[kind]
-        # Letters of any script (a Korean name stays readable), digits; the rest becomes "-".
-        slug = re.sub(r"[^\w]+|_", "-", title.lower()).strip("-")[:40] or "rig"
-        path = self.root / f"{slug}.rig.yaml"
-        n = 2
-        while path.exists():
-            path = self.root / f"{slug}-{n}.rig.yaml"
+        # Numbered, not named after the title: what the user typed never becomes a path. The
+        # page shows the rig's name (the title) anyway.
+        n = 1
+        while (self.root / f"rig-{n}.rig.yaml").exists():
             n += 1
+        path = self.root / f"rig-{n}.rig.yaml"
         text = resources.files("rig").joinpath(template).read_bytes().decode("utf-8")
         text = re.sub(r"^name:[^\n]*", lambda m: f"name: {json.dumps(title, ensure_ascii=False)}", text, count=1, flags=re.M)
         text = re.sub(r"^description:[^\n]*", lambda m: f"description: {json.dumps(KIND_DESCRIPTIONS[kind], ensure_ascii=False)}",

@@ -829,7 +829,7 @@ def test_new_setting_from_the_page(server, tmp_path, kind, writes, pr, merge):
     # The same name again gets its own file.
     again = call(base + "/api/rig", {"title": "주문 화면 작업", "kind": kind,
                                      "workspaces": [{"name": "", "path": str(tmp_path / "proj")}]})[1]["file"]
-    assert data["file"] == "주문-화면-작업.rig.yaml" and again == "주문-화면-작업-2.rig.yaml"
+    assert data["file"] == "rig-1.rig.yaml" and again == "rig-2.rig.yaml"
 
 
 @pytest.mark.parametrize("body, error", [
