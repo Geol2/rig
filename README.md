@@ -237,6 +237,7 @@ inputs, run it (optionally dry or in a worktree), watch progress live, and open 
 of any past shift. Past shifts are grouped in tabs by project (the folders they worked on), with a count and a dot on tabs that have a shift running. It runs one shift at a time. While a shift runs, the page shows its cost
 so far against the limit (taken from `max_cost_usd`, editable before each run) and a
 **Stop** button that ends it the same way the limit does.
+Ctrl+C in the `rig serve` terminal stops running shifts the same way the Stop button does and waits for them to save (commit and `shift.json`), so they can be continued; a second Ctrl+C quits at once.
 Each rig card shows the same warnings as `rig check` (hands off the crew or lines, models with no price).
 A rig file that can't be loaded stays listed with its error instead: not UTF-8, invalid, or a
 YAML syntax error with its line and column (a file with a syntax error counts as a rig if it's

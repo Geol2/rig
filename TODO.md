@@ -372,12 +372,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   같은 파일에 `write_file`하면 ToolError이고 bytes가 그대로인지, UTF-8 파일 덮어쓰기와 새 파일 쓰기는 여전히 되는지,
   `Toolbox.changed`에 거부된 경로가 없는지 테스트.
   Note: done in shift `20261015-095116` (stopped when the API credit ran out, before the review); finished by Claude.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`rig serve`를 Ctrl+C로 끌 때 실행 중인 shift의 작업을 잃지 않게**: `serve.py` `App.start`는 shift를
+- [x] **`rig serve`를 Ctrl+C로 끌 때 실행 중인 shift의 작업을 잃지 않게**: `serve.py` `App.start`는 shift를
   `daemon=True` 스레드로 돌리고, `serve()`는 `KeyboardInterrupt`를 `pass`로 넘긴 뒤 바로 종료합니다. 그래서 페이지로
   실행 중에 터미널에서 Ctrl+C를 누르거나 창을 닫으면 스레드가 그대로 죽어 `run_shift`의 `finally`(worktree 커밋,
   `_write_summary`)가 돌지 않습니다. hand가 쓴 내용은 `.rig/worktrees/<id>`에 커밋 없이 남고, `shift.json`이 없어 `rig logs`는
@@ -389,6 +384,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   가짜 worker(`rig.hand.EchoWorker`를 monkeypatch, `tests/conftest.py`의 `repo` fixture, `use_worktree=True`)로 실행을
   시작하고 `app.shutdown(10)`이 `True`를 돌려준 뒤 `shift.json`의 `stopped`가 `"stopped"`이고, `running.json`이 없고,
   `rig/<id>` 브랜치에 그 파일이 커밋돼 있는지; 실행 중이 아닐 때 `shutdown`이 바로 `True`인지 테스트.
+  Note: `Run.thread` is kept by `App.start`; `App.shutdown(timeout)` stops every running run like the Stop button and joins their threads in 0.2 s slices (True when all finished); `serve()` → `_shutdown` prints "rig serve: stopping N running shift(s) (…)", then "rig serve: stopped <ids>: continue with `rig run --resume <id>` …" for runs that ended stopped; a second Ctrl+C prints "quit without waiting" and exits. Messages are in English like the rest of the CLI.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **`search`가 workspace 밖을 가리키는 심볼릭 링크 파일을 읽지 않게**: `tools.py` `Toolbox._files`는 `os.walk`의
   `filenames`를 그대로 내보내고 `_search`는 각 파일을 `p.read_bytes()`로 읽습니다. 그래서 프로젝트 안에 `creds ->
   ~/.aws/credentials`나 `/etc/...`를 가리키는 링크 파일이 있으면, `read_file`(`_locate`가 resolve 후 거부)로는 못 읽는 workspace
