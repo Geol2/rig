@@ -26,12 +26,14 @@ from pydantic import ValidationError
 from rig import publish, report
 from rig.cost import Meter, price_warnings, usd
 from rig.graph import layers
-from rig.runner import PROGRESS_LOG, Resume, ShiftEvent, live, load_resume
+from rig.runner import PROGRESS_LOG, Resume, ShiftEvent, live, load_resume, recorded_start
 from rig.spec import InputError, RigFileError, check_yaml_syntax, load, parse_yaml, read_rig_text
 from rig.tools import crlf
 from rig.worktree import GitError, identity_problems
 
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]"}
+# The error shown for a shift whose process died before writing shift.json.
+KILLED = "rig이 실행 도중 꺼져서 중단됨 (웹 페이지나 터미널을 닫았거나 다시 켬)"
 # How long a PR state read from GitHub is trusted before it's asked again.
 PR_STATE_TTL = 120
 PR_URL = re.compile(r"https://[\w.-]+/[\w.-]+/[\w.-]+/pull/\d+")
@@ -387,6 +389,12 @@ class App:
             s, unreadable = report.read_summary(d)  # a broken shift.json reads as {}: ok None, not a success
             info = live(d)  # started here or by `rig run` in a terminal
             running = bool(info) or any(r.shift_id == d.name for r in self.running())
+            if not running and not s and unreadable is None:
+                # No shift.json and nobody running it: the process was killed (the page or its
+                # terminal closed mid-run) before it could record anything. Say so, with what it was doing.
+                info = recorded_start(d)
+                if info:
+                    s = {"error": KILLED}
             status = report.status(s, running, unreadable is not None)
             task = (s.get("task") or (info or {}).get("task") or "").strip().splitlines()
             findings = s.get("findings")

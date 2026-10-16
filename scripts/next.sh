@@ -67,9 +67,15 @@ stop_port() {
   fi
   for _ in $(seq 1 25); do curl -s -o /dev/null "http://localhost:$1/" || return 0; sleep 0.2; done
 }
+# A run started on the page lives inside that server: never stop it while one is running.
+page_busy() { curl -s "http://localhost:$port/api/run" 2>/dev/null | grep -q '"status": "running"\|"others": \["'; }
 if rig_page && [[ "$(cat .rig/serve.commit 2>/dev/null)" != "$code" ]]; then
-  echo "↻ 웹 페이지를 새 코드로 다시 켭니다"
-  stop_port "$port"
+  if page_busy; then
+    echo "! 웹 페이지에서 실행 중인 작업이 있어 지금은 다시 켜지 않습니다 (다음 실행 때 새 코드로 켜짐)"
+  else
+    echo "↻ 웹 페이지를 새 코드로 다시 켭니다"
+    stop_port "$port"
+  fi
 fi
 if curl -s -o /dev/null "http://localhost:$port/"; then
   echo "✓ 웹 페이지 이미 켜져 있음: http://localhost:$port/"

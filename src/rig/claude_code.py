@@ -115,6 +115,8 @@ class ClaudeCodeWorker:
             if data.get("is_error") or subtype != "success":
                 result.stop_reason = "max_turns" if subtype == "error_max_turns" else "error"
                 text = data.get("result") or "; ".join(map(str, data.get("errors") or [])) or subtype or "failed"
+                if "ede_diagnostic" in text:  # Claude Code's own note for a turn cut off mid-way
+                    text = f"stopped mid-turn (interrupted, or rig/Claude Code was closed): {text}"
                 result.output = f"[Claude Code: {text}]"
                 return result
             structured = data.get("structured_output")
