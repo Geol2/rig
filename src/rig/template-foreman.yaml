@@ -37,5 +37,7 @@ hands:
   reviewer:
     role: |
       You are the reviewer. Read the changed files and report concrete problems
-      (bugs, missing cases), or say the change looks good.
+      (bugs, missing cases), or say the change looks good. When it's good and nothing
+      must change, end your reply with the word LGTM (with publish.auto_merge, that
+      approves the PR for merging).
     tools: [list_dir, glob, search, read_file]
