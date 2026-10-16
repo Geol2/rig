@@ -14,7 +14,7 @@ import pytest
 
 from rig import spec
 from rig.runner import ResumeError, ShiftEvent, run_shift
-from rig.serve import App, PrStates, Run, make_handler
+from rig.serve import KIND_DESCRIPTIONS, App, PrStates, Run, make_handler
 
 RIG = """\
 name: review
@@ -813,3 +813,71 @@ def test_each_rig_file_has_its_own_run(server):
 def test_page_follows_the_selected_rig(server):
     page = call(server[1] + "/")[1]
     assert "function showRunOf" in page and "'/api/run?file='" in page and 'id="others"' in page
+
+
+@pytest.mark.parametrize("kind, writes, pr, merge", [("review", False, False, False), ("edit", True, False, False),
+                                                    ("merge", True, True, True)])
+def test_new_setting_from_the_page(server, tmp_path, kind, writes, pr, merge):
+    app, base = server
+    status, data = call(base + "/api/rig", {"title": "주문 화면 작업", "kind": kind,
+                                             "workspaces": [{"name": "", "path": str(tmp_path / "proj")}]})
+    assert status == 200, data
+    rig = {r["file"]: r for r in call(base + "/api/rigs")[1]}[data["file"]]
+    assert rig["name"] == "주문 화면 작업" and rig["workspace_ok"] and rig["writes"] == writes
+    assert rig["description"] == KIND_DESCRIPTIONS[kind]
+    assert (rig["publish"]["pr"], rig["publish"]["auto_merge"]) == (pr, merge)
+    # The same name again gets its own file.
+    again = call(base + "/api/rig", {"title": "주문 화면 작업", "kind": kind,
+                                     "workspaces": [{"name": "", "path": str(tmp_path / "proj")}]})[1]["file"]
+    assert data["file"] == "rig-1.rig.yaml" and again == "rig-2.rig.yaml"
+
+
+@pytest.mark.parametrize("body, error", [
+    ({"title": " ", "kind": "edit"}, "enter a name"),
+    ({"title": "x", "kind": "deploy"}, "unknown kind 'deploy'"),
+    ({"title": "x", "kind": "edit", "workspaces": []}, "add at least one project folder"),
+])
+def test_new_setting_refused(server, body, error):
+    app, base = server
+    before = sorted(p.name for p in app.root.iterdir())
+    status, data = call(base + "/api/rig", body)
+    assert status == 400 and error in data["error"]
+    assert sorted(p.name for p in app.root.iterdir()) == before  # nothing left behind
+
+
+def test_publish_mode_of_a_setting(server, tmp_path):
+    app, base = server
+    file = app.create_rig("fix things", "edit", [{"name": "", "path": str(tmp_path / "proj")}])
+    path = app.root / file
+    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))  # saved on Windows
+
+    def publish():
+        return {r["file"]: r for r in call(base + "/api/rigs")[1]}[file]["publish"]
+
+    assert call(base + "/api/publish", {"file": file, "mode": "merge"})[0] == 200
+    assert publish() == {"pr": True, "auto_merge": True, "can_merge": True}
+    assert spec.load(path).publish.approver == "reviewer"  # the foreman's required reviewer
+    assert b"\r\r" not in path.read_bytes() and b"publish:\r\n" in path.read_bytes()
+    assert call(base + "/api/publish", {"file": file, "mode": "pr"})[0] == 200
+    assert publish()["pr"] and not publish()["auto_merge"]
+    assert call(base + "/api/publish", {"file": file, "mode": "branch"})[0] == 200
+    assert not publish()["pr"] and not publish()["auto_merge"]
+    # A read-only setting has nothing to publish.
+    status, data = call(base + "/api/publish", {"file": "review.rig.yaml", "mode": "pr"})
+    assert status == 400 and "only reads files" in data["error"]
+    status, data = call(base + "/api/publish", {"file": file, "mode": "push"})
+    assert status == 400 and "unknown mode" in data["error"]
+
+
+def test_auto_merge_needs_a_reviewer(server, tmp_path):
+    app, base = server
+    (app.root / "solo.rig.yaml").write_text("name: solo\nworkspace: proj\nhands:\n  c: {role: C, tools: [write_file]}\n",
+                                            encoding="utf-8")
+    status, data = call(base + "/api/publish", {"file": "solo.rig.yaml", "mode": "merge"})
+    assert status == 400 and "needs a hand that reviews" in data["error"]
+    assert call(base + "/api/publish", {"file": "solo.rig.yaml", "mode": "pr"})[0] == 200
+
+
+def test_page_can_add_settings(server):
+    page = call(server[1] + "/")[1]
+    assert 'id="new-box"' in page and "'/api/rig'" in page and 'id="publish-mode"' in page

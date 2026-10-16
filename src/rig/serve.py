@@ -191,7 +191,7 @@ class App:
                 for n, d in dirs.items()
             ]
             stages = [rig.crew] if rig.foreman else layers(list(rig.hands), rig.edges)
-            writes = any({"write_file", "edit_file"} & set(h.tools) for h in [*rig.hands.values(), rig.foreman] if h)
+            writes = _writes(rig)
             entry.update({
                 "name": rig.name,
                 "description": rig.description,
@@ -199,7 +199,8 @@ class App:
                 "stages": stages,
                 "workspaces": folders,
                 "max_cost_usd": rig.max_cost_usd,
-                "publish": {"pr": rig.publish.pr, "auto_merge": rig.publish.auto_merge},
+                "publish": {"pr": rig.publish.pr, "auto_merge": rig.publish.auto_merge,
+                            "can_merge": bool(rig.publish.approver or _approver(rig))},
                 "workspace_ok": all(f["ok"] for f in folders),
                 "writes": writes,
                 "warnings": [*rig.hand_warnings(), *price_warnings(rig.models(), rig.max_cost_usd)],
@@ -213,10 +214,12 @@ class App:
         return out
 
     def _rig_path(self, name: str) -> Path:
-        path = (self.root / name).resolve()
-        if path.parent != self.root or path not in self.rig_files():
-            raise ValueError(f"no rig file {name!r}")
-        return path
+        """The rig file called `name`, taken from the folder's own listing: a name from a request
+        is never used to build a path."""
+        for path in self.rig_files():
+            if path.name == name:
+                return path
+        raise ValueError(f"no rig file {name!r}")
 
     def set_workspaces(self, name: str, entries: list[dict[str, str]]) -> None:
         """Rewrite the rig file's `workspace` / `workspaces`, keeping the rest of the file as written.
@@ -488,6 +491,78 @@ class App:
         return {"task": task, "workspaces": [{"name": w["name"], "path": w["path"], "dir": w["dir"]}
                                              for w in matches[0]["workspaces"]], "ambiguous": False}
 
+    def create_rig(self, title: str, kind: str, workspaces: list[dict[str, str]]) -> str:
+        """Write a new rig file from a bundled template (KINDS), named after `title` and pointed
+        at `workspaces`; returns its file name. Nothing is left behind if any step fails."""
+        title = " ".join(title.split())
+        if not title:
+            raise ValueError("enter a name for the setting")
+        if len(title) > 60:
+            raise ValueError("the name is too long (60 characters at most)")
+        if kind not in KINDS:
+            raise ValueError(f"unknown kind {kind!r}; use one of: {', '.join(KINDS)}")
+        # Looked up by comparison, so the template file name is one of KINDS' own values.
+        template, publish_mode, description = next(
+            (t, m, KIND_DESCRIPTIONS[k]) for k, (t, m) in KINDS.items() if k == kind)
+        # Numbered, not named after the title: what the user typed never becomes a path. The
+        # page shows the rig's name (the title) anyway.
+        n = 1
+        while (self.root / f"rig-{n}.rig.yaml").exists():
+            n += 1
+        path = self.root / f"rig-{n}.rig.yaml"
+        text = resources.files("rig").joinpath(template).read_bytes().decode("utf-8")
+        text = re.sub(r"^name:[^\n]*", lambda m: f"name: {json.dumps(title, ensure_ascii=False)}", text, count=1, flags=re.M)
+        text = re.sub(r"^description:[^\n]*", lambda m: f"description: {json.dumps(description, ensure_ascii=False)}",
+                      text, count=1, flags=re.M)
+        path.write_bytes(text.encode("utf-8"))  # as shipped, no newline translation
+        try:
+            self.set_workspaces(path.name, workspaces)
+            if publish_mode != "branch":
+                self.set_publish(path.name, publish_mode)
+        except (ValueError, ValidationError):
+            path.unlink()
+            raise
+        return path.name
+
+    def set_publish(self, name: str, mode: str) -> None:
+        """What happens to a code-changing rig's result (PUBLISH_MODES): left on a branch, a PR,
+        or a PR merged once the approver approves and CI passes. Other `publish` keys are kept."""
+        if mode not in PUBLISH_MODES:
+            raise ValueError(f"unknown mode {mode!r}; use one of: {', '.join(PUBLISH_MODES)}")
+        path = self._rig_path(name)
+        rig = load(path)
+        if not _writes(rig):
+            raise ValueError("this setting only reads files; there is nothing to publish")
+        text = read_rig_text(path)
+        check_yaml_syntax(text)
+        current = (parse_yaml(text) or {}).get("publish") or {}
+        settings = dict(current) if isinstance(current, dict) else {}
+        settings["pr"] = mode != "branch"
+        settings["auto_merge"] = mode == "merge"
+        if mode == "merge" and not settings.get("approver"):
+            approver = _approver(rig)
+            if not approver:
+                raise ValueError("automatic merging needs a hand that reviews the change (e.g. reviewer); "
+                                 "this setting has none")
+            settings["approver"] = approver
+        if mode == "branch":
+            settings = {k: v for k, v in settings.items() if k not in ("pr", "auto_merge")}
+        block = ("publish:\n" + "".join(f"  {k}: {json.dumps(v, ensure_ascii=False)}\n" for k, v in settings.items())
+                 if settings else "")
+        eol = "\r\n" if crlf(text.encode("utf-8")) else "\n"
+        block = block.replace("\n", eol)
+        current_block = re.compile(r"^publish:[^\n]*\n?(?:[ \t]+[^\n]*\n?|[ \t]*\r?\n)*", re.M)
+        m = current_block.search(text)
+        if m:
+            new = text[: m.start()] + block + text[m.end():]
+        else:
+            new = text + ("" if text.endswith("\n") or not block else eol) + block
+        from rig.spec import Rig
+
+        Rig.model_validate(parse_yaml(new))  # never write a file rig can't load
+        # `path` is one of rig_files(), the folder's own listing (see _rig_path), not built from the request.
+        path.write_bytes(new.encode("utf-8"))  # NOSONAR
+
     def init_fix(self, workspaces: list[dict[str, str]]) -> str:
         """Write fix.rig.yaml from the fix template, pointed at `workspaces`."""
         path = self.root / "fix.rig.yaml"
@@ -500,6 +575,35 @@ class App:
             path.unlink()
             raise
         return path.name
+
+
+# New settings from the page: kind -> (bundled template, what happens to the result).
+KINDS = {
+    "review": ("template-review.yaml", "branch"),   # read-only: reviews and reports, changes nothing
+    "edit": ("template-foreman.yaml", "branch"),    # changes code; the result stays on a branch / in place
+    "merge": ("template-foreman.yaml", "merge"),    # changes code, opens a PR and merges it when approved
+}
+KIND_DESCRIPTIONS = {
+    "review": "프로젝트를 읽고 버그·보안·DB 문제를 리뷰합니다. 파일은 바꾸지 않습니다.",
+    "edit": "foreman이 계획하고 coder가 고치고 reviewer가 검토합니다.",
+    "merge": "foreman이 계획하고 coder가 고치고 reviewer가 검토한 뒤, PR을 열어 승인과 CI 통과 시 병합합니다.",
+}
+PUBLISH_MODES = ("branch", "pr", "merge")
+
+
+def _writes(rig: Any) -> bool:
+    return any({"write_file", "edit_file"} & set(h.tools) for h in [*rig.hands.values(), rig.foreman] if h)
+
+
+def _approver(rig: Any) -> str | None:
+    """The hand that should approve a PR before it's merged: one the foreman must call, else a
+    read-only hand called like a reviewer."""
+    if rig.foreman and rig.foreman.require:
+        return rig.foreman.require[0]
+    for name in ("reviewer", "checker", "review"):
+        if name in rig.hands:
+            return name
+    return None
 
 
 # The page's icon: a foreman joined to two hands (src/rig/favicon.svg, and .ico for older browsers).
@@ -626,6 +730,12 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                 if self.path == "/api/stop":
                     app.stop(body.get("file") or None)
                     return self._json(200, {"ok": True})
+                if self.path == "/api/rig":
+                    return self._json(200, {"file": app.create_rig(body.get("title") or "", body.get("kind") or "",
+                                                                   body.get("workspaces") or [])})
+                if self.path == "/api/publish":
+                    app.set_publish(body["file"], body.get("mode") or "")
+                    return self._json(200, {"ok": True})
                 if self.path == "/api/init-fix":
                     return self._json(200, {"file": app.init_fix(body["workspaces"])})
                 if self.path == "/api/run":
@@ -717,7 +827,9 @@ button.primary,button.secondary{font:inherit;font-size:14px;border-radius:6px;pa
 button.primary{background:var(--accent);color:var(--accent-fg);font-weight:600}
 button.secondary{background:transparent;color:var(--accent)}
 button:disabled{opacity:.5;cursor:not-allowed}
-#others[hidden]{display:none}#others{margin:0 0 10px}
+#others[hidden]{display:none}#new-box[hidden],#publish-box[hidden]{display:none}#new-open{margin-top:10px}
+.kind{border:0;padding:0;margin:0;display:grid;gap:4px}.kind legend{font-size:14px;padding:0;margin-bottom:4px}
+#publish-mode{max-width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:inherit;font:inherit}#others{margin:0 0 10px}
 .notice{border:1px solid var(--accent);background:var(--soft);border-radius:8px;padding:12px 14px;display:grid;gap:8px;font-size:14px}
 .notice[hidden]{display:none}.notice p{margin:0}
 .cost-field input{max-width:160px}.cost-field[hidden]{display:none}
@@ -757,7 +869,36 @@ button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
     <section class="panel" aria-labelledby="rigs-h">
       <h2 id="rigs-h">1. 설정 선택</h2>
       <div class="rigs" id="rigs"><p class="muted small">불러오는 중…</p></div>
+      <button class="secondary" id="new-open" type="button">+ 설정 추가</button>
+      <div class="notice" id="new-box" hidden>
+        <label class="field" for="new-title">설정 이름
+          <input type="text" id="new-title" maxlength="60" placeholder="예: 주문 화면 리뷰, dworks 기능 개발">
+        </label>
+        <fieldset class="opts kind" id="new-kind">
+          <legend>종류</legend>
+          <label><input type="radio" name="new-kind" value="review" checked> 읽기 전용 · 코드를 읽고 리뷰만 함 (파일을 바꾸지 않음)</label>
+          <label><input type="radio" name="new-kind" value="edit"> 코드 수정 · 계획 → 수정 → 리뷰, 결과는 폴더(또는 별도 브랜치)에 남김</label>
+          <label><input type="radio" name="new-kind" value="merge"> 코드 수정 + PR 자동 병합 · 리뷰어가 승인하고 CI가 통과하면 병합</label>
+        </fieldset>
+        <div class="ws-row">
+          <input type="text" id="new-path" aria-label="프로젝트 폴더" placeholder="프로젝트 폴더 (예: D:/05_project/...)" spellcheck="false">
+          <button type="button" class="pick-btn" id="new-pick">폴더 선택</button>
+        </div>
+        <div class="row">
+          <button class="primary" id="new-create" type="button">만들기</button>
+          <button class="secondary" id="new-cancel" type="button">취소</button>
+          <span class="error" id="new-error"></span>
+        </div>
+      </div>
       <div id="ws-box" hidden>
+        <label class="field" for="publish-mode" id="publish-box" hidden>작업 결과 처리
+          <select id="publish-mode">
+            <option value="branch">폴더(또는 별도 브랜치)에만 남김</option>
+            <option value="pr">PR만 열기 (병합은 직접)</option>
+            <option value="merge">PR 열고 리뷰 승인 + CI 통과 시 자동 병합</option>
+          </select>
+          <span class="small muted" id="publish-status"></span>
+        </label>
         <p class="field" id="ws-label">작업할 프로젝트 폴더 (workspace)</p>
         <div class="ws-rows" id="ws-rows" role="group" aria-labelledby="ws-label"></div>
         <div class="row">
@@ -854,7 +995,7 @@ function el(tag, attrs = {}, ...kids) {
 async function loadRigs() {
   rigs = await api('/api/rigs');
   const box = $('rigs'); box.textContent = '';
-  if (!rigs.length) { box.append(el('p', {class: 'muted small'}, '이 폴더에 rig 설정 파일(*.yaml)이 없습니다. 터미널에서 rig init --template review 로 만들 수 있습니다.')); renderShifts(); return; }
+  if (!rigs.length) { box.append(el('p', {class: 'muted small'}, '이 폴더에 rig 설정 파일(*.yaml)이 없습니다. 아래 + 설정 추가로 만드세요.')); renderShifts(); return; }
   if (fix && fix.pick) {
     // Coming from a report's fix button: prefer fix.rig.yaml, else any rig that can edit code.
     const writer = rigs.find(r => r.file === 'fix.rig.yaml' && !r.error) || rigs.find(r => r.writes && !r.error);
@@ -985,6 +1126,14 @@ function renderSelected() {
   const box = $('inputs'); box.textContent = '';
   if (!r || r.error) return;
   $('max-cost').value = r.max_cost_usd ?? '';
+  // Code-changing rigs: what happens to the result (publish.pr / auto_merge).
+  $('publish-box').hidden = !r.writes;
+  if (r.writes) {
+    const pub = r.publish || {};
+    $('publish-mode').value = pub.auto_merge ? 'merge' : pub.pr ? 'pr' : 'branch';
+    $('publish-mode').querySelector('option[value=merge]').disabled = !pub.can_merge && !pub.auto_merge;
+    $('publish-status').textContent = pub.can_merge ? '' : '자동 병합은 리뷰하는 hand(예: reviewer)가 있어야 합니다.';
+  }
   const rows = $('ws-rows'); rows.textContent = '';
   for (const w of r.workspaces) addRow(w);
   $('ws-status').textContent = r.workspace_ok ? '✓ 폴더를 모두 찾았습니다.' : '✗ 찾을 수 없는 폴더가 있습니다. 경로를 확인하고 저장하세요.';
@@ -1037,6 +1186,23 @@ async function pickShow(path) {
 }
 $('pick-ok').addEventListener('click', () => { if (pickTarget && pickAt) pickTarget.value = pickAt; $('picker').close(); });
 $('pick-cancel').addEventListener('click', () => $('picker').close());
+$('publish-mode').addEventListener('change', async () => {
+  try { await api('/api/publish', {file: selected, mode: $('publish-mode').value}); $('publish-status').textContent = '✓ 저장했습니다.'; await loadRigs(); }
+  catch (e) { $('publish-status').textContent = e.message; await loadRigs(); }
+});
+// New setting: a bundled template with a name, a kind and a project folder.
+$('new-open').addEventListener('click', () => { $('new-box').hidden = false; $('new-open').hidden = true; $('new-title').focus(); });
+$('new-cancel').addEventListener('click', () => { $('new-box').hidden = true; $('new-open').hidden = false; $('new-error').textContent = ''; });
+$('new-pick').addEventListener('click', () => pickFolder($('new-path')));
+$('new-create').addEventListener('click', async () => {
+  $('new-error').textContent = '';
+  const kind = document.querySelector('input[name=new-kind]:checked').value;
+  try {
+    const r = await api('/api/rig', {title: $('new-title').value, kind, workspaces: [{name: '', path: $('new-path').value}]});
+    $('new-box').hidden = true; $('new-open').hidden = false; $('new-title').value = ''; $('new-path').value = '';
+    await select(r.file);
+  } catch (e) { $('new-error').textContent = e.message; }
+});
 $('ws-save').addEventListener('click', async () => {
   const workspaces = [...document.querySelectorAll('.ws-row')].map(r => ({name: r.querySelector('.ws-name').value, path: r.querySelector('.ws-path').value}));
   try { await api('/api/workspaces', {file: selected, workspaces}); await loadRigs(); }
