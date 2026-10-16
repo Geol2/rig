@@ -369,7 +369,7 @@ exit 0
 """
 
 
-def next_sh(tmp_path, resume_id, max_cost="3", **env):
+def next_sh(tmp_path, resume_id, max_cost="3", curl="#!/usr/bin/env bash\nexit 0\n", **env):
     """Runs scripts/next.sh with fake sync-main/next-task/resume-target, uv and curl; returns
     (stdout, each uv call's argument list). The fake uv logs one argument per line and `--`
     after each call (TASK has no newline)."""
@@ -377,7 +377,7 @@ def next_sh(tmp_path, resume_id, max_cost="3", **env):
     shutil.copy(SCRIPTS / "next.sh", tmp_path / "scripts" / "next.sh")
     fakes = {"scripts/sync-main.sh": "#!/usr/bin/env bash\nexit 0\n",
              "scripts/next-task.sh": f"#!/usr/bin/env bash\necho '{TASK}'\n",
-             "bin/uv": FAKE_UV, "bin/curl": "#!/usr/bin/env bash\nexit 0\n",
+             "bin/uv": FAKE_UV, "bin/curl": curl,
              "bin/claude": "#!/usr/bin/env bash\nexit 0\n"}
     for name, text in fakes.items():
         path = tmp_path / name
@@ -467,3 +467,21 @@ def test_next_sh_with_claude_code_needs_no_api_key_or_cost_limit(tmp_path, monke
     _, calls = next_sh(tmp_path, "20260101-000000", WORKER="claude-code", ANTHROPIC_API_KEY="")
     assert calls[-1][-4:] == ["--worker", "claude-code", "--resume", "20260101-000000"]
     assert "--max-cost" not in calls[-1]
+
+
+PAGE_RUNNING = """#!/usr/bin/env bash
+# A rig page started from older code, with a run in progress.
+case "$*" in
+  */api/run*) echo '{"status": "running", "file": "self.rig.yaml", "others": []}' ;;
+  *) echo '<title>rig</title>' ;;
+esac
+"""
+
+
+def test_next_sh_leaves_a_busy_page_running(tmp_path):
+    # Stopping the page would kill the run inside it; the new code is picked up next time.
+    (tmp_path / ".rig").mkdir()
+    (tmp_path / ".rig" / "serve.commit").write_text("old\n", encoding="utf-8")
+    out, calls = next_sh(tmp_path, None, curl=PAGE_RUNNING)
+    assert "실행 중인 작업이 있어 지금은 다시 켜지 않습니다" in out and "다시 켭니다" not in out
+    assert calls[-1][-2:] == ["--max-cost", "3"] or TASK in calls[-1]

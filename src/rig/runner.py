@@ -171,6 +171,15 @@ class _Progress:
         self.running.unlink(missing_ok=True)
 
 
+def recorded_start(shift_dir: Path) -> dict[str, Any] | None:
+    """The shift's running.json whether or not its process still runs (None without one)."""
+    try:
+        info = json.loads((shift_dir / RUNNING).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return info if isinstance(info, dict) else None
+
+
 def live(shift_dir: Path) -> dict[str, Any] | None:
     """The shift's running.json while the process that runs it is alive, else None."""
     try:

@@ -881,3 +881,16 @@ def test_auto_merge_needs_a_reviewer(server, tmp_path):
 def test_page_can_add_settings(server):
     page = call(server[1] + "/")[1]
     assert 'id="new-box"' in page and "'/api/rig'" in page and 'id="publish-mode"' in page
+
+
+def test_shift_killed_before_it_recorded_anything(server):
+    # The page (or a terminal) was closed mid-run: running.json of a dead process, no shift.json.
+    app, base = server
+    d = app.shifts_dir / "20261015-180203"
+    d.mkdir(parents=True)
+    (d / "running.json").write_text(json.dumps({"pid": 999999999, "rig": "rig-self-dev", "task": "TODO 처리\nmore",
+                                                "workspaces": [{"name": "self-dev", "dir": "D:/rig"}]}), encoding="utf-8")
+    (row,) = call(base + "/api/shifts")[1]
+    assert row["rig"] == "rig-self-dev" and row["task"] == "TODO 처리" and row["workspaces"]
+    assert row["status"] == "error" and row["reason"].startswith("rig이 실행 도중 꺼져서 중단됨")
+    assert not row["resumable"] and not row["running"]
