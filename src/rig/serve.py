@@ -214,10 +214,12 @@ class App:
         return out
 
     def _rig_path(self, name: str) -> Path:
-        path = (self.root / name).resolve()
-        if path.parent != self.root or path not in self.rig_files():
-            raise ValueError(f"no rig file {name!r}")
-        return path
+        """The rig file called `name`, taken from the folder's own listing: a name from a request
+        is never used to build a path."""
+        for path in self.rig_files():
+            if path.name == name:
+                return path
+        raise ValueError(f"no rig file {name!r}")
 
     def set_workspaces(self, name: str, entries: list[dict[str, str]]) -> None:
         """Rewrite the rig file's `workspace` / `workspaces`, keeping the rest of the file as written.
@@ -499,7 +501,9 @@ class App:
             raise ValueError("the name is too long (60 characters at most)")
         if kind not in KINDS:
             raise ValueError(f"unknown kind {kind!r}; use one of: {', '.join(KINDS)}")
-        template, publish_mode = KINDS[kind]
+        # Looked up by comparison, so the template file name is one of KINDS' own values.
+        template, publish_mode, description = next(
+            (t, m, KIND_DESCRIPTIONS[k]) for k, (t, m) in KINDS.items() if k == kind)
         # Numbered, not named after the title: what the user typed never becomes a path. The
         # page shows the rig's name (the title) anyway.
         n = 1
@@ -508,7 +512,7 @@ class App:
         path = self.root / f"rig-{n}.rig.yaml"
         text = resources.files("rig").joinpath(template).read_bytes().decode("utf-8")
         text = re.sub(r"^name:[^\n]*", lambda m: f"name: {json.dumps(title, ensure_ascii=False)}", text, count=1, flags=re.M)
-        text = re.sub(r"^description:[^\n]*", lambda m: f"description: {json.dumps(KIND_DESCRIPTIONS[kind], ensure_ascii=False)}",
+        text = re.sub(r"^description:[^\n]*", lambda m: f"description: {json.dumps(description, ensure_ascii=False)}",
                       text, count=1, flags=re.M)
         path.write_bytes(text.encode("utf-8"))  # as shipped, no newline translation
         try:
