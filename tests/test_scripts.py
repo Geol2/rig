@@ -485,3 +485,34 @@ def test_next_sh_leaves_a_busy_page_running(tmp_path):
     out, calls = next_sh(tmp_path, None, curl=PAGE_RUNNING)
     assert "실행 중인 작업이 있어 지금은 다시 켜지 않습니다" in out and "다시 켭니다" not in out
     assert calls[-1][-2:] == ["--max-cost", "3"] or TASK in calls[-1]
+
+
+def restart_sh(tmp_path, curl, **env):
+    """Runs scripts/restart.sh with fake sync-main, uv and curl; returns (code, output, uv calls)."""
+    (tmp_path / "scripts").mkdir(exist_ok=True)
+    shutil.copy(SCRIPTS / "restart.sh", tmp_path / "scripts" / "restart.sh")
+    fakes = {"scripts/sync-main.sh": "#!/usr/bin/env bash\nexit 0\n", "bin/uv": FAKE_UV, "bin/curl": curl}
+    for name, text in fakes.items():
+        path = tmp_path / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        path.chmod(0o755)
+    log = tmp_path / "uv.log"
+    out = subprocess.run(["bash", "scripts/restart.sh"], cwd=tmp_path, capture_output=True, text=True, encoding="utf-8",
+                         env={**{k: v for k, v in os.environ.items() if k not in ("RIG_COPY_OF", "RIG_ROOT", "FORCE")},
+                              "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}", "UV_LOG": str(log), **env})
+    calls = log.read_text(encoding="utf-8").split("--\n") if log.exists() else []
+    return out.returncode, out.stdout + out.stderr, [c.splitlines() for c in calls if c]
+
+
+def test_restart_sh_serves_the_new_code(tmp_path):
+    # Nothing on the port (curl fails): update and serve in the foreground.
+    code, out, calls = restart_sh(tmp_path, "#!/usr/bin/env bash\nexit 7\n")
+    assert code == 0, out
+    assert calls[0][:2] == ["sync", "-q"] and calls[-1][-5:] == ["-f", "self.rig.yaml", "serve", "--port", "8000"]
+    assert "새 코드로 켭니다" in out
+
+
+def test_restart_sh_leaves_a_busy_page_alone(tmp_path):
+    code, out, calls = restart_sh(tmp_path, PAGE_RUNNING)
+    assert code == 1 and "실행 중인 작업이 있어서 다시 켜지 않았습니다" in out and calls == []
