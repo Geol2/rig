@@ -480,6 +480,70 @@ def test_run_resume_last_dry_continues_the_stopped_shift(tmp_path, monkeypatch, 
     assert '<input name="dataset">old.csv</input>' in out
 
 
+def _ctrl_c_run(tmp_path, monkeypatch, capsys, write: bool):
+    """`rig run --dry --worktree` whose hand is cut off by Ctrl+C; returns (exit code, out, err, shift id)."""
+    (tmp_path / "rig.yaml").write_text(
+        "name: t\nworkspace: repo\nhands:\n  coder: {role: Code., tools: [write_file]}\n", encoding="utf-8")
+
+    class Interrupted:
+        async def run(self, hand, prompt, toolbox, check=None):
+            if write:
+                await toolbox.call("write_file", {"path": "app/partial.py", "content": "x = 1\n"})
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("rig.hand.EchoWorker", Interrupted)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["-f", "rig.yaml", "run", "--dry", "--worktree", "task"])
+    out, err = capsys.readouterr()
+    (shift_id,) = [d.name for d in (tmp_path / ".rig" / "shifts").iterdir()]
+    return excinfo.value.code, out, err, shift_id
+
+
+def test_run_ctrl_c_tells_how_to_resume(tmp_path, monkeypatch, capsys, repo):
+    code, out, err, shift_id = _ctrl_c_run(tmp_path, monkeypatch, capsys, write=True)
+    assert code == 130
+    assert err == (f"\n✗ interrupted: shift {shift_id}\nchanges are on branch rig/{shift_id}"
+                   f" — continue with: rig run --resume {shift_id}\n")
+    assert "Traceback" not in out + err
+
+
+def test_run_ctrl_c_without_changes_points_to_logs(tmp_path, monkeypatch, capsys, repo):
+    code, out, err, shift_id = _ctrl_c_run(tmp_path, monkeypatch, capsys, write=False)
+    assert code == 130
+    assert err == f"\n✗ interrupted: shift {shift_id}\nsee: rig logs {shift_id}\n"
+    assert "--resume" not in err and "Traceback" not in out + err
+
+
+def test_run_ctrl_c_while_reading_the_task(tmp_path, monkeypatch, capsys):
+    (tmp_path / "rig.yaml").write_text("name: t\nhands:\n  a: {role: A}\n", encoding="utf-8")
+
+    class CtrlC:
+        def read(self, *args):
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(sys, "stdin", CtrlC())
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["run", "--dry"])
+    assert excinfo.value.code == 130
+    assert capsys.readouterr().err == "\n✗ interrupted\n"
+    assert not (tmp_path / ".rig" / "shifts").exists()
+
+
+def test_interrupted_message_counts_other_branches(tmp_path):
+    from rig.cli import _interrupted
+
+    entries = [{"repo": "a", "branch": "rig/x", "changed": True, "commit": "abc"},
+               {"repo": "b", "branch": "rig/x-2", "changed": False, "commit": None},
+               {"repo": "c", "branch": "rig/x", "changed": True, "commit": "def"}]
+    (tmp_path / "shift.json").write_text(json.dumps({"worktrees": entries}), encoding="utf-8")
+    assert _interrupted("x", tmp_path) == ("\n✗ interrupted: shift x\n"
+                                           "changes are on branch rig/x (+1 more) — continue with: rig run --resume x")
+    (tmp_path / "shift.json").write_text("{broken", encoding="utf-8")
+    assert _interrupted("x", tmp_path) == "\n✗ interrupted: shift x\nsee: rig logs x"
+
+
 def test_logs_shows_resumed_from(tmp_path, monkeypatch, capsys):
     _shift(tmp_path, "20250102-000000", {"mode": "lines", "ok": True, "task": "go", "resumed_from": "20250101-000000"})
     monkeypatch.chdir(tmp_path)

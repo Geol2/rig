@@ -418,7 +418,8 @@ class App:
             findings = s.get("findings")
             if not isinstance(findings, int):  # older shift.json: count from the outputs
                 findings = sum(len(h["findings"] or []) for h in report.collect(d)["hands"]) if s else 0
-            resumable = not running and status in ("error", "stopped", "incomplete") and _committed(s)
+            resumable = (not running and status in ("error", "stopped", "incomplete")
+                         and bool(report.committed_worktrees(s)))
             out.append({
                 "id": d.name, "rig": s.get("rig") or (info or {}).get("rig", ""), "ok": s.get("ok"),
                 "task": task[0] if task else "",
@@ -654,13 +655,6 @@ def _workspaces(summary: dict[str, Any]) -> list[dict[str, str]]:
         return []
     return [{"name": w.get("name") if isinstance(w.get("name"), str) else "", "dir": w["dir"]}
             for w in recorded if isinstance(w, dict) and isinstance(w.get("dir"), str)]
-
-
-def _committed(summary: dict[str, Any]) -> bool:
-    """Whether shift.json records a committed worktree branch (what `load_resume` continues from)."""
-    entries = summary.get("worktrees")
-    return isinstance(entries, list) and any(
-        isinstance(w, dict) and w.get("changed") and w.get("commit") for w in entries)
 
 
 DIR_LIMIT = 500
