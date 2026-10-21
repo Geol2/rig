@@ -1073,3 +1073,28 @@ def test_page_has_board_tabs_and_skins(server):
     page = call(server[1] + "/")[1]
     assert 'id="vt-todo"' in page and 'id="vt-hist"' in page and "function showView" in page
     assert 'value="terminal"' in page and ":root[data-skin=terminal]" in page and "localStorage.getItem('rig.skin')" in page
+
+
+def test_history_offers_ci_fix_for_a_pr_whose_checks_failed(server, no_github):
+    app, base = server
+    url = "https://github.com/o/r/pull/7"
+    d = app.shifts_dir / "20261021-163026"
+    d.mkdir(parents=True)
+    (d / "shift.json").write_text(json.dumps({
+        "rig": "review", "task": "TODO 처리", "ok": True,
+        "worktrees": [{"repo": "x", "branch": "rig/20261021-163026", "base": "b", "commit": "c", "changed": True}],
+        "prs": [{"url": url, "number": 7, "note": "not merged: CI failed: SonarCloud Code Analysis"}]}), encoding="utf-8")
+    (row,) = call(base + "/api/shifts")[1]
+    assert row["status"] == "ok" and row["resumable"] and row["resume_file"] == "review.rig.yaml"
+    assert row["ci_failed"] == {"checks": "SonarCloud Code Analysis", "number": 7}
+    # Fixed and merged since (by hand or a later shift): no button any more.
+    no_github[url] = "merged"
+    app.pr_states.known.clear()  # as if PR_STATE_TTL had passed since GitHub was last asked
+    for _ in range(100):
+        (row,) = call(base + "/api/shifts")[1]
+        if row["prs"][0]["state"] == "merged":
+            break
+        time.sleep(0.02)
+    assert row["ci_failed"] is None and not row["resumable"]
+    page = call(base + "/")[1]
+    assert "'CI 고치기'" in page and "CI 고치기 실행" in page

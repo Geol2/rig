@@ -29,7 +29,8 @@ from pydantic import ValidationError
 from rig import publish, report
 from rig.cost import Meter, price_warnings, usd
 from rig.graph import layers
-from rig.runner import PROGRESS_LOG, Resume, ShiftEvent, live, load_resume, recorded_start
+from rig.runner import (CI_FAILED, PROGRESS_LOG, Resume, ShiftEvent, ci_failed_pr, live, load_resume,
+                        recorded_start)
 from rig.spec import InputError, RigFileError, check_yaml_syntax, load, parse_yaml, read_rig_text
 from rig.tools import crlf
 from rig.worktree import GitError, identity_problems
@@ -421,8 +422,17 @@ class App:
             findings = s.get("findings")
             if not isinstance(findings, int):  # older shift.json: count from the outputs
                 findings = sum(len(h["findings"] or []) for h in report.collect(d)["hands"]) if s else 0
+            prs = self._prs(s)
             resumable = (not running and status in ("error", "stopped", "incomplete")
                          and bool(report.committed_worktrees(s)))
+            # A shift that finished ok but whose PR was left open because CI failed: it can be continued
+            # to fix the checks (load_resume tells the hands which ones), unless the PR has since been
+            # merged or closed on GitHub (by hand, or by a later shift).
+            ci_failed = None
+            failed = ci_failed_pr(s) if status == "ok" and not running else None
+            if failed and next((p["state"] for p in prs if p["url"] == failed.get("url")), "open") == "open":
+                ci_failed = {"checks": failed["note"][len(CI_FAILED):], "number": failed.get("number")}
+                resumable = bool(report.committed_worktrees(s))
             out.append({
                 "id": d.name, "rig": s.get("rig") or (info or {}).get("rig", ""), "ok": s.get("ok"),
                 "task": task[0] if task else "",
@@ -430,7 +440,7 @@ class App:
                 "cost": usd(s["totals"].get("cost_usd")) if "totals" in s else "", "findings": findings,
                 "running": running, "status": status, "reason": report.status_reason(status, s, unreadable),
                 "log": (d / PROGRESS_LOG).exists(),
-                "prs": self._prs(s),
+                "prs": prs, "ci_failed": ci_failed,
                 "workspaces": _workspaces(s) or _workspaces(info or {}),
                 "resumable": resumable, "resume_file": None, "resume_problem": None,
                 "resume_task": (s.get("task") or "").strip() if resumable else "",
@@ -969,6 +979,7 @@ a.pr.merged{color:var(--ok)}a.pr.closed{color:var(--muted)}a.pr.open{color:var(-
 table{border-collapse:collapse;width:100%;font-size:14px}
 th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
 td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}tr:last-child td{border-bottom:0}
+.ci-failed{color:var(--bad);max-width:200px;overflow:hidden;text-overflow:ellipsis}
 .change{font-weight:650;font-size:15px;line-height:1.4;word-break:keep-all;overflow-wrap:anywhere}
 .change .area{display:inline-block;font-size:12px;font-weight:600;padding:0 7px;margin-right:6px;border-radius:999px;background:var(--soft);color:var(--accent);vertical-align:1px}
 td.task{min-width:260px;width:62%}
@@ -1283,19 +1294,23 @@ function renderFix(r) {
 function renderResume() {
   const box = $('fix-box'), actions = $('fix-actions');
   box.hidden = false; actions.textContent = '';
-  $('fix-msg').textContent = `중단된 실행 ${resume.id}(${LABEL[resume.status] || resume.status}${resume.why ? ' · ' + resume.why : ''})에 이어서 실행합니다. `
-    + '그 실행의 브랜치 끝에서 새 실행으로 이어 가며, 요구사항과 입력값은 그때 것을 그대로 쓰고 별도 브랜치(worktree)는 항상 켜집니다.'
-    + (resume.reason === 'budget' ? ' 비용 상한 때문에 멈췄으니 아래에서 상한을 올린 뒤 실행하세요.' : '');
+  $('fix-msg').textContent = resume.ci
+    ? `실행 ${resume.id}의 PR${resume.ci.number ? ' #' + resume.ci.number : ''}: CI 검사(${resume.ci.checks})가 실패해 병합되지 않았습니다. `
+      + '그 브랜치 끝에서 실패한 검사를 고치는 실행을 시작하고, 고친 커밋은 같은 PR에 올라갑니다. 요구사항은 그때 것을 그대로 씁니다.'
+    : `중단된 실행 ${resume.id}(${LABEL[resume.status] || resume.status}${resume.why ? ' · ' + resume.why : ''})에 이어서 실행합니다. `
+      + '그 실행의 브랜치 끝에서 새 실행으로 이어 가며, 요구사항과 입력값은 그때 것을 그대로 쓰고 별도 브랜치(worktree)는 항상 켜집니다.'
+      + (resume.reason === 'budget' ? ' 비용 상한 때문에 멈췄으니 아래에서 상한을 올린 뒤 실행하세요.' : '');
   actions.append(el('button', {type: 'button', class: 'secondary', onclick: () => { endResume(); $('task').focus(); }}, '이어 하기 취소'));
   $('task').value = resume.task; $('task').readOnly = true;
   $('inputs').hidden = true;
   $('worktree').checked = true; $('worktree').disabled = true;
-  $('go').textContent = '이어서 실행';
+  $('go').textContent = resume.ci ? 'CI 고치기 실행' : '이어서 실행';
 }
 async function startResume(s) {
   // Clicking another run's button while in resume mode keeps what was typed before the first one.
   const saved = resume ? resume.saved : {task: $('task').value, worktree: $('worktree').checked};
-  resume = {id: s.id, file: s.resume_file, task: s.resume_task, status: s.status, why: reasonText(s), reason: s.reason, saved};
+  resume = {id: s.id, file: s.resume_file, task: s.resume_task, status: s.status, why: reasonText(s), reason: s.reason,
+            ci: s.ci_failed, saved};
   fix = null;
   await select(resume.file).catch(e => { $('run-error').textContent = e.message; });
   $('run-h').scrollIntoView({behavior: 'smooth'});
@@ -1487,11 +1502,13 @@ function renderShifts() {
     const why = reasonText(s);
     if (why) state.append(el('div', {class: 'small muted why', title: why}, why));
     if (s.findings) state.append(el('div', {class: 'small muted'}, '발견 ' + s.findings));
+    if (s.ci_failed) state.append(el('div', {class: 'small ci-failed', title: s.ci_failed.checks}, 'CI 실패: ' + s.ci_failed.checks));
     const links = el('span', {class: 'row links'});
     if (s.log) links.append(el('a', {href: '#viewer', onclick: e => { e.preventDefault(); openLog(s.id); }}, '로그'));
     if (!s.running) links.append(el('a', {href: '/shifts/' + encodeURIComponent(s.id) + '/report', target: '_blank'}, '리포트'));
     if (s.resumable && s.resume_file) {
-      const b = el('button', {type: 'button', class: 'secondary resume', 'aria-label': `실행 ${s.id} 이어 하기`, onclick: () => startResume(s)}, '이어 하기');
+      const label = s.ci_failed ? 'CI 고치기' : '이어 하기';
+      const b = el('button', {type: 'button', class: 'secondary resume', 'aria-label': `실행 ${s.id} ${label}`, onclick: () => startResume(s)}, label);
       if (ownRunning) { b.disabled = true; b.title = '실행 중에는 이어 할 수 없습니다'; }
       links.append(b);
     } else if (s.resume_problem) {
