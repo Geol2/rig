@@ -998,3 +998,9 @@ def test_todo_list_of_the_selected_setting(server):
     assert call(base + "/api/todo?file=../x.yaml")[0] == 404
     page = call(base + "/")[1]
     assert 'id="todo-box"' in page and "function useTodo" in page and "TODO 항목 처리: ${title}" in page
+
+
+def test_page_has_board_tabs_and_skins(server):
+    page = call(server[1] + "/")[1]
+    assert 'id="vt-todo"' in page and 'id="vt-hist"' in page and "function showView" in page
+    assert 'value="terminal"' in page and ":root[data-skin=terminal]" in page and "localStorage.getItem('rig.skin')" in page
