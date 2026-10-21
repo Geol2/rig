@@ -240,6 +240,7 @@ of any past shift. Past shifts are grouped in tabs by project (the folders they 
 so far against the limit (taken from `max_cost_usd`, editable before each run) and a
 **Stop** button that ends it the same way the limit does.
 Ctrl+C in the `rig serve` terminal stops running shifts the same way the Stop button does and waits for them to save (commit and `shift.json`), so they can be continued; a second Ctrl+C quits at once.
+If the port is already taken (say, by another `rig serve`), `rig serve` says so and exits; use `--port` to pick another.
 Each rig card shows the same warnings as `rig check` (hands off the crew or lines, models with no price).
 A rig file that can't be loaded stays listed with its error instead: not UTF-8, invalid, or a
 YAML syntax error with its line and column (a file with a syntax error counts as a rig if it's

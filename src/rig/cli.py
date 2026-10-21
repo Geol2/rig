@@ -282,6 +282,8 @@ def cmd_report(args: argparse.Namespace) -> None:
 def cmd_serve(args: argparse.Namespace) -> None:
     from rig.serve import serve
 
+    if not 0 <= args.port <= 65535:  # 0: any free port
+        sys.exit("rig: --port must be between 0 and 65535")
     serve(Path(args.file).resolve().parent, port=args.port, open_browser=not args.no_open)
 
 
