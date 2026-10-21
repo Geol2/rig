@@ -396,12 +396,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   가리키는 링크는 여전히 검색되는지, `workspaces` 모드에서 다른 프로젝트 밖을 가리키는 링크도 건너뛰는지 테스트(링크를 만들 수
   없는 환경은 기존 `test_write_refuses_symlink_into_git`처럼 skip).
   Note: `Toolbox._files` resolves every walked file and folder and skips those outside the root the walked base belongs to (`_root_of`: the workspace, or the longest project root in `workspaces` mode, so a link from one project into another is skipped too); resolve errors (loops) skip the entry; links resolving inside are listed/searched under their own path as before.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`rig run`을 Ctrl+C로 멈추면 traceback 대신 이어 하는 방법 안내**: `cli.py` `cmd_run`은 `asyncio.run(run_shift(...))`의
+- [x] **`rig run`을 Ctrl+C로 멈추면 traceback 대신 이어 하는 방법 안내**: `cli.py` `cmd_run`은 `asyncio.run(run_shift(...))`의
   `KeyboardInterrupt`를 잡지 않아, Ctrl+C를 누르면 `run_shift`의 `finally`가 브랜치 커밋과 `shift.json`(`error: "interrupted"`)을
   다 남긴 뒤에도 사용자에게는 Python traceback만 보이고 shift id나 `rig run --resume`은 안내되지 않습니다(`main`에도 처리 없음).
   `cmd_run`이 `on_status`로 `"started"` 이벤트의 shift id를 받아 두고, `KeyboardInterrupt`면 "✗ interrupted: shift <id>"와
@@ -410,6 +405,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   완료 기준: `tests/test_cli.py`에 `rig.hand.EchoWorker`를 `write_file` 뒤 `KeyboardInterrupt`를 내는 가짜 worker로 바꿔
   `main(["run", "-f", …, "--dry", "--worktree", "task"])`가 `SystemExit(130)`으로 끝나고 출력에 shift id와 `--resume`이 있고
   `Traceback`이 없는지, 아무것도 쓰지 않고 끊긴 경우엔 `rig logs <id>` 안내가 나오는지 테스트.
+  Note: `report.committed_worktrees` replaces `serve._committed`; `cmd_run` remembers the shift id from `on_status` and, on KeyboardInterrupt (during the run or while reading the task from stdin), prints `_interrupted(...)` to stderr — the branch and `rig run --resume <id>` when shift.json records a committed worktree, else `rig logs <id>`, or just "✗ interrupted" before the shift started — and exits 130.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **`tools`·`foreman.crew`·`foreman.require`의 중복 이름을 `rig check`에서 거부**: `spec.py` `Hand._known_tools`는 알 수
   없는 도구만 거르고 `tools: [read_file, read_file]` 같은 중복은 통과시킵니다. 그러면 `tools.py` `Toolbox.definitions`가 같은
   이름의 도구 정의를 두 번 보내 API가 첫 호출에서 오류를 내고, hand는 shift가 시작된 뒤에야 `api_error`로 끝납니다.

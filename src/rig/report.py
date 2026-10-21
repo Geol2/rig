@@ -78,6 +78,14 @@ def read_summary(shift_dir: Path) -> tuple[dict[str, Any], str | None]:
     return data, None
 
 
+def committed_worktrees(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """shift.json's worktree entries with a committed branch (what `load_resume` continues from)."""
+    entries = summary.get("worktrees")
+    if not isinstance(entries, list):
+        return []
+    return [w for w in entries if isinstance(w, dict) and w.get("changed") and w.get("commit")]
+
+
 def status(summary: dict, running: bool, unreadable: bool = False) -> str:
     """How a shift stands: running, unreadable, error, stopped, ok or incomplete."""
     if running:

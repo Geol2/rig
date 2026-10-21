@@ -92,10 +92,28 @@ def _parse_inputs(pairs: list[str]) -> dict[str, str]:
     return values
 
 
+def _interrupted(shift_id: str | None, shift_dir: Path | None) -> str:
+    """What to tell someone who pressed Ctrl+C during `rig run` (starts with a blank line after the ^C)."""
+    from rig import report
+
+    if shift_id is None or shift_dir is None:
+        return "\n✗ interrupted"
+    try:
+        committed = report.committed_worktrees(report.read_summary(shift_dir)[0])
+    except Exception:  # never let a bad shift.json turn the message into a traceback
+        committed = []
+    if not committed:
+        return f"\n✗ interrupted: shift {shift_id}\nsee: rig logs {shift_id}"
+    branch = str(committed[0].get("branch") or f"rig/{shift_id}")
+    more = f" (+{len(committed) - 1} more)" if len(committed) > 1 else ""
+    return (f"\n✗ interrupted: shift {shift_id}\n"
+            f"changes are on branch {branch}{more} — continue with: rig run --resume {shift_id}")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     from rig import publish
     from rig.hand import ClaudeWorker, EchoWorker
-    from rig.runner import ResumeError, load_resume, run_shift
+    from rig.runner import ResumeError, ShiftEvent, load_resume, run_shift
     from rig.worktree import GitError, identity_problems
 
     if args.resume and (args.task is not None or args.input):
@@ -121,7 +139,11 @@ def cmd_run(args: argparse.Namespace) -> None:
     if resume:
         task = resume.task
     else:
-        task = args.task if args.task is not None else sys.stdin.read()
+        try:
+            task = args.task if args.task is not None else sys.stdin.read()
+        except KeyboardInterrupt:
+            print(_interrupted(None, None), file=sys.stderr)
+            sys.exit(130)
     if not task.strip():
         sys.exit("rig: empty task (pass it as an argument or on stdin)")
     if not args.dry:
@@ -145,12 +167,25 @@ def cmd_run(args: argparse.Namespace) -> None:
             sys.exit(f"rig: {INSTALL_HELP}")
     else:
         worker = ClaudeWorker()
+    started: list[ShiftEvent] = []  # the "started" event, so Ctrl+C can name the shift
+
+    def on_status(event: ShiftEvent) -> None:
+        if event.kind == "started":
+            started.append(event)
+
     try:
         shift = asyncio.run(run_shift(rig, task, worker, root=path.resolve().parent,
                                       use_worktree=args.worktree or resume is not None, verbose=not args.quiet,
-                                      inputs=inputs, meter=Meter(args.max_cost), resume=resume))
+                                      inputs=inputs, meter=Meter(args.max_cost), resume=resume,
+                                      on_status=on_status))
     except GitError as e:
         sys.exit(f"rig: {e}")
+    except KeyboardInterrupt:
+        if started:
+            print(_interrupted(started[0].shift_id, started[0].dir), file=sys.stderr)
+        else:
+            print(_interrupted(None, None), file=sys.stderr)
+        sys.exit(130)
     for r in shift.finals:
         print(f"\n── {r.name} ──\n{r.output}")
     committed = shift.committed()

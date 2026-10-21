@@ -433,6 +433,10 @@ crashed, hit its cost limit or was stopped, and that committed changes to its br
 that finished ok, recorded no task, or left no branch (no changes, or run without `--worktree`), can't
 be resumed.
 
+Pressing Ctrl+C during `rig run` saves the work so far (the branch is committed and shift.json
+records `error: "interrupted"`) and, instead of a traceback, prints the shift id and the
+`rig run --resume <id>` command (or `rig logs <id>` if nothing was committed), exiting with code 130.
+
 The new shift gets its own id and branch `rig/<new-id>`, starting at the old branch's tip, and
 reuses the old task and inputs (don't pass a task or `-i`). The hand that picks the work up (the
 foreman, or the first stage of `lines`) is told why the shift stopped, what is already on the
