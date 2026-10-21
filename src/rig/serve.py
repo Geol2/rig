@@ -517,6 +517,17 @@ class App:
         return {"task": task, "workspaces": [{"name": w["name"], "path": w["path"], "dir": w["dir"]}
                                              for w in matches[0]["workspaces"]], "ambiguous": False}
 
+    def todo(self, name: str) -> dict[str, Any]:
+        """The open backlog of the TODO.md in the rig's project folder(s), for the page's 할 일 list."""
+        from rig import todo
+
+        path = self._rig_path(name)
+        try:
+            rig = load(path)
+        except (ValidationError, yaml.YAMLError, RigFileError):
+            return {"found": False}
+        return todo.read(rig.workspace_dirs(path.parent))
+
     def create_rig(self, title: str, kind: str, workspaces: list[dict[str, str]]) -> str:
         """Write a new rig file from a bundled template (KINDS), named after `title` and pointed
         at `workspaces`; returns its file name. Nothing is left behind if any step fails."""
@@ -723,6 +734,8 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
                     from rig.claude_code import find_claude
 
                     return self._json(200, {"claude_code": find_claude() is not None})
+                if url.path == "/api/todo":
+                    return self._json(200, app.todo(parse_qs(url.query).get("file", [""])[0]))
                 if url.path == "/api/rigs":
                     return self._json(200, app.rigs())
                 if url.path == "/api/run":
@@ -878,7 +891,19 @@ button.primary,button.secondary{font:inherit;font-size:14px;border-radius:6px;pa
 button.primary{background:var(--accent);color:var(--accent-fg);font-weight:600}
 button.secondary{background:transparent;color:var(--accent)}
 button:disabled{opacity:.5;cursor:not-allowed}
-#others[hidden]{display:none}#new-box[hidden],#publish-box[hidden]{display:none}#new-open{margin-top:10px}
+#others[hidden]{display:none}#todo-box[hidden],#todo-more[hidden]{display:none}
+.todo-top{align-items:baseline}.todo-top h2{margin:0}
+.todo{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:8px}
+.todo-item{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--surface)}
+.todo-head{display:flex;gap:10px;align-items:flex-start}
+.todo-n{flex:none;width:24px;height:24px;border-radius:999px;background:var(--accent);color:var(--accent-fg);font-size:13px;font-weight:700;display:grid;place-items:center}
+.todo-item:not(:first-child) .todo-n{background:var(--soft);color:var(--accent)}
+.todo-title{flex:1;font-size:15px;font-weight:650;line-height:1.45;word-break:keep-all;overflow-wrap:anywhere}
+.todo-head button{flex:none;padding:3px 10px;font-size:13px}
+.todo-detail{margin:6px 0 0 34px;font-size:13px;color:var(--muted);line-height:1.55;cursor:pointer;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.todo-detail.open{display:block;cursor:auto}
+.todo code,.todo-detail code{font-size:12px}
+#todo-more{margin-top:10px}#new-box[hidden],#publish-box[hidden]{display:none}#new-open{margin-top:10px}
 .kind{border:0;padding:0;margin:0;display:grid;gap:4px}.kind legend{font-size:14px;padding:0;margin-bottom:4px}
 #publish-mode{max-width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:inherit;font:inherit}#others{margin:0 0 10px}
 .notice{border:1px solid var(--accent);background:var(--soft);border-radius:8px;padding:12px 14px;display:grid;gap:8px;font-size:14px}
@@ -998,6 +1023,11 @@ button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
       </div>
     </section>
   </div>
+  <section class="panel" id="todo-box" aria-labelledby="todo-h" hidden>
+    <div class="row todo-top"><h2 id="todo-h">할 일</h2><span class="small muted" id="todo-sum"></span></div>
+    <ol class="todo" id="todo-list"></ol>
+    <button class="secondary" id="todo-more" type="button" hidden></button>
+  </section>
   <section class="panel" aria-labelledby="hist-h">
     <h2 id="hist-h">지난 실행</h2>
     <div class="tabs" role="tablist" aria-label="프로젝트별 실행" id="hist-tabs"></div>
@@ -1083,8 +1113,44 @@ function select(file) {
   if (resume && file !== resume.file) endResume();
   const changed = file !== selected;
   selected = file; try { localStorage.setItem('rig.selected', file); } catch (e) {}
-  if (changed) showRunOf(file);
+  if (changed) { showRunOf(file); todoAll = false; loadTodo(); }
   return loadRigs();
+}
+// 할 일: the open backlog of the selected rig's TODO.md, with a button that puts an item in the request.
+let todoAll = false;
+async function loadTodo() {
+  const file = selected;
+  if (!file) return;
+  const t = await api('/api/todo?file=' + encodeURIComponent(file)).catch(() => ({found: false}));
+  if (file !== selected) return;
+  const box = $('todo-box');
+  box.hidden = !t.found;
+  if (box.hidden) return;
+  $('todo-sum').textContent = [t.file + (t.from ? ` (${t.from} 기준)` : ''), `남은 ${t.backlog.length}개`, `완료 ${t.done}개`,
+    ...(t.later.length ? [`설계 먼저 ${t.later.length}개`] : [])].join(' · ');
+  const list = $('todo-list'); list.textContent = '';
+  if (!t.backlog.length) list.append(el('li', {class: 'muted small'}, 'Backlog가 비었습니다. 실행하면 planner가 새 항목을 기획합니다.'));
+  (todoAll ? t.backlog : t.backlog.slice(0, 5)).forEach((it, i) => {
+    const detail = el('div', {class: 'todo-detail', title: '눌러서 펼치기'}, ...inlineCode(it.detail));
+    detail.addEventListener('click', () => detail.classList.toggle('open'));
+    list.append(el('li', {class: 'todo-item'},
+      el('div', {class: 'todo-head'}, el('span', {class: 'todo-n'}, String(i + 1)),
+        el('div', {class: 'todo-title'}, ...inlineCode(it.title)),
+        el('button', {type: 'button', class: 'secondary', onclick: () => useTodo(it.title)}, '이걸로 실행')),
+      ...(it.detail ? [detail] : [])));
+  });
+  $('todo-more').hidden = t.backlog.length <= 5;
+  $('todo-more').textContent = todoAll ? '접기' : `모두 보기 (${t.backlog.length}개)`;
+}
+$('todo-more').addEventListener('click', () => { todoAll = !todoAll; loadTodo(); });
+// Markdown's `code` as <code>, ** dropped; everything else as text.
+const inlineCode = text => text.replace(/\*\*/g, '').split('`').map((part, i) => i % 2 ? el('code', {}, part) : part);
+// The same request scripts/next-task.sh writes for an item.
+function useTodo(title) {
+  if (resume) endResume();
+  $('task').value = `TODO 항목 처리: ${title}\n\nTODO.md의 Backlog에서 "${title}" 항목 하나만 처리해줘. 끝나면 체크하고 Done으로 옮겨줘.`;
+  $('task').scrollIntoView({block: 'center', behavior: 'smooth'});
+  $('task').focus();
 }
 // Section 2 shows the selected rig's run: start over with its log.
 function showRunOf(file) {
@@ -1325,7 +1391,7 @@ async function poll() {
   if (s.shift_id) ownShift = s.shift_id;
   if (ownRunning && s.status !== 'running') finished(s.shift_id || '', s.status === 'done' ? 'done' : s.status);
   if (ownRunning !== (s.status === 'running')) { ownRunning = s.status === 'running'; renderShifts(); }  // the resume buttons
-  if (s.status === 'running') polling = setTimeout(poll, 1000); else loadShifts();
+  if (s.status === 'running') polling = setTimeout(poll, 1000); else { loadShifts(); loadTodo(); }
 }
 let ownShift = null, ownRunning = false;
 
@@ -1537,7 +1603,7 @@ async function start() {
   }
   await loadRigs().catch(e => { $('rigs').textContent = e.message; });
 }
-start();
+start().then(loadTodo);
 loadWorkers();
 loadShifts();
 poll();
