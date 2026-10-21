@@ -841,6 +841,7 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rig</title>
+<script>try { const s = localStorage.getItem('rig.skin'); if (s) document.documentElement.dataset.skin = s; } catch (e) {}</script>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon.ico" sizes="any">
 <style>
@@ -849,6 +850,15 @@ PAGE = r"""<!doctype html>
 --font:"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;--mono:Consolas,"SFMono-Regular",ui-monospace,monospace;color-scheme:light}
 @media (prefers-color-scheme:dark){:root{--bg:#131815;--surface:#1a201d;--fg:#e3e8e4;--muted:#9aa69f;--line:#2c3530;--accent:#7cc2ab;--accent-fg:#10201a;
 --soft:#1f2f29;--ok:#7cc2ab;--warn:#e6c068;--bad:#f29a6e;--code:#222924;color-scheme:dark}}
+/* 터미널 skin: black with phosphor-green text, chosen at the top right (data-skin on <html>). */
+:root[data-skin=terminal]{--bg:#000;--surface:#030803;--fg:#3dff6e;--muted:#22b04b;--line:#124a22;--accent:#39ff14;--accent-fg:#000;
+--soft:#0b2a12;--ok:#39ff14;--warn:#ffd23f;--bad:#ff5f5f;--code:#08170b;--font:var(--mono);color-scheme:dark}
+:root[data-skin=terminal] body{text-shadow:0 0 4px rgba(57,255,20,.35)}
+:root[data-skin=terminal] .panel,:root[data-skin=terminal] .todo-item{box-shadow:0 0 0 1px rgba(57,255,20,.08),0 0 14px rgba(57,255,20,.06)}
+:root[data-skin=terminal] input,:root[data-skin=terminal] textarea,:root[data-skin=terminal] select{background:#000;color:var(--fg);border-color:var(--line)}
+:root[data-skin=terminal] button.primary{text-shadow:none}
+.skin{margin-left:auto;font-size:13px;color:var(--muted);display:inline-flex;align-items:center;gap:6px}
+.skin select{font:inherit;padding:3px 6px;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--fg)}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 var(--font);padding:28px 16px 64px}
 main{max-width:1080px;margin:0 auto;display:grid;gap:28px}
@@ -891,9 +901,15 @@ button.primary,button.secondary{font:inherit;font-size:14px;border-radius:6px;pa
 button.primary{background:var(--accent);color:var(--accent-fg);font-weight:600}
 button.secondary{background:transparent;color:var(--accent)}
 button:disabled{opacity:.5;cursor:not-allowed}
-#others[hidden]{display:none}#todo-box[hidden],#todo-more[hidden]{display:none}
-.todo-top{align-items:baseline}.todo-top h2{margin:0}
-.todo{list-style:none;margin:12px 0 0;padding:0;display:grid;gap:8px}
+#others[hidden]{display:none}#todo-box[hidden],#hist-box[hidden],#todo-more[hidden],.view-tab[hidden]{display:none}
+.view-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:-4px 0 14px}
+.view-tab{font:inherit;font-size:16px;font-weight:600;color:var(--muted);background:none;border:0;border-bottom:3px solid transparent;padding:6px 14px 8px;margin-bottom:-1px;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.view-tab:hover{color:var(--fg)}
+.view-tab[aria-selected=true]{color:var(--fg);border-bottom-color:var(--accent)}
+.view-tab .count{font-size:12px;font-weight:700;min-width:20px;padding:1px 7px;border-radius:999px;background:var(--soft);color:var(--accent)}
+.view-tab .count:empty{display:none}
+#todo-sum{margin:0}
+.todo{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:8px}
 .todo-item{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--surface)}
 .todo-head{display:flex;gap:10px;align-items:flex-start}
 .todo-n{flex:none;width:24px;height:24px;border-radius:999px;background:var(--accent);color:var(--accent-fg);font-size:13px;font-weight:700;display:grid;place-items:center}
@@ -947,7 +963,8 @@ button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
 </head>
 <body>
 <main>
-  <header class="row"><img src="/favicon.svg" alt="" width="28" height="28"><h1>rig</h1></header>
+  <header class="row"><img src="/favicon.svg" alt="" width="28" height="28"><h1>rig</h1>
+    <label class="skin">스킨 <select id="skin"><option value="">기본</option><option value="terminal">터미널 (검정 + 초록)</option></select></label></header>
   <div class="grid">
     <section class="panel" aria-labelledby="rigs-h">
       <h2 id="rigs-h">1. 설정 선택</h2>
@@ -1023,13 +1040,17 @@ button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
       </div>
     </section>
   </div>
-  <section class="panel" id="todo-box" aria-labelledby="todo-h" hidden>
-    <div class="row todo-top"><h2 id="todo-h">할 일</h2><span class="small muted" id="todo-sum"></span></div>
+  <section class="panel" aria-label="할 일과 지난 실행">
+    <div class="view-tabs" role="tablist" aria-label="보기">
+      <button type="button" role="tab" class="view-tab" id="vt-todo" aria-controls="todo-box" aria-selected="false" hidden>할 일 <span class="count" id="todo-count"></span></button>
+      <button type="button" role="tab" class="view-tab" id="vt-hist" aria-controls="hist-box" aria-selected="true">지난 실행 <span class="count" id="hist-count"></span></button>
+    </div>
+    <div id="todo-box" role="tabpanel" aria-labelledby="vt-todo" hidden>
+    <p class="small muted" id="todo-sum"></p>
     <ol class="todo" id="todo-list"></ol>
     <button class="secondary" id="todo-more" type="button" hidden></button>
-  </section>
-  <section class="panel" aria-labelledby="hist-h">
-    <h2 id="hist-h">지난 실행</h2>
+    </div>
+    <div id="hist-box" role="tabpanel" aria-labelledby="vt-hist">
     <div class="tabs" role="tablist" aria-label="프로젝트별 실행" id="hist-tabs"></div>
     <div class="table-wrap"><table>
       <thead><tr><th>요구사항</th><th>상태</th><th>PR</th><th class="num">비용</th><th></th></tr></thead>
@@ -1037,6 +1058,7 @@ button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
     </table></div>
     <div class="row"><p class="small muted" style="margin:0">터미널에서 <code>rig run</code>으로 시작한 실행도 새로고침 없이 여기 나타나고, 아래 로그 창에 자동으로 열립니다. 끝나면 탭 제목에 표시됩니다.</p>
       <button class="secondary" id="notify" type="button" hidden>끝나면 알림 받기</button></div>
+    </div>
   </section>
   <section class="panel" id="viewer" aria-labelledby="viewer-h" hidden>
     <div class="row"><h2 id="viewer-h">실행 로그</h2><span class="pill" id="v-pill" role="status"></span><span class="small muted" id="v-reason"></span>
@@ -1117,15 +1139,31 @@ function select(file) {
   return loadRigs();
 }
 // 할 일: the open backlog of the selected rig's TODO.md, with a button that puts an item in the request.
-let todoAll = false;
+let todoAll = false, todoFound = false;
+// The board's two tabs: 할 일 (when the rig's project has a TODO.md) and 지난 실행. Remembered per browser.
+let view = 'todo';
+try { view = localStorage.getItem('rig.view') || 'todo'; } catch (e) {}
+function showView(v) {
+  view = v;
+  const shown = v === 'todo' && todoFound ? 'todo' : 'hist';
+  $('vt-todo').setAttribute('aria-selected', String(shown === 'todo'));
+  $('vt-hist').setAttribute('aria-selected', String(shown === 'hist'));
+  $('todo-box').hidden = shown !== 'todo';
+  $('hist-box').hidden = shown !== 'hist';
+}
+for (const [id, v] of [['vt-todo', 'todo'], ['vt-hist', 'hist']]) {
+  $(id).addEventListener('click', () => { showView(v); try { localStorage.setItem('rig.view', v); } catch (e) {} });
+}
 async function loadTodo() {
   const file = selected;
   if (!file) return;
   const t = await api('/api/todo?file=' + encodeURIComponent(file)).catch(() => ({found: false}));
   if (file !== selected) return;
-  const box = $('todo-box');
-  box.hidden = !t.found;
-  if (box.hidden) return;
+  todoFound = !!t.found;
+  $('vt-todo').hidden = !todoFound;
+  $('todo-count').textContent = todoFound ? String(t.backlog.length) : '';
+  showView(view);
+  if (!todoFound) return;
   $('todo-sum').textContent = [t.file + (t.from ? ` (${t.from} 기준)` : ''), `남은 ${t.backlog.length}개`, `완료 ${t.done}개`,
     ...(t.later.length ? [`설계 먼저 ${t.later.length}개`] : [])].join(' · ');
   const list = $('todo-list'); list.textContent = '';
@@ -1410,6 +1448,7 @@ function renderShifts() {
   const body = $('shifts'); body.textContent = '';
   const empty = text => body.append(el('tr', {}, el('td', {colspan: '5', class: 'muted small'}, text)));
   renderTabs();
+  $('hist-count').textContent = shiftRows.length ? String(shiftRows.length) : '';
   if (!shiftRows.length) { empty('아직 실행 기록이 없습니다.'); return; }
   const rows = histTab === 'all' ? shiftRows : shiftRows.filter(s => projectKey(s) === histTab);
   if (!rows.length) { empty('이 프로젝트의 실행 기록이 없습니다.'); return; }
@@ -1568,6 +1607,13 @@ $('notify').addEventListener('click', async () => {
 notifyButton();
 $('v-close').addEventListener('click', () => { viewing = null; clearTimeout(vTimer); $('viewer').hidden = true; });
 
+// Skin: 기본 (follows the system's light/dark) or 터미널; remembered per browser, applied in <head> before paint.
+$('skin').value = document.documentElement.dataset.skin || '';
+$('skin').addEventListener('change', () => {
+  const v = $('skin').value;
+  if (v) document.documentElement.dataset.skin = v; else delete document.documentElement.dataset.skin;
+  try { if (v) localStorage.setItem('rig.skin', v); else localStorage.removeItem('rig.skin'); } catch (e) {}
+});
 // Worker: the API, or the local Claude Code on the user's subscription. Remembered per browser.
 const workerChoice = () => document.querySelector('input[name=worker]:checked').value;
 function workerChanged() {
