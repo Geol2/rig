@@ -233,7 +233,8 @@ opens it in the browser (`--no-open` to only write it). It's one self-contained 
 
 ### Web page
 
-`rig serve` starts a local web page (http://localhost:8000, `--port` to change) for the rig
+`rig serve` starts a local web page (http://localhost:8000, `--port` to change; if the port is taken,
+for example by another `rig serve`, it says so and exits, suggesting another `--port`) for the rig
 files in the current folder: pick one, set its `workspace` (type the path or press **폴더 선택** to browse this computer's folders), type the task, fill in its
 inputs, run it (optionally dry or in a worktree), watch progress live, and open the report
 of any past shift. Past shifts are grouped in tabs by project (the folders they worked on), with a count and a dot on tabs that have a shift running. It runs one shift at a time. While a shift runs, the page shows its cost

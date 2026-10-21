@@ -396,6 +396,17 @@ Keep items small enough for one reviewed change. Add context under an item when 
   가리키는 링크는 여전히 검색되는지, `workspaces` 모드에서 다른 프로젝트 밖을 가리키는 링크도 건너뛰는지 테스트(링크를 만들 수
   없는 환경은 기존 `test_write_refuses_symlink_into_git`처럼 skip).
   Note: `Toolbox._files` resolves every walked file and folder and skips those outside the root the walked base belongs to (`_root_of`: the workspace, or the longest project root in `workspaces` mode, so a link from one project into another is skipped too); resolve errors (loops) skip the entry; links resolving inside are listed/searched under their own path as before.
+- [x] **`rig serve` 포트가 이미 쓰이고 있을 때 분명하게 알리기**: `serve.py` `serve()`는 `ThreadingHTTPServer(("127.0.0.1",
+  port), …)`를 바로 만들어서, 다른 `rig serve`나 다른 개발 서버가 8000을 쓰고 있으면 `OSError`(`EADDRINUSE`, Windows는
+  `WinError 10048`)가 traceback으로 그대로 나옵니다(`cli.py` `cmd_serve`도 잡지 않음). 반대로 `HTTPServer.allow_reuse_address`가
+  켜져 있어 Windows에서는 `SO_REUSEADDR` 때문에 두 번째 서버가 같은 포트에 bind에 **성공**하고, 브라우저 요청이 어느 서버로 갈지
+  알 수 없게 됩니다(다른 폴더의 rig 목록이 보이거나 실행이 엉뚱한 서버에서 시작됨). `serve()`에서 Windows일 때는
+  `allow_reuse_address = False`(가능하면 `SO_EXCLUSIVEADDRUSE`)인 서버 클래스를 쓰고, bind가 `OSError`로 실패하면 traceback
+  대신 "port 8000 is already in use (another `rig serve`?); stop it or use `rig serve --port 8001`"을 출력하고 종료 코드 1로
+  끝나게 하세요(`--port 0`이면 빈 포트를 고르는 지금 동작 유지). 완료 기준: `tests/test_serve.py`에 소켓으로 포트를 먼저 잡아
+  둔 상태에서 `serve(root, port=<그 포트>, open_browser=False)`(또는 `main(["serve", …])`)가 바로 그 메시지로 종료되고
+  traceback이 없는지, 같은 포트로 `rig serve` 서버 두 개를 띄우면 두 번째가 실패하는지(모든 OS) 테스트.
+  Note: `serve()` binds through `_listen`, which exits (code 1, no traceback) with "rig: port {port} is already in use (another `rig serve`?); stop it or use `rig serve --port {next}`" ({next} = port + 1 for 1024–65534, else 8000), or for any other bind error "rig: can't listen on port {port}: {reason} (the system may reserve it, or another program holds it); use `rig serve --port {next}`". The server class `_Server` binds exclusively on Windows (`allow_reuse_address = False` + `SO_EXCLUSIVEADDRUSE`); other OSes keep `SO_REUSEADDR`.
 
 ## Backlog
 
@@ -420,16 +431,6 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   coder twice"처럼 필드와 이름을 짚어 거부하세요(foreman의 `tools`도 같은 검사를 받음). 완료 기준: `tests/test_spec.py`
   (또는 `test_invalid_rigs_rejected`)에 hand `tools`, foreman `tools`, `foreman.crew`, `foreman.require` 각각의 중복이
   그 이름을 담은 메시지로 거부되는지, 모든 템플릿과 `self.rig.yaml`이 여전히 로드되는지 테스트.
-- [ ] **`rig serve` 포트가 이미 쓰이고 있을 때 분명하게 알리기**: `serve.py` `serve()`는 `ThreadingHTTPServer(("127.0.0.1",
-  port), …)`를 바로 만들어서, 다른 `rig serve`나 다른 개발 서버가 8000을 쓰고 있으면 `OSError`(`EADDRINUSE`, Windows는
-  `WinError 10048`)가 traceback으로 그대로 나옵니다(`cli.py` `cmd_serve`도 잡지 않음). 반대로 `HTTPServer.allow_reuse_address`가
-  켜져 있어 Windows에서는 `SO_REUSEADDR` 때문에 두 번째 서버가 같은 포트에 bind에 **성공**하고, 브라우저 요청이 어느 서버로 갈지
-  알 수 없게 됩니다(다른 폴더의 rig 목록이 보이거나 실행이 엉뚱한 서버에서 시작됨). `serve()`에서 Windows일 때는
-  `allow_reuse_address = False`(가능하면 `SO_EXCLUSIVEADDRUSE`)인 서버 클래스를 쓰고, bind가 `OSError`로 실패하면 traceback
-  대신 "port 8000 is already in use (another `rig serve`?); stop it or use `rig serve --port 8001`"을 출력하고 종료 코드 1로
-  끝나게 하세요(`--port 0`이면 빈 포트를 고르는 지금 동작 유지). 완료 기준: `tests/test_serve.py`에 소켓으로 포트를 먼저 잡아
-  둔 상태에서 `serve(root, port=<그 포트>, open_browser=False)`(또는 `main(["serve", …])`)가 바로 그 메시지로 종료되고
-  traceback이 없는지, 같은 포트로 `rig serve` 서버 두 개를 띄우면 두 번째가 실패하는지(모든 OS) 테스트.
 - [ ] **같은 stage에서 병렬로 파일을 쓰는 hand가 둘 이상이면 경고**: lines 모드에서 `runner.py` `_run_lines`는 `graph.layers`의
   한 stage에 있는 hand들을 `asyncio.gather`로 동시에 돌리고, 모두 같은 workspace를 씁니다. 두 hand가 `write_file`/`edit_file`을
   가지고 있으면 같은 파일을 서로 덮어써 한쪽 변경이 조용히 사라질 수 있는데, `spec.py` `Rig.hand_warnings()`는 crew·line에 없는

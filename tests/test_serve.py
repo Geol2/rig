@@ -1,7 +1,10 @@
 """rig serve against a real local server on a free port."""
 
 import asyncio
+import errno
 import json
+import os
+import socket
 import threading
 import time
 import urllib.error
@@ -12,7 +15,9 @@ from pathlib import Path
 
 import pytest
 
+from rig import serve as serve_mod
 from rig import spec
+from rig.cli import main
 from rig.cost import Meter
 from rig.hand import HandResult
 from rig.runner import ResumeError, ShiftEvent, run_shift
@@ -658,6 +663,72 @@ def test_ctrl_c_messages(tmp_path, monkeypatch):
         "Ctrl+C again to quit now",
         f"rig serve: stopped {sid}: continue with `rig run --resume <id>` or the page's \"이어 하기\" button",
     ]
+
+
+def in_use(port):
+    return (f"rig: port {port} is already in use (another `rig serve`?); stop it or use "
+            f"`rig serve --port {port + 1}`")
+
+
+@pytest.fixture
+def held_port(monkeypatch):
+    """A port another program listens on; serve_forever raises so a bind that wrongly succeeds can't hang."""
+    def forever(self, *a, **kw):
+        raise AssertionError("bound a port in use")
+
+    monkeypatch.setattr(serve_mod._Server, "serve_forever", forever)
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    s.listen()
+    try:
+        yield s.getsockname()[1]
+    finally:
+        s.close()
+
+
+def check_in_use(message, port):
+    assert message == in_use(port)
+
+
+def test_serve_says_port_in_use(tmp_path, held_port, capsys):
+    with pytest.raises(SystemExit) as e:
+        serve_mod.serve(tmp_path, port=held_port, open_browser=False)
+    check_in_use(e.value.code, held_port)
+    out = capsys.readouterr()
+    assert "rig serve →" not in out.out and "Traceback" not in out.out + out.err
+
+
+def test_cli_serve_port_in_use(tmp_path, held_port):
+    with pytest.raises(SystemExit) as e:
+        main(["-f", str(tmp_path / "rig.yaml"), "serve", "--port", str(held_port), "--no-open"])
+    check_in_use(e.value.code, held_port)
+
+
+def test_two_rig_servers_cannot_share_a_port(tmp_path):
+    first = serve_mod._listen(0, make_handler(App(tmp_path)))
+    try:
+        port = first.server_address[1]
+        with pytest.raises(SystemExit) as e:
+            serve_mod._listen(port, make_handler(App(tmp_path))).server_close()
+        check_in_use(e.value.code, port)
+    finally:
+        first.server_close()
+
+
+def test_suggested_port():
+    assert [serve_mod._next_port(p) for p in (80, 1023, 1024, 8000, 65534, 65535)] == [
+        8000, 8000, 1025, 8001, 65535, 8000]
+
+
+def test_serve_other_listen_error(tmp_path, monkeypatch):
+    def refuse(*a, **kw):
+        raise OSError(errno.EACCES, "Permission denied.")
+
+    monkeypatch.setattr(serve_mod, "_Server", refuse)
+    with pytest.raises(SystemExit) as e:
+        serve_mod.serve(tmp_path, port=80, open_browser=False)
+    assert e.value.code == ("rig: can't listen on port 80: Permission denied (the system may reserve it, or "
+                            "another program holds it); use `rig serve --port 8000`")
 
 
 @pytest.fixture

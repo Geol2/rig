@@ -8,9 +8,11 @@ websites open in the same browser can't start a (paid) run.
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import re
+import socket
 import threading
 import time
 from dataclasses import dataclass, field
@@ -791,9 +793,45 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+class _Server(ThreadingHTTPServer):
+    """On Windows SO_REUSEADDR lets a second server bind a port another one listens on, so
+    bind exclusively there; elsewhere SO_REUSEADDR only keeps quick restarts working."""
+
+    if os.name == "nt":
+        allow_reuse_address = False
+
+        def server_bind(self) -> None:
+            exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+            if exclusive is not None:
+                self.socket.setsockopt(socket.SOL_SOCKET, exclusive, 1)
+            super().server_bind()
+
+
+def _next_port(port: int) -> int:
+    """The port to suggest instead of a taken one."""
+    return port + 1 if 1024 <= port < 65535 else 8000
+
+
+def _listen_error(port: int, e: OSError) -> str:
+    alt = f"`rig serve --port {_next_port(port)}`"
+    if e.errno == errno.EADDRINUSE or getattr(e, "winerror", None) == 10048:
+        return f"rig: port {port} is already in use (another `rig serve`?); stop it or use {alt}"
+    reason = (e.strerror or str(e)).rstrip(".")
+    return (f"rig: can't listen on port {port}: {reason} (the system may reserve it, or another program "
+            f"holds it); use {alt}")
+
+
+def _listen(port: int, handler: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
+    """The server bound to 127.0.0.1:port, or exit with a message saying why it can't be."""
+    try:
+        return _Server(("127.0.0.1", port), handler)
+    except OSError as e:
+        raise SystemExit(_listen_error(port, e)) from None
+
+
 def serve(root: Path, port: int = 8000, open_browser: bool = True) -> None:
     app = App(root)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
+    server = _listen(port, make_handler(app))
     url = f"http://localhost:{server.server_address[1]}/"
     print(f"rig serve → {url}  (folder {app.root}; Ctrl+C to stop)")
     if open_browser:
