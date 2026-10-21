@@ -987,3 +987,14 @@ def test_shift_killed_before_it_recorded_anything(server):
     assert row["rig"] == "rig-self-dev" and row["task"] == "TODO 처리" and row["workspaces"]
     assert row["status"] == "error" and row["reason"].startswith("rig이 실행 도중 꺼져서 중단됨")
     assert not row["resumable"] and not row["running"]
+
+
+def test_todo_list_of_the_selected_setting(server):
+    app, base = server
+    assert call(base + "/api/todo?file=review.rig.yaml")[1] == {"found": False}
+    (app.root / "proj" / "TODO.md").write_text("## Backlog\n\n- [ ] **do x**: because\n", encoding="utf-8")
+    t = call(base + "/api/todo?file=review.rig.yaml")[1]
+    assert t["found"] and t["backlog"] == [{"title": "do x", "detail": "because"}]
+    assert call(base + "/api/todo?file=../x.yaml")[0] == 404
+    page = call(base + "/")[1]
+    assert 'id="todo-box"' in page and "function useTodo" in page and "TODO 항목 처리: ${title}" in page
