@@ -385,12 +385,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   시작하고 `app.shutdown(10)`이 `True`를 돌려준 뒤 `shift.json`의 `stopped`가 `"stopped"`이고, `running.json`이 없고,
   `rig/<id>` 브랜치에 그 파일이 커밋돼 있는지; 실행 중이 아닐 때 `shutdown`이 바로 `True`인지 테스트.
   Note: `Run.thread` is kept by `App.start`; `App.shutdown(timeout)` stops every running run like the Stop button and joins their threads in 0.2 s slices (True when all finished); `serve()` → `_shutdown` prints "rig serve: stopping N running shift(s) (…)", then "rig serve: stopped <ids>: continue with `rig run --resume <id>` …" for runs that ended stopped; a second Ctrl+C prints "quit without waiting" and exits. Messages are in English like the rest of the CLI.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`search`가 workspace 밖을 가리키는 심볼릭 링크 파일을 읽지 않게**: `tools.py` `Toolbox._files`는 `os.walk`의
+- [x] **`search`가 workspace 밖을 가리키는 심볼릭 링크 파일을 읽지 않게**: `tools.py` `Toolbox._files`는 `os.walk`의
   `filenames`를 그대로 내보내고 `_search`는 각 파일을 `p.read_bytes()`로 읽습니다. 그래서 프로젝트 안에 `creds ->
   ~/.aws/credentials`나 `/etc/...`를 가리키는 링크 파일이 있으면, `read_file`(`_locate`가 resolve 후 거부)로는 못 읽는 workspace
   밖 내용이 `search` 결과(`creds:1: aws_secret_access_key=…`)로 hand에게 그대로 전달됩니다(리뷰 템플릿처럼 남의 프로젝트를
@@ -400,6 +395,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   workspace 밖 파일을 가리키는 링크가 있을 때 `search`가 그 내용을 돌려주지 않고 `glob`에도 나오지 않는지, workspace 안 파일을
   가리키는 링크는 여전히 검색되는지, `workspaces` 모드에서 다른 프로젝트 밖을 가리키는 링크도 건너뛰는지 테스트(링크를 만들 수
   없는 환경은 기존 `test_write_refuses_symlink_into_git`처럼 skip).
+  Note: `Toolbox._files` resolves every walked file and folder and skips those outside the root the walked base belongs to (`_root_of`: the workspace, or the longest project root in `workspaces` mode, so a link from one project into another is skipped too); resolve errors (loops) skip the entry; links resolving inside are listed/searched under their own path as before.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **`rig run`을 Ctrl+C로 멈추면 traceback 대신 이어 하는 방법 안내**: `cli.py` `cmd_run`은 `asyncio.run(run_shift(...))`의
   `KeyboardInterrupt`를 잡지 않아, Ctrl+C를 누르면 `run_shift`의 `finally`가 브랜치 커밋과 `shift.json`(`error: "interrupted"`)을
   다 남긴 뒤에도 사용자에게는 Python traceback만 보이고 shift id나 `rig run --resume`은 안내되지 않습니다(`main`에도 처리 없음).

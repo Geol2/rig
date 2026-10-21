@@ -428,15 +428,34 @@ class Toolbox:
         if rel not in self.changed:
             self.changed.append(rel)
 
+    def _root_of(self, p: Path) -> Path:
+        """The workspace root a resolved path belongs to (the longest project root in `workspaces` mode)."""
+        if self.roots is None:
+            return self.workspace
+        return max((r for r in self.roots.values() if p.is_relative_to(r)), key=lambda r: len(r.parts), default=self.workspace)
+
     def _files(self, root: Path) -> Iterator[Path]:
-        """Files under root (or root itself), skipping ignored directories, in sorted order."""
+        """Files under root (or root itself), skipping ignored directories, in sorted order.
+
+        Files and folders (symlinks, Windows junctions) that resolve outside the workspace root `root`
+        belongs to are skipped too, since read_file refuses them.
+        """
         if root.is_file():
             yield root
             return
+        inside = self._root_of(root)
+
+        def contained(p: Path) -> bool:
+            try:
+                return p.resolve().is_relative_to(inside)
+            except (OSError, RuntimeError):
+                return False
+
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = sorted(d for d in dirnames if d not in self.ignored)
+            dirnames[:] = sorted(d for d in dirnames if d not in self.ignored and contained(Path(dirpath) / d))
             for f in sorted(filenames):
-                yield Path(dirpath) / f
+                if contained(Path(dirpath) / f):
+                    yield Path(dirpath) / f
 
     def run(self, name: str, args: dict[str, Any]) -> str:
         if name not in self.names:
