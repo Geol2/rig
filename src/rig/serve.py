@@ -798,7 +798,8 @@ class _Server(ThreadingHTTPServer):
         def server_bind(self) -> None:
             if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
                 self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-            super().server_bind()
+            # Plain HTTP on 127.0.0.1 only (see serve()); nothing leaves the machine.
+            super().server_bind()  # NOSONAR
 
 
 def _bind_error(port: int, e: OSError) -> str:
