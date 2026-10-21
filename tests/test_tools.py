@@ -433,6 +433,43 @@ def test_write_refuses_symlink_into_git(tmp_path):
     assert list((tmp_path / ".git").iterdir()) == []
 
 
+def _symlink(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("can't create symlinks here")
+
+
+def test_glob_and_search_skip_symlinks_outside_workspace(tmp_path):
+    ws, outside = tmp_path / "ws", tmp_path / "outside"
+    ws.mkdir()
+    outside.mkdir()
+    (outside / "credentials").write_text("aws_secret=TOPSECRET\n", encoding="utf-8")
+    (ws / "real.txt").write_text("needle\n", encoding="utf-8")
+    _symlink(ws / "creds", outside / "credentials")
+    _symlink(ws / "alias.txt", ws / "real.txt")
+    tb = Toolbox(ws, ALL)
+    assert tb.run("search", {"pattern": "TOPSECRET"}) == "(no matches)"
+    assert tb.run("glob", {"pattern": "**/*"}).splitlines() == ["alias.txt", "real.txt"]
+    # A link to a file inside the workspace is still searched under its own path.
+    assert tb.run("search", {"pattern": "needle"}).splitlines() == ["alias.txt:1: needle", "real.txt:1: needle"]
+
+
+def test_glob_and_search_skip_symlinks_outside_project(tmp_path):
+    a, b, outside = tmp_path / "a", tmp_path / "b", tmp_path / "outside"
+    for d in (a, b, outside):
+        d.mkdir()
+    (outside / "secret.txt").write_text("TOPSECRET outside\n", encoding="utf-8")
+    (b / "b.txt").write_text("TOPSECRET in b\n", encoding="utf-8")
+    (a / "a.txt").write_text("plain\n", encoding="utf-8")
+    _symlink(a / "out", outside / "secret.txt")
+    _symlink(a / "tob", b / "b.txt")
+    tb = Toolbox({"a": a, "b": b}, ALL)
+    assert tb.run("search", {"pattern": "TOPSECRET"}) == "b/b.txt:1: TOPSECRET in b"
+    assert tb.run("search", {"pattern": "TOPSECRET", "path": "a"}) == "(no matches)"
+    assert tb.run("glob", {"pattern": "**/*"}).splitlines() == ["a/a.txt", "b/b.txt"]
+
+
 def test_read_git_still_allowed(repo):
     assert repo.run("read_file", {"path": ".git/config"}) == "1\thello git"
 

@@ -167,6 +167,8 @@ search:
 
 `.git` and `.rig` are always skipped. When the list differs from the default, the `glob`
 and `search` tool descriptions name the skipped directories so the hands know.
+`glob` and `search` also skip files (symlinks) that point outside the workspace (outside
+their project in `workspaces` mode), just as `read_file` refuses them.
 
 ### Several projects at once
 
