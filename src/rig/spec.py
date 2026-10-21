@@ -190,6 +190,11 @@ def close_objects(node: Any, where: str = "schema") -> Any:
     return out
 
 
+def _dupes(names: list[str]) -> list[str]:
+    """Names that appear more than once, each once, in first-seen order."""
+    return [n for n in dict.fromkeys(names) if names.count(n) > 1]
+
+
 class Hand(BaseModel):
     """A single agent on the rig."""
 
@@ -211,6 +216,9 @@ class Hand(BaseModel):
         unknown = set(tools) - BUILTIN_TOOLS
         if unknown:
             raise ValueError(f"unknown tools {sorted(unknown)}; available: {sorted(BUILTIN_TOOLS)}")
+        dupes = _dupes(tools)
+        if dupes:
+            raise ValueError(f"tools lists {', '.join(dupes)} twice")
         return tools
 
 
@@ -342,6 +350,10 @@ class Rig(BaseModel):
                 raise ValueError("use either `foreman` or `lines`, not both")
             if "foreman" in self.hands:
                 raise ValueError("'foreman' is reserved; rename that hand")
+            for field in ("crew", "require"):
+                dupes = _dupes(getattr(self.foreman, field))
+                if dupes:
+                    raise ValueError(f"foreman.{field} lists {', '.join(dupes)} twice")
             unknown = set(self.foreman.crew) - set(self.hands)
             if unknown:
                 raise ValueError(f"foreman.crew references unknown hands {sorted(unknown)}")

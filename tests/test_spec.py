@@ -86,11 +86,34 @@ def test_clear_tool_results_from_defaults():
         {"lines": [], "foreman": {"max_delegations": 0}},
         {"lines": [], "foreman": {"max_delegations": -1}},
         {"lines": [], "foreman": {"crew": ["a"]}, "publish": {"approver": "b"}},
+        {"hands": {"a": {"role": "A", "tools": ["read_file", "read_file"]}}, "lines": []},
+        {"lines": [], "foreman": {"tools": ["read_file", "read_file"]}},
+        {"lines": [], "foreman": {"crew": ["a", "a"]}},
+        {"lines": [], "foreman": {"crew": ["a", "b"], "require": ["b", "b"]}},
     ],
 )
 def test_invalid_rigs_rejected(overrides):
     with pytest.raises(ValidationError):
         make(**overrides)
+
+
+@pytest.mark.parametrize(
+    "overrides, message",
+    [
+        ({"hands": {"a": {"role": "A", "tools": ["read_file", "read_file"]}, "b": {"role": "B"}}, "lines": []},
+         "tools lists read_file twice"),
+        ({"hands": {"a": {"role": "A", "tools": ["run", "read_file", "read_file", "run", "run"]}}, "lines": []},
+         "tools lists run, read_file twice"),
+        ({"lines": [], "foreman": {"tools": ["read_file", "read_file"]}}, "tools lists read_file twice"),
+        ({"lines": [], "foreman": {"crew": ["a", "a"]}}, "foreman.crew lists a twice"),
+        ({"lines": [], "foreman": {"crew": ["a", "b"], "require": ["b", "b"]}}, "foreman.require lists b twice"),
+    ],
+    ids=["hand-tools", "hand-tools-several", "foreman-tools", "foreman-crew", "foreman-require"],
+)
+def test_duplicate_names_rejected(overrides, message):
+    with pytest.raises(ValidationError) as excinfo:
+        make(**overrides)
+    assert message in str(excinfo.value)
 
 
 def test_minimum_limits_accepted():

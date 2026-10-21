@@ -82,9 +82,11 @@ def test_check_hand_warning_before_price_warning(tmp_path, monkeypatch, capsys):
         ("name: bad\nhands:\n  a: {role: A, max_turns: 0}\n", "hands.a.max_turns\n  Input should be greater than or equal to 1"),
         ("name: bad\nhands:\n  a: {role: A}\n  b: {role: B}\nforeman: {crew: [a]}\npublish: {approver: b}\n",
          "publish.approver 'b' isn't on foreman.crew, so it never runs and can't approve; add it to the crew"),
+        ("name: bad\nhands:\n  a: {role: A, tools: [read_file, read_file]}\n", "tools lists read_file twice"),
+        ("name: bad\nhands:\n  a: {role: A}\nforeman: {crew: [a, a]}\n", "foreman.crew lists a twice"),
     ],
     ids=["unknown-hand", "no-hands", "unknown-tool", "missing-name", "not-a-mapping", "zero-max-turns",
-         "approver-off-crew"],
+         "approver-off-crew", "duplicate-tool", "duplicate-crew"],
 )
 def test_check_schema_invalid_rig_exits_with_error(tmp_path, monkeypatch, capsys, content, detail):
     (tmp_path / "rig.yaml").write_text(content, encoding="utf-8")

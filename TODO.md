@@ -417,12 +417,7 @@ Keep items small enough for one reviewed change. Add context under an item when 
   둔 상태에서 `serve(root, port=<그 포트>, open_browser=False)`(또는 `main(["serve", …])`)가 바로 그 메시지로 종료되고
   traceback이 없는지, 같은 포트로 `rig serve` 서버 두 개를 띄우면 두 번째가 실패하는지(모든 OS) 테스트.
   Note: `serve.py`에 `_Server`(Windows에서 `allow_reuse_address=False` + `SO_EXCLUSIVEADDRUSE`)와 `_bind_error` 추가; WinError 10013은 Windows 예약 포트(Hyper-V/WSL/Docker)일 수도 있어 "in use or reserved by Windows" 메시지와 `netsh interface ipv4 show excludedportrange protocol=tcp` 안내를 함께 냄; `cli.py` `cmd_serve`에 `--port` 0..65535 범위 검사 추가.
-
-## Backlog
-
-From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
-
-- [ ] **`tools`·`foreman.crew`·`foreman.require`의 중복 이름을 `rig check`에서 거부**: `spec.py` `Hand._known_tools`는 알 수
+- [x] **`tools`·`foreman.crew`·`foreman.require`의 중복 이름을 `rig check`에서 거부**: `spec.py` `Hand._known_tools`는 알 수
   없는 도구만 거르고 `tools: [read_file, read_file]` 같은 중복은 통과시킵니다. 그러면 `tools.py` `Toolbox.definitions`가 같은
   이름의 도구 정의를 두 번 보내 API가 첫 호출에서 오류를 내고, hand는 shift가 시작된 뒤에야 `api_error`로 끝납니다.
   `foreman.crew: [coder, coder]`는 `runner.py` `_run_foreman`의 `delegate` 도구 `"enum": crew`에 중복 값을 넣고(JSON Schema상
@@ -432,6 +427,12 @@ From the review requested as "rig를 개선할만한 사항들을 찾아줘", in
   coder twice"처럼 필드와 이름을 짚어 거부하세요(foreman의 `tools`도 같은 검사를 받음). 완료 기준: `tests/test_spec.py`
   (또는 `test_invalid_rigs_rejected`)에 hand `tools`, foreman `tools`, `foreman.crew`, `foreman.require` 각각의 중복이
   그 이름을 담은 메시지로 거부되는지, 모든 템플릿과 `self.rig.yaml`이 여전히 로드되는지 테스트.
+  Note: `_dupes` helper in spec.py; `Hand._known_tools` (inherited by Foreman, so the foreman's `tools` too) and the foreman branch of `Rig._check_lines` (before the unknown-crew check) reject "tools lists X twice" / "foreman.crew lists X twice" / "foreman.require lists X twice"; README foreman section mentions it.
+
+## Backlog
+
+From the review requested as "rig를 개선할만한 사항들을 찾아줘", in priority order:
+
 - [ ] **같은 stage에서 병렬로 파일을 쓰는 hand가 둘 이상이면 경고**: lines 모드에서 `runner.py` `_run_lines`는 `graph.layers`의
   한 stage에 있는 hand들을 `asyncio.gather`로 동시에 돌리고, 모두 같은 workspace를 씁니다. 두 hand가 `write_file`/`edit_file`을
   가지고 있으면 같은 파일을 서로 덮어써 한쪽 변경이 조용히 사라질 수 있는데, `spec.py` `Rig.hand_warnings()`는 crew·line에 없는
