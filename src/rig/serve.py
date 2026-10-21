@@ -898,7 +898,14 @@ a.pr.merged{color:var(--ok)}a.pr.closed{color:var(--muted)}a.pr.open{color:var(-
 table{border-collapse:collapse;width:100%;font-size:14px}
 th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
 td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}tr:last-child td{border-bottom:0}
-.change{font-weight:600}
+.change{font-weight:650;font-size:15px;line-height:1.4;word-break:keep-all;overflow-wrap:anywhere}
+.change .area{display:inline-block;font-size:12px;font-weight:600;padding:0 7px;margin-right:6px;border-radius:999px;background:var(--soft);color:var(--accent);vertical-align:1px}
+td.task{min-width:260px;width:62%}
+td.task .ask{font-size:13px;color:var(--muted);margin-top:2px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;word-break:break-all}
+#shifts tr:hover td{background:var(--soft)}
+td.task .meta{font-size:12px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}
+td.state,td.prs,.links{white-space:nowrap}td.state .why{max-width:160px;overflow:hidden;text-overflow:ellipsis}
+a.pr{white-space:nowrap}
 td.id{font-family:var(--mono);font-size:12.5px;white-space:nowrap}.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .table-wrap{overflow-x:auto}
 header.row h1{margin:0}
@@ -995,7 +1002,7 @@ button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
     <h2 id="hist-h">지난 실행</h2>
     <div class="tabs" role="tablist" aria-label="프로젝트별 실행" id="hist-tabs"></div>
     <div class="table-wrap"><table>
-      <thead><tr><th>실행</th><th>설정</th><th>요구사항</th><th>상태</th><th>PR</th><th class="num">발견</th><th class="num">비용</th><th></th></tr></thead>
+      <thead><tr><th>요구사항</th><th>상태</th><th>PR</th><th class="num">비용</th><th></th></tr></thead>
       <tbody id="shifts"></tbody>
     </table></div>
     <div class="row"><p class="small muted" style="margin:0">터미널에서 <code>rig run</code>으로 시작한 실행도 새로고침 없이 여기 나타나고, 아래 로그 창에 자동으로 열립니다. 끝나면 탭 제목에 표시됩니다.</p>
@@ -1335,16 +1342,17 @@ const RESUME_PROBLEM = {no_rig: '이어 하기 불가 · 같은 이름의 설정
 function renderShifts() {
   if (!shiftRows) return;
   const body = $('shifts'); body.textContent = '';
-  const empty = text => body.append(el('tr', {}, el('td', {colspan: '8', class: 'muted small'}, text)));
+  const empty = text => body.append(el('tr', {}, el('td', {colspan: '5', class: 'muted small'}, text)));
   renderTabs();
   if (!shiftRows.length) { empty('아직 실행 기록이 없습니다.'); return; }
   const rows = histTab === 'all' ? shiftRows : shiftRows.filter(s => projectKey(s) === histTab);
   if (!rows.length) { empty('이 프로젝트의 실행 기록이 없습니다.'); return; }
   for (const s of rows) {
-    const state = el('td', {}, LABEL[s.status] || s.status);
+    const state = el('td', {class: 'state'}, el('span', {class: 'pill ' + s.status}, LABEL[s.status] || s.status));
     const why = reasonText(s);
-    if (why) state.append(el('div', {class: 'small muted', title: why}, why));
-    const links = el('span', {class: 'row'});
+    if (why) state.append(el('div', {class: 'small muted why', title: why}, why));
+    if (s.findings) state.append(el('div', {class: 'small muted'}, '발견 ' + s.findings));
+    const links = el('span', {class: 'row links'});
     if (s.log) links.append(el('a', {href: '#viewer', onclick: e => { e.preventDefault(); openLog(s.id); }}, '로그'));
     if (!s.running) links.append(el('a', {href: '/shifts/' + encodeURIComponent(s.id) + '/report', target: '_blank'}, '리포트'));
     if (s.resumable && s.resume_file) {
@@ -1354,21 +1362,29 @@ function renderShifts() {
     } else if (s.resume_problem) {
       links.append(el('span', {class: 'small muted'}, RESUME_PROBLEM[s.resume_problem] || ''));
     }
-    const setting = el('td', {}, s.rig);
-    if (s.workspaces.length) {
-      setting.append(el('div', {class: 'small muted', title: s.workspaces.map(w => w.dir).join('\n')},
-        s.workspaces.map(w => w.name || baseName(w.dir)).join(' · ')));
-    }
     body.append(el('tr', {},
-      el('td', {class: 'id'}, s.id), setting, taskCell(s),
-      state, el('td', {}, prLinks(s.prs)), el('td', {class: 'num'}, String(s.findings || '')), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
+      taskCell(s), state, el('td', {class: 'prs'}, prLinks(s.prs)), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
   }
 }
-// What a run changed (its TITLE, the PR's title) in bold, with the request under it; the
-// request alone while it runs or when the run named no change.
+// The request column, in three lines: what the run changed (its TITLE, the PR's title) with
+// its area as a chip, or the request itself while it runs or when it named no change; then the
+// request (when there was a title); then when, which setting and which project.
 function taskCell(s) {
-  if (!s.title) return el('td', {}, s.task);
-  return el('td', {}, el('div', {class: 'change'}, s.title), el('div', {class: 'small muted'}, s.task));
+  const head = el('div', {class: 'change'});
+  const title = s.title || s.task || '(요구사항 없음)';
+  const m = s.title && /^([^:：\s][^:：]{0,24})[:：]\s*(.+)$/.exec(s.title);
+  if (m) head.append(el('span', {class: 'area'}, m[1]), m[2]); else head.append(title);
+  const cell = el('td', {class: 'task'}, head);
+  if (s.title && s.task) cell.append(el('div', {class: 'ask', title: s.task}, '요청 · ' + s.task));
+  const where = s.workspaces.length ? s.workspaces.map(w => w.name || baseName(w.dir)).join(' · ') : '';
+  cell.append(el('div', {class: 'meta', title: s.id + (s.workspaces.length ? '\n' + s.workspaces.map(w => w.dir).join('\n') : '')},
+    [shiftTime(s.id), s.rig, where].filter(Boolean).join(' · ')));
+  return cell;
+}
+// "20261021-101500" -> "10/21 10:15"; anything else as it is.
+function shiftTime(id) {
+  const m = /^\d{4}(\d\d)(\d\d)-(\d\d)(\d\d)/.exec(id);
+  return m ? `${m[1]}/${m[2]} ${m[3]}:${m[4]}` : id;
 }
 // One tab per project (the set of folders a run worked on), newest first, plus 전체.
 // Runs from before folders were recorded go under 기타.
