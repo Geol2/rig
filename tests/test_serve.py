@@ -1,7 +1,9 @@
 """rig serve against a real local server on a free port."""
 
 import asyncio
+import errno
 import json
+import socket
 import threading
 import time
 import urllib.error
@@ -16,7 +18,8 @@ from rig import spec
 from rig.cost import Meter
 from rig.hand import HandResult
 from rig.runner import ResumeError, ShiftEvent, run_shift
-from rig.serve import KIND_DESCRIPTIONS, App, PrStates, Run, _shutdown, make_handler
+from rig.cli import main
+from rig.serve import KIND_DESCRIPTIONS, App, PrStates, Run, _Server, _bind_error, _shutdown, make_handler, serve
 from rig.worktree import git
 
 RIG = """\
@@ -658,6 +661,72 @@ def test_ctrl_c_messages(tmp_path, monkeypatch):
         "Ctrl+C again to quit now",
         f"rig serve: stopped {sid}: continue with `rig run --resume <id>` or the page's \"이어 하기\" button",
     ]
+
+
+@pytest.fixture
+def no_serving(monkeypatch):
+    """serve() must never really serve or open a browser in these tests."""
+    monkeypatch.setattr("webbrowser.open", lambda url: pytest.fail(f"opened a browser at {url}"))
+    monkeypatch.setattr(_Server, "serve_forever", lambda self, **kw: pytest.fail("started serving"))
+
+
+def test_serve_on_a_port_in_use_says_so(tmp_path, capsys, no_serving):
+    # A plain socket without SO_REUSEADDR, so on Windows too the port is really taken.
+    with socket.socket() as holder:
+        holder.bind(("127.0.0.1", 0))
+        holder.listen()
+        port = holder.getsockname()[1]
+        with pytest.raises(SystemExit) as exc:
+            serve(tmp_path, port=port, open_browser=False)
+    # Windows may give 10048 ("already in use") or 10013 ("in use or reserved by Windows").
+    assert exc.value.code.startswith(f"rig: port {port} is ")
+    assert f"`rig serve --port {port + 1}`" in exc.value.code
+    assert capsys.readouterr().out == ""  # no startup line
+
+
+def test_second_rig_serve_on_the_same_port_fails(tmp_path, capsys, no_serving):
+    first = _Server(("127.0.0.1", 0), make_handler(App(tmp_path)))
+    try:
+        port = first.server_address[1]
+        with pytest.raises(SystemExit) as exc:
+            serve(tmp_path, port=port, open_browser=False)
+    finally:
+        first.server_close()
+    assert exc.value.code.startswith(f"rig: port {port} is ") and f"--port {port + 1}" in exc.value.code
+    assert capsys.readouterr().out == ""
+
+
+def test_serve_on_port_0_shows_the_port_it_got(tmp_path, capsys, monkeypatch):
+    def stop(self, **kw):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(_Server, "serve_forever", stop)
+    serve(tmp_path, port=0, open_browser=False)
+    out = capsys.readouterr().out
+    port = int(out.split("http://localhost:")[1].split("/")[0])
+    assert port != 0 and out.startswith(f"rig serve → http://localhost:{port}/")
+
+
+def test_bind_error_messages():
+    in_use = OSError(errno.EADDRINUSE, "Address already in use")
+    assert "`rig serve --port 8001`" in _bind_error(8000, in_use)
+    assert _bind_error(65535, in_use).endswith("`rig serve --port 8000`)")
+    assert _bind_error(80, OSError(errno.EACCES, "Permission denied")) == (
+        "rig: can't listen on port 80: Permission denied (try another port, e.g. `rig serve --port 8000`)")
+    exclusive = OSError(errno.EACCES, "access denied")
+    exclusive.winerror = 10013  # Windows, when another socket holds the port with SO_EXCLUSIVEADDRUSE
+    message = _bind_error(8000, exclusive)  # 10013 may also mean a port reserved by Hyper-V/WSL/Docker
+    assert "port 8000 is in use or reserved by Windows" in message and "excludedportrange" in message
+    assert "`rig serve --port 8001`" in message
+    win_in_use = OSError(errno.EADDRINUSE, "in use")
+    win_in_use.winerror = 10048
+    assert "port 8000 is already in use" in _bind_error(8000, win_in_use)
+
+
+@pytest.mark.parametrize("port", ["70000", "-1"])
+def test_cli_rejects_ports_out_of_range(port, no_serving):
+    with pytest.raises(SystemExit, match="--port must be between 0 and 65535"):
+        main(["serve", "--no-open", "--port", port])
 
 
 @pytest.fixture

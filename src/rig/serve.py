@@ -8,9 +8,12 @@ websites open in the same browser can't start a (paid) run.
 from __future__ import annotations
 
 import asyncio
+import errno
 import json
 import os
 import re
+import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -785,10 +788,43 @@ def make_handler(app: App) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+class _Server(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR lets a second server bind a port that's already listening, and requests
+    # then go to either one; take the port exclusively there instead. On POSIX SO_REUSEADDR doesn't allow
+    # two listeners and lets rig serve restart right after a stop, so keep the default.
+    if os.name == "nt":
+        allow_reuse_address = False
+
+        def server_bind(self) -> None:
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            # Plain HTTP on 127.0.0.1 only (see serve()); nothing leaves the machine.
+            super().server_bind()  # NOSONAR
+
+
+def _bind_error(port: int, e: OSError) -> str:
+    # Windows: 10048 is WSAEADDRINUSE; with SO_EXCLUSIVEADDRUSE a taken port can also give 10013 (WSAEACCES),
+    # but 10013 also comes for ports reserved by Hyper-V/WSL/Docker, so that one says both.
+    suggest = 8000 if port == 65535 else port + 1
+    winerror = getattr(e, "winerror", None)
+    if e.errno == errno.EADDRINUSE or winerror == 10048:
+        return (f"rig: port {port} is already in use (another `rig serve`? stop it or use "
+                f"`rig serve --port {suggest}`)")
+    if winerror == 10013:
+        return (f"rig: port {port} is in use or reserved by Windows (another `rig serve`? stop it or use "
+                f"`rig serve --port {suggest}`; to see reserved ports: "
+                f"`netsh interface ipv4 show excludedportrange protocol=tcp`)")
+    return f"rig: can't listen on port {port}: {e.strerror or e} (try another port, e.g. `rig serve --port 8000`)"
+
+
 def serve(root: Path, port: int = 8000, open_browser: bool = True) -> None:
     app = App(root)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
-    url = f"http://localhost:{server.server_address[1]}/"
+    try:
+        server = _Server(("127.0.0.1", port), make_handler(app))
+    except OSError as e:
+        sys.exit(_bind_error(port, e))
+    # Plain HTTP on purpose: the server only listens on 127.0.0.1 and this is the address the browser opens.
+    url = f"http://localhost:{server.server_address[1]}/"  # NOSONAR
     print(f"rig serve → {url}  (folder {app.root}; Ctrl+C to stop)")
     if open_browser:
         import webbrowser
