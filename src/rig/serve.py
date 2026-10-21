@@ -822,7 +822,8 @@ def serve(root: Path, port: int = 8000, open_browser: bool = True) -> None:
         server = _Server(("127.0.0.1", port), make_handler(app))
     except OSError as e:
         sys.exit(_bind_error(port, e))
-    url = f"http://localhost:{server.server_address[1]}/"
+    # Plain HTTP on purpose: the server only listens on 127.0.0.1 and this is the address the browser opens.
+    url = f"http://localhost:{server.server_address[1]}/"  # NOSONAR
     print(f"rig serve → {url}  (folder {app.root}; Ctrl+C to stop)")
     if open_browser:
         import webbrowser
