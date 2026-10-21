@@ -1098,3 +1098,8 @@ def test_history_offers_ci_fix_for_a_pr_whose_checks_failed(server, no_github):
     assert row["ci_failed"] is None and not row["resumable"]
     page = call(base + "/")[1]
     assert "'CI 고치기'" in page and "CI 고치기 실행" in page
+
+
+def test_page_has_history_pages(server):
+    page = call(server[1] + "/")[1]
+    assert 'id="hist-pager"' in page and "const PAGE_SIZE = 15" in page and "function renderPager" in page

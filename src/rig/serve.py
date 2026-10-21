@@ -979,6 +979,12 @@ a.pr.merged{color:var(--ok)}a.pr.closed{color:var(--muted)}a.pr.open{color:var(-
 table{border-collapse:collapse;width:100%;font-size:14px}
 th{text-align:left;font-size:12px;color:var(--muted);font-weight:600;padding:6px 8px;border-bottom:1px solid var(--line)}
 td{padding:8px;border-bottom:1px solid var(--line);vertical-align:top}tr:last-child td{border-bottom:0}
+.pager{display:flex;flex-wrap:wrap;align-items:center;gap:4px}.pager:empty{display:none}
+.pager .page{font:inherit;font-size:13px;min-width:32px;padding:3px 9px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--fg);cursor:pointer}
+.pager .page:hover:not([disabled]){border-color:var(--accent)}
+.pager .page[aria-current=page]{background:var(--accent);border-color:var(--accent);color:var(--accent-fg);font-weight:700}
+.pager .page[disabled]{opacity:.4;cursor:default}
+.pager .gap{padding:0 2px;color:var(--muted)}.pager .range{margin-left:8px}
 .ci-failed{color:var(--bad);max-width:200px;overflow:hidden;text-overflow:ellipsis}
 .change{font-weight:650;font-size:15px;line-height:1.4;word-break:keep-all;overflow-wrap:anywhere}
 .change .area{display:inline-block;font-size:12px;font-weight:600;padding:0 7px;margin-right:6px;border-radius:999px;background:var(--soft);color:var(--accent);vertical-align:1px}
@@ -1097,6 +1103,7 @@ button.resume{padding:2px 10px;font-size:13px;white-space:nowrap}
       <thead><tr><th>요구사항</th><th>상태</th><th>PR</th><th class="num">비용</th><th></th></tr></thead>
       <tbody id="shifts"></tbody>
     </table></div>
+    <nav class="pager" id="hist-pager" aria-label="지난 실행 페이지"></nav>
     <div class="row"><p class="small muted" style="margin:0">터미널에서 <code>rig run</code>으로 시작한 실행도 새로고침 없이 여기 나타나고, 아래 로그 창에 자동으로 열립니다. 끝나면 탭 제목에 표시됩니다.</p>
       <button class="secondary" id="notify" type="button" hidden>끝나면 알림 받기</button></div>
     </div>
@@ -1494,9 +1501,14 @@ function renderShifts() {
   const empty = text => body.append(el('tr', {}, el('td', {colspan: '5', class: 'muted small'}, text)));
   renderTabs();
   $('hist-count').textContent = shiftRows.length ? String(shiftRows.length) : '';
+  $('hist-pager').textContent = '';
   if (!shiftRows.length) { empty('아직 실행 기록이 없습니다.'); return; }
-  const rows = histTab === 'all' ? shiftRows : shiftRows.filter(s => projectKey(s) === histTab);
-  if (!rows.length) { empty('이 프로젝트의 실행 기록이 없습니다.'); return; }
+  const all = histTab === 'all' ? shiftRows : shiftRows.filter(s => projectKey(s) === histTab);
+  if (!all.length) { empty('이 프로젝트의 실행 기록이 없습니다.'); return; }
+  const pages = Math.ceil(all.length / PAGE_SIZE);
+  histPage = Math.min(Math.max(histPage, 1), pages);
+  const rows = all.slice((histPage - 1) * PAGE_SIZE, histPage * PAGE_SIZE);
+  renderPager(pages, all.length);
   for (const s of rows) {
     const state = el('td', {class: 'state'}, el('span', {class: 'pill ' + s.status}, LABEL[s.status] || s.status));
     const why = reasonText(s);
@@ -1517,6 +1529,33 @@ function renderShifts() {
     body.append(el('tr', {},
       taskCell(s), state, el('td', {class: 'prs'}, prLinks(s.prs)), el('td', {class: 'num'}, s.cost), el('td', {}, links)));
   }
+}
+// Pages of the history: newest first, PAGE_SIZE runs each; the page stays put while the list refreshes.
+const PAGE_SIZE = 15;
+let histPage = 1;
+function goPage(n) {
+  histPage = n;
+  renderShifts();
+  $('hist-box').scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function renderPager(pages, total) {
+  const nav = $('hist-pager');
+  if (pages <= 1) return;
+  const button = (label, n, attrs = {}) => el('button', {type: 'button', class: 'page', onclick: () => goPage(n), ...attrs}, label);
+  nav.append(button('‹ 이전', histPage - 1, histPage === 1 ? {disabled: ''} : {'aria-label': '이전 페이지'}));
+  // Every page when there are few; else the first, the last and two around the current one, with … between.
+  const shown = pages <= 9 ? Array.from({length: pages}, (_, i) => i + 1)
+    : [...new Set([1, pages, histPage - 2, histPage - 1, histPage, histPage + 1, histPage + 2])]
+      .filter(n => n >= 1 && n <= pages).sort((a, b) => a - b);
+  let last = 0;
+  for (const n of shown) {
+    if (n - last > 1) nav.append(el('span', {class: 'gap'}, '…'));
+    nav.append(button(String(n), n, n === histPage ? {'aria-current': 'page'} : {'aria-label': n + '페이지'}));
+    last = n;
+  }
+  nav.append(button('다음 ›', histPage + 1, histPage === pages ? {disabled: ''} : {'aria-label': '다음 페이지'}));
+  const from = (histPage - 1) * PAGE_SIZE + 1;
+  nav.append(el('span', {class: 'small muted range'}, `${from}–${Math.min(histPage * PAGE_SIZE, total)} / ${total}`));
 }
 // The request column, in three lines: what the run changed (its TITLE, the PR's title) with
 // its area as a chip, or the request itself while it runs or when it named no change; then the
@@ -1560,7 +1599,7 @@ function renderTabs() {
   for (const [key, t] of tabs) {
     const b = el('button', {type: 'button', role: 'tab', class: 'tab', 'aria-selected': String(key === histTab),
                             tabindex: key === histTab ? '0' : '-1', title: t.title || '',
-                            onclick: () => { histTab = key; try { localStorage.setItem('rig.histTab', key); } catch (e) {} renderShifts(); }});
+                            onclick: () => { histTab = key; histPage = 1; try { localStorage.setItem('rig.histTab', key); } catch (e) {} renderShifts(); }});
     if (key !== 'all') b.append(badge(t.label));
     b.append(t.label, el('span', {class: 'count'}, String(t.count)));
     if (t.running) b.append(el('span', {class: 'dot', title: '실행 중'}));
